@@ -53,6 +53,12 @@ class PairedServerRepository(
         return cipher.decrypt(Base64.getDecoder().decode(encoded), serverId)
     }
 
+    suspend fun rename(id: String, name: String) {
+        store.edit { prefs ->
+            prefs[SERVERS] = TroupeJson.encodeToString(stored(prefs).map { if (it.id == id) it.copy(name = name) else it })
+        }
+    }
+
     suspend fun remove(id: String) {
         store.edit { prefs ->
             prefs[SERVERS] = TroupeJson.encodeToString(stored(prefs).filterNot { it.id == id })

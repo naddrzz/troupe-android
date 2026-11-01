@@ -8,6 +8,19 @@
     <string name="servers_empty_title">No servers yet</string>
     <string name="servers_empty_body">Pair Troupe with the server running on your computer or VPS.</string>
     <string name="servers_pair_action">Pair a server</string>
+    <string name="servers_status_checking">Checking…</string>
+    <string name="servers_status_connected">Connected</string>
+    <string name="servers_status_unreachable">Unreachable</string>
+    <string name="servers_status_token_rejected">Token rejected</string>
+    <string name="servers_row_actions">More actions for %1$s</string>
+    <string name="servers_rename">Rename</string>
+    <string name="servers_remove">Remove</string>
+    <string name="servers_rename_title">Rename server</string>
+    <string name="servers_name_label">Name</string>
+    <string name="servers_save">Save</string>
+    <string name="servers_cancel">Cancel</string>
+    <string name="servers_remove_title">Remove %1$s?</string>
+    <string name="servers_remove_body">Troupe forgets this server and its token. To use it again, pair it again.</string>
 
     <!-- Pairing -->
     <string name="pair_title">Pair a server</string>
