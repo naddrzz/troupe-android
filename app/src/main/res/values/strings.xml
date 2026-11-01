@@ -30,6 +30,19 @@
     <string name="pair_name_label">Name (optional)</string>
     <string name="pair_name_hint">Defaults to the server\'s host</string>
     <string name="pair_submit">Pair</string>
+    <string name="pair_tab_scan">Scan</string>
+    <string name="pair_tab_paste">Paste</string>
+    <string name="pair_tab_manual">Manual</string>
+    <string name="pair_scan_hint">Point the camera at the QR code shown by Troupe on your computer.</string>
+    <string name="pair_scan_rationale">Troupe uses the camera only to read the QR code shown by Troupe on your computer. Nothing is recorded.</string>
+    <string name="pair_scan_denied">Camera access is off. Allow it, or paste the link instead.</string>
+    <string name="pair_scan_allow">Allow camera</string>
+    <string name="pair_scan_use_paste">Paste the link instead</string>
+    <string name="pair_scan_preview_description">Camera preview for scanning the pairing QR code</string>
+    <string name="pair_paste_label">Pairing link</string>
+    <string name="pair_paste_hint">https://…/#token=…</string>
+    <string name="pair_paste_from_clipboard">Paste from clipboard</string>
+    <string name="pair_paste_empty">The clipboard has no text. Copy the link from Troupe on your computer.</string>
     <string name="pair_checking">Checking the server…</string>
     <string name="pair_error_invalid_url">That doesn\'t look like a server address.</string>
     <string name="pair_error_missing_token">The link has no token. Copy the full link from Troupe on your computer.</string>
