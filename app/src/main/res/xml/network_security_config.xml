@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android's network security config cannot express IP ranges (RFC 1918, 100.64.0.0/10),
+  so cleartext is permitted here and dev.troupe.android.core.net.TransportPolicy is the
+  enforcement point: it refuses http:// for every host outside loopback, private ranges,
+  CGNAT/Tailscale, .local and .ts.net before any request is made.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Troupe</string>
+    <string name="action_back">Back</string>
+
+    <!-- Servers list -->
+    <string name="servers_title">Servers</string>
+    <string name="servers_empty_title">No servers yet</string>
+    <string name="servers_empty_body">Pair Troupe with the server running on your computer or VPS.</string>
+    <string name="servers_pair_action">Pair a server</string>
+
+    <!-- Pairing -->
+    <string name="pair_title">Pair a server</string>
+    <string name="pair_address_label">Server address</string>
+    <string name="pair_address_hint">192.168.1.5:8080 or https://host.example.com</string>
+    <string name="pair_token_label">Token</string>
+    <string name="pair_name_label">Name (optional)</string>
+    <string name="pair_name_hint">Defaults to the server\'s host</string>
+    <string name="pair_submit">Pair</string>
+    <string name="pair_checking">Checking the server…</string>
+    <string name="pair_error_invalid_url">That doesn\'t look like a server address.</string>
+    <string name="pair_error_missing_token">The link has no token. Copy the full link from Troupe on your computer.</string>
+    <string name="pair_error_cleartext">Use https:// for %1$s. Plain http:// is only allowed on your local network or Tailscale.</string>
+    <string name="pair_error_unreachable">Can\'t reach the server. Check the address and that the server is running.</string>
+    <string name="pair_error_unauthorized">The token was rejected. Copy a fresh link from Troupe on your computer.</string>
+    <string name="pair_error_protocol">This server version isn\'t supported. Troupe needs protocol 7.</string>
+    <string name="pair_error_server">The server answered with an error: %1$s</string>
+
+    <!-- Projects -->
+    <string name="projects_title">Projects</string>
+    <string name="projects_loading">Loading Projects…</string>
+    <string name="projects_empty">No Projects on this server yet. Add one in Troupe on your computer.</string>
+    <string name="projects_default_badge">Default</string>
+    <string name="projects_retry">Retry</string>
+    <string name="projects_color_description">%1$s color</string>
+</resources>

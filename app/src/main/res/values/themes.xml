@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Window background matches the Compose theme so launch shows no white flash. -->
+    <style name="Theme.Troupe" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/troupe_background</item>
+    </style>
+</resources>
