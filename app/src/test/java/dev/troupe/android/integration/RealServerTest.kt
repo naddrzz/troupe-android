@@ -4,13 +4,19 @@ import dev.troupe.android.R
 import dev.troupe.android.core.net.ApiResult
 import dev.troupe.android.core.net.troupeHttpClient
 import dev.troupe.android.pairing.PairUiState
+import dev.troupe.android.pairing.PairingInput
 import dev.troupe.android.pairing.ServerAddress
 import dev.troupe.android.projects.ProjectsUi
+import dev.troupe.android.terminal.TerminalUi
+import dev.troupe.android.testing.RecordingRenderer
+import dev.troupe.android.testing.eventually
 import dev.troupe.android.testing.MainDispatcherRule
 import dev.troupe.android.testing.TestGraph
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -25,7 +31,7 @@ import org.junit.rules.TemporaryFolder
 import java.util.UUID
 
 /**
- * The pairing and Projects flows against a real Troupe Server: `scripts/test-server.ps1 up`,
+ * The pairing, Projects and Terminal flows against a real Troupe Server: `scripts/test-server.ps1 up`,
  * then `gradlew :app:integrationTest`. Skips when the server is not running.
  */
 class RealServerTest {
@@ -72,6 +78,30 @@ class RealServerTest {
         pair.onManual("127.0.0.1:18080", "0".repeat(64), "")
         val state = runBlocking { withTimeout(15_000) { pair.ui.first { it is PairUiState.Paired || it is PairUiState.Error } } }
         assertEquals(PairUiState.Error(R.string.pair_error_unauthorized), state)
+    }
+
+    @Test fun spawnTypeReadKill() {
+        addProject(name = "troupe-it")
+        val serverId = runBlocking { graph.repository.add("Docker", PairingInput(address, TOKEN)).id }
+
+        val terminals = graph.terminalsViewModel(serverId, projectId)
+        terminals.spawn()
+        val spawned = runBlocking { withTimeout(15_000) { terminals.ui.first { it.openTerminal != null || it.error != null } } }
+        val terminalId = checkNotNull(spawned.openTerminal) { "spawn: $spawned" }
+
+        val terminal = graph.terminalViewModel(serverId, terminalId)
+        val renderer = RecordingRenderer()
+        terminal.bind(renderer)
+        assertEquals(TerminalUi.Live, runBlocking { withTimeout(15_000) { terminal.ui.first { it != TerminalUi.Connecting } } })
+
+        renderer.type("echo troupe-ok\r")
+        // The echoed command line, then the command's own output line.
+        eventually(15_000, { "output: ${renderer.text}" }) { Regex("(?m)^troupe-ok\r?$").containsMatchIn(renderer.text) }
+
+        val kill = runBlocking {
+            graph.connections.socket(serverId).request("kill", buildJsonObject { put("terminalId", terminalId) }, ledgered = true)
+        }
+        assertTrue("kill: ${kill.error}", kill.success)
     }
 
     /** Setup only: `POST /projects` straight to the server. */
