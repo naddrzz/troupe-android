@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -46,6 +47,10 @@ data class ChatUi(
     val turnRunning: Boolean = false,
     /** The outcome of the user's last action, when it needs saying (the agent is busy, ...). */
     val notice: UiMessage? = null,
+    /** Permission requests and questions waiting on the user, oldest first. */
+    val requests: List<PendingRequest> = emptyList(),
+    /** Ids of the [requests] whose answer is on its way. */
+    val answering: Set<String> = emptySet(),
 )
 
 /**
@@ -65,6 +70,10 @@ data class ChatUi(
  * after a reconnect gets a receipt instead of a second turn. The user's prompt is shown only from the
  * host's `user_prompt` record, so it appears once. [cancel] sends `cancel_prompt`; a turn ends on
  * `prompt_complete`.
+ *
+ * Permission requests and questions become cards ([ChatUi.requests]), also published to the server's
+ * [ChatConnections.pending]. [respond] and [answer] send `respond_permission` and `answer_question`;
+ * the first answer wins, and a later one is `already_resolved`.
  */
 @HiltViewModel
 class ChatViewModel @Inject constructor(
@@ -87,6 +96,9 @@ class ChatViewModel @Inject constructor(
     val draft: StateFlow<String> = _draft.asStateFlow()
     /** The turn id of a prompt whose `send_prompt` has not been answered yet. */
     private var sending: String? = null
+    /** Requests answered here or elsewhere: a snapshot that replays them does not bring them back. */
+    private val resolved = HashSet<String>()
+    private val answering = HashSet<String>()
 
     private sealed interface Input {
         data class Frame(val frame: ChatFrame) : Input
@@ -187,6 +199,43 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    /** Chooses one of a permission request's options. */
+    fun respond(request: PendingRequest.Permission, optionId: String) = answer(request, "respond_permission", buildJsonObject {
+        request.agentId?.let { put("agentId", it) }
+        put("requestId", request.id)
+        put("optionId", optionId)
+    })
+
+    /** Answers a question with the chosen option values, or with one free text. */
+    fun answer(question: PendingRequest.Question, values: List<String>) = answer(question, "answer_question", buildJsonObject {
+        question.agentId?.let { put("agentId", it) }
+        put("questionId", question.id)
+        putJsonArray("values") { values.forEach { add(it) } }
+    })
+
+    private fun answer(request: PendingRequest, type: String, payload: JsonObject) {
+        viewModelScope.launch {
+            if (viewOnly.value || request.id in answering || request.id in resolved) return@launch
+            answering += request.id
+            _ui.update { it.copy(notice = null) }
+            publish()
+            val reply = command(type, payload, commandId = UUID.randomUUID().toString())
+            answering -= request.id
+            when {
+                reply == null -> _ui.update { it.copy(notice = UiMessage(R.string.chat_answer_failed)) }
+                reply.ok -> resolved += request.id
+                reply.code == ChatErrorCodes.ALREADY_RESOLVED -> {
+                    resolved += request.id
+                    _ui.update { it.copy(notice = UiMessage(R.string.chat_already_answered)) }
+                }
+                // The host holds no such request any more: it was released.
+                reply.code == ChatErrorCodes.STALE -> resolved += request.id
+                else -> _ui.update { it.copy(notice = refusal(reply)) }
+            }
+            publish()
+        }
+    }
+
     /** What to say about a refused write; a `forbidden` one makes the server View-only instead. */
     private fun refusal(reply: ChatFrame.Reply): UiMessage? {
         viewOnlyRegistry.onRefusal(serverId, reply.code)
@@ -241,6 +290,7 @@ class ChatViewModel @Inject constructor(
                 ?: return unavailable()
             logEpoch = subscribed.logEpoch
             headSeq = subscribed.headSeq
+            parsePendingPermissions(sessionId, reply.payload)?.let { transcript.installPermissions(it, headSeq) }
             publish()
         } else when (reply.code) {
             ChatErrorCodes.STALE -> recover(connection)
@@ -252,7 +302,11 @@ class ChatViewModel @Inject constructor(
         val reply = request(connection, "recover_session_snapshot", buildJsonObject { put("sessionId", sessionId) }) ?: return
         val snapshot = parseSnapshot(reply.payload)
         if (!reply.ok || snapshot == null) return unavailable()
+        // Permission requests are not in the durable log: they ride beside it, or stay as they were.
+        val permissions = parsePendingPermissions(sessionId, reply.payload)
+            ?: transcript.pending().filterIsInstance<PendingRequest.Permission>()
         transcript = Transcript().apply { snapshot.events.filter { it.sid == null || it.sid == sessionId }.forEach(::apply) }
+        transcript.installPermissions(permissions, snapshot.watermark)
         logEpoch = snapshot.logEpoch
         lastSeq = snapshot.watermark
         headSeq = snapshot.watermark
@@ -267,6 +321,8 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun publish() {
+        val requests = transcript.pending().filter { it.id !in resolved }
+        link?.pending?.set(sessionId, requests)
         _ui.update {
             it.copy(
                 loading = false,
@@ -274,6 +330,8 @@ class ChatViewModel @Inject constructor(
                 plan = transcript.plan,
                 error = null,
                 turnRunning = transcript.turnRunning || sending != null,
+                requests = requests,
+                answering = answering.toSet(),
             )
         }
     }

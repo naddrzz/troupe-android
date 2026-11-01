@@ -116,8 +116,12 @@
     <string name="chat_plan_pending">To do: %1$s</string>
     <string name="chat_turn_done">Turn finished</string>
     <string name="chat_turn_ended">Turn ended: %1$s</string>
-    <string name="chat_permission_request">The agent asks for permission: %1$s. Answer it from Troupe on your computer.</string>
-    <string name="chat_question_request">The agent asks: %1$s. Answer it from Troupe on your computer.</string>
+    <string name="chat_permission_title">The agent asks for permission</string>
+    <string name="chat_question_title">The agent asks</string>
+    <string name="chat_answer_label">Your answer</string>
+    <string name="chat_answer_send">Send answer</string>
+    <string name="chat_already_answered">Already answered on another device.</string>
+    <string name="chat_answer_failed">Couldn\'t send your answer. Try again.</string>
     <string name="chat_composer_label">Message the agent</string>
     <string name="chat_send">Send</string>
     <string name="chat_cancel_turn">Cancel</string>

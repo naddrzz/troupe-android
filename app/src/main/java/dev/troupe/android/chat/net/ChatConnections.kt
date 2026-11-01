@@ -1,5 +1,6 @@
 package dev.troupe.android.chat.net
 
+import dev.troupe.android.chat.PendingRequests
 import dev.troupe.android.core.net.ApiResult
 import dev.troupe.android.core.net.Backoff
 import dev.troupe.android.core.net.ConnectionFailure
@@ -26,8 +27,15 @@ import kotlin.time.Duration.Companion.seconds
 /** The Paired Server is not (or no longer) paired: there is no token to open `/ws` with. */
 class ChatConnectFailed(val failure: ConnectionFailure) : IOException(failure.name)
 
-/** A Paired Server's `/ws`: the [socket] to talk over, kept connected by its lifecycle. */
-class ChatConnection internal constructor(val socket: ChatSocket, private val lifecycle: ConnectionLifecycle) {
+/**
+ * A Paired Server's `/ws`: the [socket] to talk over, kept connected by its lifecycle, and the
+ * server's [pending] permission requests and questions by Session.
+ */
+class ChatConnection internal constructor(
+    val socket: ChatSocket,
+    private val lifecycle: ConnectionLifecycle,
+    val pending: PendingRequests,
+) {
     val state: StateFlow<ConnectionState> get() = lifecycle.state
     /** Changes on every new connection; the server has then forgotten every subscription and watch. */
     val generation: StateFlow<Int> get() = lifecycle.generation
@@ -59,11 +67,15 @@ class ChatConnections internal constructor(
 
     private val mutex = Mutex()
     private val open = ConcurrentHashMap<String, ChatConnection>()
+    private val pending = ConcurrentHashMap<String, PendingRequests>()
     private val lifecycles = CoroutineScope(SupervisorJob() + dispatcher)
 
     init {
         lifecycles.launch { network.available.collect { open.values.forEach { it.retry() } } }
     }
+
+    /** The permission requests and questions waiting on the user on [serverId], by Session. */
+    fun pending(serverId: String): PendingRequests = pending.computeIfAbsent(serverId) { PendingRequests() }
 
     /**
      * The connection of [serverId], started if it isn't yet. One that failed for good (a rejected
@@ -83,7 +95,7 @@ class ChatConnections internal constructor(
             heartbeat = 10.seconds,
             backoff = newBackoff(),
         )
-        ChatConnection(socket, lifecycle).also {
+        ChatConnection(socket, lifecycle, pending(serverId)).also {
             open[serverId] = it
             lifecycle.start()
         }

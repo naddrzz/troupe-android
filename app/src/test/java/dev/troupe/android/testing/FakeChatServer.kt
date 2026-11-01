@@ -26,7 +26,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * `ws/subscribe.rs`, `ws/sessions.rs`, `ws/watch.rs`): `auth_required`, `authenticate`, the
  * `chat_history` watch and `list_persisted_sessions`, session logs with `subscribe` by
  * `(logEpoch, lastSeq)` and `recover_session_snapshot`, plus `gap` and `heartbeat` frames, and
- * prompt turns (`send_prompt` deduped by `turnId`, `cancel_prompt`) of one agent, [AGENT_ID].
+ * prompt turns (`send_prompt` deduped by `turnId`, `cancel_prompt`) of one agent, [AGENT_ID], and
+ * its permission requests and questions (`respond_permission`, `answer_question`, first answer
+ * wins, `pendingPermissions` in subscribe and snapshot replies).
  */
 class FakeChatServer internal constructor(
     private val token: () -> String,
@@ -44,7 +46,16 @@ class FakeChatServer internal constructor(
         val turns: MutableMap<String, Boolean> = ConcurrentHashMap()
         /** The `send_prompt` that started [runningTurn]: its reply goes out when the turn ends. */
         @Volatile internal var heldReply: Pair<Connection, String>? = null
+        /** Unanswered `permission_request` payloads, in arrival order: the `pendingPermissions` list. */
+        val permissions: MutableList<JsonObject> = CopyOnWriteArrayList()
+        /** Unanswered `question_request` payloads. */
+        val questions: MutableList<JsonObject> = CopyOnWriteArrayList()
     }
+
+    /** Request and question ids answered so far; a later answer is `already_resolved`. */
+    val answered: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    /** Ledgered replies by `command_id`: a resend gets the first outcome. */
+    private val ledger = ConcurrentHashMap<String, Any>()
 
     /** The persisted-session index: the `chat_history` watch state and the `list_persisted_sessions` reply. */
     @Volatile var history: List<JsonObject> = emptyList()
@@ -73,6 +84,16 @@ class FakeChatServer internal constructor(
         val session = sessions.getValue(sessionId)
         val event = event(sessionId, session.head + 1, type, payload)
         session.events += event
+        when (type) {
+            "permission_request" -> session.permissions += payload
+            "question_request" -> session.questions += payload
+            "question_cancelled" -> session.questions.removeAll { it.string("questionId") == payload.string("questionId") }
+            // The turn's requests are released with it.
+            "prompt_complete" -> {
+                session.permissions.clear()
+                session.questions.clear()
+            }
+        }
         if (deliver) connections.filter { sessionId in it.subscribed }.forEach { it.send(event) }
         session.head
     }
@@ -96,6 +117,15 @@ class FakeChatServer internal constructor(
         session.runningTurn = null
         session.heldReply?.let { (connection, id) -> connection.reply(id, JsonPrimitive(stopReason)) }
         session.heldReply = null
+    }
+
+    /** Another device answers the permission request or question [id] first. */
+    fun answerElsewhere(id: String) {
+        sessions.values.forEach { session ->
+            session.permissions.removeAll { it.string("requestId") == id }
+            session.questions.removeAll { it.string("questionId") == id }
+        }
+        answered += id
     }
 
     /** Another device starts a turn in [sessionId]: its `user_prompt` is recorded and the agent is busy. */
@@ -190,6 +220,8 @@ class FakeChatServer internal constructor(
                     reply(id, Err("forbidden", "`$type` requires write capability; this connection is view-only"))
                 type == "send_prompt" -> sendPrompt(id, payload, request["command_id"]?.jsonPrimitive?.contentOrNull)
                 type == "cancel_prompt" -> cancelPrompt(id, payload)
+                type == "respond_permission" || type == "answer_question" ->
+                    ledgered(id, type, request["command_id"]?.jsonPrimitive?.contentOrNull) { answer(type, payload) }
                 else -> reply(id, Err("unsupported", "unknown request `$type`"))
             }
         }
@@ -237,6 +269,7 @@ class FakeChatServer internal constructor(
                 put("replayed", replay.size)
                 put("logEpoch", session.logEpoch)
                 put("headSeq", session.head)
+                put("pendingPermissions", JsonArray(session.permissions.toList()))
             }
             if (replayBeforeReply) {
                 replay.forEach(::send)
@@ -257,6 +290,7 @@ class FakeChatServer internal constructor(
                 put("headSeq", session.head)
                 put("logEpoch", session.logEpoch)
                 put("events", JsonArray(session.events.toList()))
+                put("pendingPermissions", JsonArray(session.permissions.toList()))
             })
         }
 
@@ -287,6 +321,27 @@ class FakeChatServer internal constructor(
                 put("turnId", turn)
                 put("content", content)
             })
+        }
+
+        /** A ledgered command: refused without a `command_id`, and a resend replays the first reply. */
+        private fun ledgered(id: String, type: String, commandId: String?, run: () -> Any) {
+            if (commandId.isNullOrEmpty()) return reply(id, Err("invalid_command_id", "`$type` requires a commandId"))
+            reply(id, ledger.computeIfAbsent(commandId) { run() })
+        }
+
+        /** termul's permission and question rendezvous: ticket-keyed, first answer wins. */
+        private fun answer(type: String, payload: JsonObject): Any = synchronized(lock) {
+            val permission = type == "respond_permission"
+            val ticket = payload.string(if (permission) "requestId" else "questionId").orEmpty()
+            val removed = sessions.values.any { session ->
+                val queue = if (permission) session.permissions else session.questions
+                queue.removeAll { it.string(if (permission) "requestId" else "questionId") == ticket }
+            }
+            when {
+                removed -> JsonObject(emptyMap()).also { answered += ticket }
+                ticket in answered -> Err("already_resolved", "this permission was already resolved (first-response-wins)")
+                else -> Err("stale", "no outstanding permission for this requestId")
+            }
         }
 
         private fun cancelPrompt(id: String, payload: JsonObject) = synchronized(lock) {
@@ -427,12 +482,30 @@ class FakeChatServer internal constructor(
             })
         }
 
-        fun questionRequest(sessionId: String, questionId: String, question: String) = buildJsonObject {
+        /** A question with [options] as `(value, label)`; [allowFreeText] adds a free-text answer. */
+        fun questionRequest(
+            sessionId: String,
+            questionId: String,
+            question: String,
+            options: List<Pair<String, String>> = emptyList(),
+            allowFreeText: Boolean? = null,
+        ) = buildJsonObject {
             put("agentId", "agent-1")
             put("sessionId", sessionId)
             put("questionId", questionId)
             put("question", question)
-            put("options", JsonArray(emptyList()))
+            put("options", buildJsonArray {
+                options.forEach { (value, label) -> add(buildJsonObject { put("value", value); put("label", label) }) }
+            })
+            if (allowFreeText != null) put("allowFreeText", allowFreeText)
         }
+
+        fun questionCancelled(sessionId: String, questionId: String) = buildJsonObject {
+            put("agentId", "agent-1")
+            put("sessionId", sessionId)
+            put("questionId", questionId)
+        }
+
+        private fun JsonObject.string(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
     }
 }

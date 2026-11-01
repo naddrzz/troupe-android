@@ -19,6 +19,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -99,6 +100,23 @@ class RealChatServerTest {
         }, commandId = turnId)
 
         assertEquals("send_prompt: ${reply.message}", false to ChatErrorCodes.NOT_FOUND, reply.ok to reply.code)
+    }
+
+    @Test fun answersToUnknownRequestsAreRefusedAsStale() = runBlocking {
+        val connection = graph.chatConnections.connection(pair())
+        withTimeout(15_000) { connection.state.first { it == ConnectionState.Connected } }
+
+        val permission = connection.socket.request("respond_permission", buildJsonObject {
+            put("requestId", "no-such-request-" + UUID.randomUUID())
+            put("optionId", "allow")
+        }, commandId = UUID.randomUUID().toString())
+        val question = connection.socket.request("answer_question", buildJsonObject {
+            put("questionId", "no-such-question-" + UUID.randomUUID())
+            putJsonArray("values") { add("main") }
+        }, commandId = UUID.randomUUID().toString())
+
+        assertEquals("respond_permission: ${permission.message}", false to ChatErrorCodes.STALE, permission.ok to permission.code)
+        assertEquals("answer_question: ${question.message}", false to ChatErrorCodes.STALE, question.ok to question.code)
     }
 
     @Test fun aWrongTokenIsRefusedForGood() = runBlocking {

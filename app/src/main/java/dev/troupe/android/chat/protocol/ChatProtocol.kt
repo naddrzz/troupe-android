@@ -121,6 +121,7 @@ object ChatErrorCodes {
     const val UNSUPPORTED = "unsupported"
     const val FORBIDDEN = "forbidden"
     const val RATE_LIMITED = "rate_limited"
+    const val ALREADY_RESOLVED = "already_resolved"
 }
 
 /** One entry of the persisted-session index (termul's `PersistedSessionSummary`). */

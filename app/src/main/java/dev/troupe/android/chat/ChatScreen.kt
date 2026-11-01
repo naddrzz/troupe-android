@@ -16,9 +16,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -26,12 +29,18 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
@@ -46,8 +55,9 @@ import dev.troupe.android.core.ui.TroupeTopBar
 import dev.troupe.android.terminal.UiMessage
 
 /**
- * An Agent Chat: the transcript as it streams, the agent's plan, the connection in the header and a
- * composer to prompt the agent or cancel its turn.
+ * An Agent Chat: the transcript as it streams, the agent's plan, the connection in the header, cards
+ * for the permission requests and questions waiting on the user, and a composer to prompt the agent
+ * or cancel its turn. On a View-only server the cards show but cannot be answered.
  */
 @Composable
 fun ChatScreen(title: String?, onBack: () -> Unit, viewModel: ChatViewModel = hiltViewModel()) {
@@ -80,7 +90,7 @@ fun ChatScreen(title: String?, onBack: () -> Unit, viewModel: ChatViewModel = hi
                 HorizontalDivider(color = palette.border)
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                if (state.items.isEmpty() && state.error == null) {
+                if (state.items.isEmpty() && state.requests.isEmpty() && state.error == null) {
                     Text(
                         stringResource(if (state.loading) R.string.chat_loading else R.string.chat_empty),
                         color = palette.muted,
@@ -88,7 +98,13 @@ fun ChatScreen(title: String?, onBack: () -> Unit, viewModel: ChatViewModel = hi
                         modifier = Modifier.align(Alignment.Center).padding(24.dp),
                     )
                 }
-                Transcript(state.items)
+                Transcript(
+                    items = state.items,
+                    requests = state.requests,
+                    canAnswer = { !viewOnly && connection == ConnectionState.Connected && it.id !in state.answering },
+                    onRespond = viewModel::respond,
+                    onAnswer = viewModel::answer,
+                )
             }
             HorizontalDivider(color = palette.border)
             Composer(
@@ -119,12 +135,15 @@ private fun Composer(
 ) {
     val palette = LocalTroupePalette.current
     Column(Modifier.fillMaxWidth().background(palette.card).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        val hint = if (viewOnly) UiMessage(R.string.chat_view_only) else notice
-        hint?.let {
+        if (viewOnly) {
+            Text(stringResource(R.string.chat_view_only), color = palette.muted, style = MaterialTheme.typography.bodySmall)
+        }
+        notice?.let {
             Text(
                 stringResource(it.text, it.arg.orEmpty()),
-                color = if (viewOnly) palette.muted else palette.warning,
+                color = palette.warning,
                 style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
             )
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -155,9 +174,18 @@ private fun Composer(
     }
 }
 
-/** The transcript, lazily laid out; it follows new content while the reader is at the bottom. */
+/**
+ * The transcript, lazily laid out, with the pending [requests] as cards after it; it follows new
+ * content while the reader is at the bottom.
+ */
 @Composable
-private fun Transcript(items: List<ChatItem>) {
+private fun Transcript(
+    items: List<ChatItem>,
+    requests: List<PendingRequest>,
+    canAnswer: (PendingRequest) -> Boolean,
+    onRespond: (PendingRequest.Permission, String) -> Unit,
+    onAnswer: (PendingRequest.Question, List<String>) -> Unit,
+) {
     val list = rememberLazyListState()
     val atBottom by remember {
         derivedStateOf {
@@ -166,8 +194,9 @@ private fun Transcript(items: List<ChatItem>) {
         }
     }
     val lastText = (items.lastOrNull() as? ChatItem.AgentMessage)?.text?.length
-    LaunchedEffect(items.size, lastText) {
-        if (atBottom && items.isNotEmpty()) list.scrollToItem(items.lastIndex, Int.MAX_VALUE)
+    val count = items.size + requests.size
+    LaunchedEffect(count, lastText) {
+        if (atBottom && count > 0) list.scrollToItem(count - 1, Int.MAX_VALUE)
     }
     LazyColumn(
         state = list,
@@ -181,7 +210,12 @@ private fun Transcript(items: List<ChatItem>) {
                 is ChatItem.AgentMessage -> AgentMessage(item)
                 is ChatItem.ToolCall -> ToolCall(item)
                 is ChatItem.TurnComplete -> TurnComplete(item)
-                is ChatItem.Request -> RequestPlaceholder(item)
+            }
+        }
+        items(requests, key = { "request-${it.id}" }, contentType = { it::class }) { request ->
+            when (request) {
+                is PendingRequest.Permission -> PermissionCard(request, canAnswer(request)) { onRespond(request, it) }
+                is PendingRequest.Question -> QuestionCard(request, canAnswer(request)) { onAnswer(request, it) }
             }
         }
     }
@@ -243,19 +277,72 @@ private fun TurnComplete(item: ChatItem.TurnComplete) {
     Text(text, style = MaterialTheme.typography.labelMedium, color = LocalTroupePalette.current.muted, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
 }
 
+/** A card that TalkBack announces when it appears: a heading, then its [content]. */
 @Composable
-private fun RequestPlaceholder(item: ChatItem.Request) {
+private fun RequestCard(heading: String, body: String, content: @Composable () -> Unit) {
     val palette = LocalTroupePalette.current
-    val text = when (item.kind) {
-        RequestKind.Permission -> stringResource(R.string.chat_permission_request, item.text)
-        RequestKind.Question -> stringResource(R.string.chat_question_request, item.text)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(palette.elevated, RoundedCornerShape(8.dp))
+            .padding(12.dp)
+            .semantics { liveRegion = LiveRegionMode.Polite },
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(heading, style = MaterialTheme.typography.labelMedium, color = palette.warning, modifier = Modifier.semantics { heading() })
+        if (body.isNotBlank()) Text(body, style = MaterialTheme.typography.bodyMedium)
+        content()
     }
-    Text(
-        text,
-        style = MaterialTheme.typography.bodySmall,
-        color = palette.warning,
-        modifier = Modifier.fillMaxWidth().background(palette.card, RoundedCornerShape(6.dp)).padding(12.dp),
-    )
+}
+
+/** A permission request: one button per option the agent offers. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PermissionCard(request: PendingRequest.Permission, enabled: Boolean, onChoose: (String) -> Unit) {
+    RequestCard(stringResource(R.string.chat_permission_title), request.title) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            request.options.forEach { option ->
+                val modifier = Modifier.heightIn(min = 48.dp)
+                if (option.kind?.startsWith("allow") == true) {
+                    Button(onClick = { onChoose(option.optionId) }, enabled = enabled, modifier = modifier) { Text(option.name) }
+                } else {
+                    OutlinedButton(onClick = { onChoose(option.optionId) }, enabled = enabled, modifier = modifier) { Text(option.name) }
+                }
+            }
+        }
+    }
+}
+
+/** A question: one button per choice, and a free-text answer when the agent allows one (or offers no choice). */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun QuestionCard(question: PendingRequest.Question, enabled: Boolean, onAnswer: (List<String>) -> Unit) {
+    RequestCard(stringResource(R.string.chat_question_title), question.question) {
+        if (question.options.isNotEmpty()) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                question.options.forEach { option ->
+                    OutlinedButton(onClick = { onAnswer(listOf(option.value)) }, enabled = enabled, modifier = Modifier.heightIn(min = 48.dp)) {
+                        Text(option.label)
+                    }
+                }
+            }
+        }
+        if (question.allowFreeText || question.options.isEmpty()) {
+            var text by rememberSaveable(question.id) { mutableStateOf("") }
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                enabled = enabled,
+                label = { Text(stringResource(R.string.chat_answer_label)) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Button(
+                onClick = { onAnswer(listOf(text.trim())) },
+                enabled = enabled && text.isNotBlank(),
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) { Text(stringResource(R.string.chat_answer_send)) }
+        }
+    }
 }
 
 @Composable

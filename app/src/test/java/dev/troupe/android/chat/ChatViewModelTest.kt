@@ -56,7 +56,6 @@ class ChatViewModelTest {
             is ChatItem.AgentMessage -> it.text
             is ChatItem.ToolCall -> "${it.title}:${it.status}"
             is ChatItem.TurnComplete -> "done:${it.stopReason}"
-            is ChatItem.Request -> "${it.kind}:${it.text}"
         }
     }
 
@@ -91,8 +90,6 @@ class ChatViewModelTest {
                 "On it, reading the code.",
                 "Where is it?",
                 "Read Login.kt:completed",
-                "Permission:Edit Login.kt",
-                "Question:Which branch?",
                 "done:end_turn",
             ),
         )
