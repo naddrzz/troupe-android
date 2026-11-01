@@ -41,6 +41,8 @@ class ProjectsViewModel @Inject constructor(
     val ui: StateFlow<ProjectsUi> = _ui
     private val _connection = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     val connection: StateFlow<ConnectionState> = _connection.asStateFlow()
+    /** The Paired Server is View-only, for the header's badge. */
+    val viewOnly: StateFlow<Boolean> = connections.viewOnly.state(serverId)
     private var link: TerminalConnection? = null
 
     init {

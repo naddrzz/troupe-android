@@ -53,6 +53,7 @@ import dev.troupe.android.core.theme.LocalTroupePalette
 @Composable
 fun TerminalsTab(onOpenTerminal: (terminalId: String) -> Unit, viewModel: TerminalsViewModel = hiltViewModel()) {
     val state by viewModel.ui.collectAsStateWithLifecycle()
+    val viewOnly by viewModel.viewOnly.collectAsStateWithLifecycle()
     val palette = LocalTroupePalette.current
     var confirmKill by rememberSaveable { mutableStateOf<String?>(null) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refresh() }
@@ -68,7 +69,14 @@ fun TerminalsTab(onOpenTerminal: (terminalId: String) -> Unit, viewModel: Termin
             verticalArrangement = Arrangement.spacedBy(12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Button(onClick = viewModel::spawn, enabled = !state.spawning, modifier = Modifier.heightIn(min = 48.dp)) {
+            if (viewOnly) {
+                Text(
+                    stringResource(R.string.terminals_view_only),
+                    color = palette.muted,
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            } else Button(onClick = viewModel::spawn, enabled = !state.spawning, modifier = Modifier.heightIn(min = 48.dp)) {
                 if (state.spawning) {
                     CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                     Text(stringResource(R.string.terminals_starting), Modifier.padding(start = 8.dp))
@@ -77,7 +85,7 @@ fun TerminalsTab(onOpenTerminal: (terminalId: String) -> Unit, viewModel: Termin
                     Text(stringResource(R.string.terminals_new), Modifier.padding(start = 8.dp))
                 }
             }
-            state.error?.let {
+            if (!viewOnly) state.error?.let {
                 Text(
                     stringResource(it.text, it.arg.orEmpty()),
                     color = palette.error,
@@ -85,7 +93,7 @@ fun TerminalsTab(onOpenTerminal: (terminalId: String) -> Unit, viewModel: Termin
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
-            if (!state.loading && state.terminals.isEmpty()) {
+            if (!viewOnly && !state.loading && state.terminals.isEmpty()) {
                 Text(
                     stringResource(R.string.terminals_empty),
                     color = palette.muted,
@@ -104,7 +112,7 @@ fun TerminalsTab(onOpenTerminal: (terminalId: String) -> Unit, viewModel: Termin
                     row,
                     killing = state.killing == row.id,
                     onClick = { onOpenTerminal(row.id) },
-                    onKill = { confirmKill = row.id },
+                    onKill = if (viewOnly) null else { { confirmKill = row.id } },
                 )
                 HorizontalDivider(color = palette.border)
             }
@@ -115,8 +123,9 @@ fun TerminalsTab(onOpenTerminal: (terminalId: String) -> Unit, viewModel: Termin
     }
 }
 
+/** [onKill] is null when the Terminal can't be killed from here (a View-only server): no Kill action then. */
 @Composable
-private fun TerminalRowItem(row: TerminalRow, killing: Boolean, onClick: () -> Unit, onKill: () -> Unit) {
+private fun TerminalRowItem(row: TerminalRow, killing: Boolean, onClick: () -> Unit, onKill: (() -> Unit)?) {
     val palette = LocalTroupePalette.current
     var menuOpen by remember { mutableStateOf(false) }
     val killLabel = stringResource(R.string.terminals_kill)
@@ -125,7 +134,7 @@ private fun TerminalRowItem(row: TerminalRow, killing: Boolean, onClick: () -> U
             .fillMaxWidth()
             .heightIn(min = 64.dp)
             .clickable(onClick = onClick)
-            .semantics { customActions = listOf(CustomAccessibilityAction(killLabel) { onKill(); true }) }
+            .semantics { if (onKill != null) customActions = listOf(CustomAccessibilityAction(killLabel) { onKill(); true }) }
             .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -144,7 +153,7 @@ private fun TerminalRowItem(row: TerminalRow, killing: Boolean, onClick: () -> U
                     .padding(horizontal = 8.dp, vertical = 4.dp),
             )
         }
-        Box {
+        if (onKill != null) Box {
             if (killing) {
                 CircularProgressIndicator(Modifier.padding(12.dp).size(24.dp), strokeWidth = 2.dp)
             } else {

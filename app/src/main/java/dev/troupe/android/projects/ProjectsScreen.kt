@@ -50,8 +50,11 @@ fun ProjectsScreen(
 ) {
     val state by viewModel.ui.collectAsStateWithLifecycle()
     val connection by viewModel.connection.collectAsStateWithLifecycle()
+    val viewOnly by viewModel.viewOnly.collectAsStateWithLifecycle()
     val title = (state as? ProjectsUi.Loaded)?.serverName ?: stringResource(R.string.projects_title)
-    Scaffold(topBar = { TroupeTopBar(title, onBack = onBack, connection = connection, onRetry = viewModel::retryConnection) }) { padding ->
+    Scaffold(topBar = {
+        TroupeTopBar(title, onBack = onBack, connection = connection, onRetry = viewModel::retryConnection, viewOnly = viewOnly)
+    }) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (val s = state) {
                 ProjectsUi.Loading -> Column(

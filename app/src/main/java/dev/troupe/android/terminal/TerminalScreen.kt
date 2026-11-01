@@ -40,6 +40,7 @@ import dev.troupe.android.terminal.render.XtermWebViewRenderer
 fun TerminalScreen(onBack: () -> Unit, viewModel: TerminalViewModel = hiltViewModel()) {
     val state by viewModel.ui.collectAsStateWithLifecycle()
     val connection by viewModel.connection.collectAsStateWithLifecycle()
+    val viewOnly by viewModel.viewOnly.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val palette = LocalTroupePalette.current
     val renderer = remember { XtermWebViewRenderer(WebView(context)) }
@@ -56,6 +57,7 @@ fun TerminalScreen(onBack: () -> Unit, viewModel: TerminalViewModel = hiltViewMo
             onBack = onBack,
             connection = connection,
             onRetry = viewModel::retryConnection,
+            viewOnly = viewOnly,
         ) }) { padding ->
         Column(Modifier.padding(padding).consumeWindowInsets(padding).imePadding().fillMaxSize()) {
             when (val s = state) {
@@ -80,7 +82,7 @@ fun TerminalScreen(onBack: () -> Unit, viewModel: TerminalViewModel = hiltViewMo
                 TerminalView(renderer, Modifier.fillMaxSize())
             }
             KeyBar(
-                enabled = state == TerminalUi.Live && connection == ConnectionState.Connected,
+                enabled = state == TerminalUi.Live && connection == ConnectionState.Connected && !viewOnly,
                 onKey = viewModel::onKey,
                 onPaste = {
                     val clip = context.getSystemService(ClipboardManager::class.java)?.primaryClip

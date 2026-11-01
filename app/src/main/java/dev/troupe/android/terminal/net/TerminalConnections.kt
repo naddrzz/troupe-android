@@ -7,6 +7,7 @@ import dev.troupe.android.core.net.ConnectionLifecycle
 import dev.troupe.android.core.net.ConnectionState
 import dev.troupe.android.core.net.NetworkMonitor
 import dev.troupe.android.core.net.ServerApi
+import dev.troupe.android.core.net.ViewOnlyRegistry
 import dev.troupe.android.servers.PairedServerRepository
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -14,6 +15,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -50,6 +53,8 @@ class TerminalConnections internal constructor(
     private val repository: PairedServerRepository,
     private val api: ServerApi,
     network: NetworkMonitor,
+    /** Each Paired Server's View-only state, read from `/health` on every connect. */
+    val viewOnly: ViewOnlyRegistry,
     dispatcher: CoroutineDispatcher,
     private val newBackoff: () -> Backoff,
 ) {
@@ -58,7 +63,8 @@ class TerminalConnections internal constructor(
         repository: PairedServerRepository,
         api: ServerApi,
         network: NetworkMonitor,
-    ) : this(sockets, repository, api, network, Dispatchers.IO, { Backoff() })
+        viewOnly: ViewOnlyRegistry,
+    ) : this(sockets, repository, api, network, viewOnly, Dispatchers.IO, { Backoff() })
 
     private val mutex = Mutex()
     private val open = ConcurrentHashMap<String, TerminalConnection>()
@@ -88,6 +94,11 @@ class TerminalConnections internal constructor(
             scope = lifecycles,
             backoff = newBackoff(),
         )
+        lifecycles.launch {
+            lifecycle.generation.filter { it > 0 }.collectLatest {
+                (api.health(server.address) as? ApiResult.Ok)?.let { viewOnly.set(serverId, !it.value.allowRemoteWrites) }
+            }
+        }
         TerminalConnection(socket, lifecycle).also {
             open[serverId] = it
             lifecycle.start()

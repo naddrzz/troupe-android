@@ -7,6 +7,7 @@ import androidx.lifecycle.SavedStateHandle
 import dev.troupe.android.core.net.Backoff
 import dev.troupe.android.core.net.NetworkMonitor
 import dev.troupe.android.core.net.ServerApi
+import dev.troupe.android.core.net.ViewOnlyRegistry
 import dev.troupe.android.core.net.troupeHttpClient
 import dev.troupe.android.pairing.PairViewModel
 import dev.troupe.android.projects.ProjectsViewModel
@@ -50,10 +51,11 @@ class TestGraph(dir: File, lifecycleDispatcher: CoroutineDispatcher = Dispatcher
     val repository = PairedServerRepository(dataStore, cipher)
     val sockets = TerminalSocketFactory(client, ClientIdentityStore(dataStore))
     val network = FakeNetworkMonitor()
-    val connections = TerminalConnections(sockets, repository, api, network, lifecycleDispatcher) { Backoff(jitter = 0.0) }
+    val viewOnly = ViewOnlyRegistry()
+    val connections = TerminalConnections(sockets, repository, api, network, viewOnly, lifecycleDispatcher) { Backoff(jitter = 0.0) }
     val cursors = TerminalCursorStore(dataStore, cipher)
 
-    fun pairViewModel() = PairViewModel(api, sockets, repository)
+    fun pairViewModel() = PairViewModel(api, sockets, repository, viewOnly)
 
     fun projectsViewModel(serverId: String) =
         ProjectsViewModel(SavedStateHandle(mapOf("serverId" to serverId)), api, repository, connections)

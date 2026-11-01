@@ -7,6 +7,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.troupe.android.R
 import dev.troupe.android.core.net.ApiResult
 import dev.troupe.android.core.net.ServerApi
+import dev.troupe.android.core.net.ViewOnlyRegistry
 import dev.troupe.android.servers.PairedServerRepository
 import dev.troupe.android.core.net.ConnectionFailure
 import dev.troupe.android.core.net.ConnectionState
@@ -28,6 +29,7 @@ class PairViewModel @Inject constructor(
     private val api: ServerApi,
     private val sockets: TerminalSocketFactory,
     private val repository: PairedServerRepository,
+    private val viewOnly: ViewOnlyRegistry,
 ) : ViewModel() {
     private val _ui = MutableStateFlow<PairUiState>(PairUiState.Idle)
     val ui: StateFlow<PairUiState> = _ui
@@ -57,8 +59,8 @@ class PairViewModel @Inject constructor(
     }
 
     private suspend fun pair(input: PairingInput, name: String): PairUiState {
-        when (val health = api.health(input.address)) {
-            is ApiResult.Ok -> Unit
+        val allowRemoteWrites = when (val health = api.health(input.address)) {
+            is ApiResult.Ok -> health.value.allowRemoteWrites
             ApiResult.Unauthorized -> return PairUiState.Error(R.string.pair_error_unauthorized)
             is ApiResult.Unreachable -> return PairUiState.Error(R.string.pair_error_unreachable)
             is ApiResult.ServerError -> return PairUiState.Error(R.string.pair_error_server, health.message)
@@ -77,7 +79,9 @@ class PairViewModel @Inject constructor(
                 ConnectionFailure.Refused -> PairUiState.Error(R.string.pair_error_server, handshake.message.orEmpty())
             }
         }
-        return PairUiState.Paired(repository.add(name, input).id)
+        val serverId = repository.add(name, input).id
+        viewOnly.set(serverId, !allowRemoteWrites)
+        return PairUiState.Paired(serverId)
     }
 
     private fun PairingError.toUi(): PairUiState.Error = when (this) {
