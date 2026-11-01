@@ -74,6 +74,14 @@ class RealChatServerTest {
         assertTrue("list_persisted_sessions: ${index.code} ${index.message}", index.ok && index.payload is JsonArray)
     }
 
+    /** No agent runs on the Docker server, so nothing can wait on the user: the list is ready and empty. */
+    @Test fun theAttentionOfAServerWithoutAgentsIsReadyAndEmpty() {
+        val serverId = pair()
+        graph.attention.start()
+        val attention = runBlocking { withTimeout(15_000) { graph.attention.servers.first { it[serverId]?.ready == true } } }
+        assertEquals(emptyList<Any>(), attention.getValue(serverId).items)
+    }
+
     @Test fun theChatsTabOfAProjectWithoutSessionsIsEmpty() {
         val chats = graph.chatsViewModel(pair(), "troupe-it-" + UUID.randomUUID())
         val ui = runBlocking { withTimeout(15_000) { chats.ui.first { !it.loading } } }

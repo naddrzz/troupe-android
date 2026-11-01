@@ -89,6 +89,25 @@
     <string name="projects_retry">Retry</string>
     <string name="projects_color_description">%1$s color</string>
 
+    <!-- Attention: on the server screen and in notifications -->
+    <string name="attention_needs_attention">Needs attention</string>
+    <string name="attention_channel">Needs attention</string>
+    <string name="attention_channel_description">Permission requests, questions and stopped chats waiting on you.</string>
+    <string name="attention_kind_permission">Permission request</string>
+    <string name="attention_kind_question">Question</string>
+    <string name="attention_kind_stopped">Chat stopped</string>
+    <string name="attention_chat_in_project">%1$s · %2$s</string>
+    <string name="attention_untitled_chat_in_project">%1$s · Untitled chat</string>
+    <string name="attention_chat">%1$s</string>
+    <string name="attention_untitled_chat">Untitled chat</string>
+    <!-- Read by TalkBack for an Attention row: kind, chat, age ("Question, troupe · Fix login, 5 minutes ago"). -->
+    <string name="attention_row_description">%1$s, %2$s, %3$s</string>
+    <string name="attention_open_chat">Open chat</string>
+    <string name="notifications_rationale_title">Get notified when an agent needs you?</string>
+    <string name="notifications_rationale_body">Troupe notifies you when an agent asks for permission, asks a question or stops, so you can answer from your phone. While Troupe is locked, notifications show no details.</string>
+    <string name="notifications_allow">Allow</string>
+    <string name="notifications_not_now">Not now</string>
+
     <!-- Project -->
     <string name="project_tab_chats">Chats</string>
     <string name="project_tab_terminals">Terminals</string>

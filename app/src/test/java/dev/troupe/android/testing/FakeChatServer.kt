@@ -386,8 +386,18 @@ class FakeChatServer internal constructor(
             put("payload", payload)
         }
 
-        /** One `PersistedSessionSummary` of the index; [lastActivityAt] is epoch ms. */
-        fun summary(sessionId: String, projectId: String?, title: String?, lastActivityAt: Long) = buildJsonObject {
+        /**
+         * One `PersistedSessionSummary` of the index; [lastActivityAt] is epoch ms. [status] is
+         * `active`, `closed` or `error`; [turnActive] is left out when null, as older hosts do.
+         */
+        fun summary(
+            sessionId: String,
+            projectId: String?,
+            title: String?,
+            lastActivityAt: Long,
+            status: String = "closed",
+            turnActive: Boolean? = null,
+        ) = buildJsonObject {
             put("storageKey", "claude/$sessionId")
             put("sessionId", sessionId)
             put("stableAgentNamespace", "claude")
@@ -396,7 +406,8 @@ class FakeChatServer internal constructor(
             put("title", title)
             put("createdAt", lastActivityAt - 60_000)
             put("lastActivityAt", lastActivityAt)
-            put("status", "closed")
+            put("status", status)
+            if (turnActive != null) put("turnActive", turnActive)
             put("messageCount", 2)
             put("toolCount", 1)
             put("lastSeq", 7)

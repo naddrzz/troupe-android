@@ -30,10 +30,7 @@ data class PlanEntry(val content: String, val status: String?)
  * Subagent text (`parentToolCallId`) and the user's echoed chunks stay out: `user_prompt` is the
  * authoritative record of what the user sent.
  *
- * Permission requests and questions are kept apart, in [pending], until they are answered, a
- * question is cancelled or the turn ends. A permission request is live only (never in the durable
- * log), so a `subscribe` or snapshot reply's `pendingPermissions` is the authoritative list: it
- * replaces the permissions held and settles every `permission_request` at or below its head.
+ * Permission requests and questions are kept apart, in [pending], by a [PendingFold].
  */
 class Transcript {
     private val items = mutableListOf<ChatItem>()
@@ -47,23 +44,19 @@ class Transcript {
     var turnRunning = false
         private set
 
-    private val pending = LinkedHashMap<String, PendingRequest>()
-    /** `permission_request`s at or below this seq are settled by the last `pendingPermissions` list. */
-    private var permissionsSettledAt = -1L
+    private val requests = PendingFold()
 
     fun items(): List<ChatItem> = items.toList()
 
     /** What the agent waits on the user for, oldest first. */
-    fun pending(): List<PendingRequest> = pending.values.toList()
+    fun pending(): List<PendingRequest> = requests.pending()
 
     /** Installs a reply's `pendingPermissions`, taken at [headSeq]. */
-    fun installPermissions(permissions: List<PendingRequest.Permission>, headSeq: Long) {
-        pending.values.removeAll { it is PendingRequest.Permission }
-        permissions.forEach { pending[it.id] = it }
-        permissionsSettledAt = headSeq
-    }
+    fun installPermissions(permissions: List<PendingRequest.Permission>, headSeq: Long) =
+        requests.installPermissions(permissions, headSeq)
 
     fun apply(event: ChatFrame.Event) {
+        requests.apply(event)
         val p = event.payload
         p.string("agentId")?.let { agentId = it }
         when (event.type) {
@@ -83,14 +76,8 @@ class Transcript {
             }
             "prompt_complete" -> {
                 turnRunning = false
-                pending.clear()
                 items += ChatItem.TurnComplete("c-${event.seq}", p.string("stopReason") ?: "end_turn")
             }
-            "permission_request" -> if (event.seq > permissionsSettledAt) {
-                parsePermissionRequest(event.sid.orEmpty(), p)?.let { pending[it.id] = it }
-            }
-            "question_request" -> parseQuestionRequest(event.sid.orEmpty(), p)?.let { pending[it.id] = it }
-            "question_cancelled" -> p.string("questionId")?.let { pending.remove(it) }
         }
     }
 

@@ -124,13 +124,19 @@ object ChatErrorCodes {
     const val ALREADY_RESOLVED = "already_resolved"
 }
 
-/** One entry of the persisted-session index (termul's `PersistedSessionSummary`). */
+/**
+ * One entry of the persisted-session index (termul's `PersistedSessionSummary`). [status] is
+ * `active` while an agent holds the Session open, `closed` or `error` (its agent failed);
+ * [turnActive] is true while a prompt turn is open, absent on older hosts.
+ */
 @Serializable
 class SessionSummary(
     val sessionId: String,
     val projectId: String? = null,
     val title: String? = null,
     val lastActivityAt: Long = 0,
+    val status: String? = null,
+    val turnActive: Boolean? = null,
 )
 
 /** The `subscribe` reply: events with `seq <= headSeq` are replay, anything above is live. */

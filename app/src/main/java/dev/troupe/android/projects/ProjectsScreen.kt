@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.troupe.android.R
+import dev.troupe.android.attention.AttentionSection
 import dev.troupe.android.core.protocol.Project
 import dev.troupe.android.core.theme.LocalTroupePalette
 import dev.troupe.android.core.theme.TroupeColors
@@ -46,57 +47,62 @@ import dev.troupe.android.core.ui.TroupeTopBar
 fun ProjectsScreen(
     onBack: () -> Unit,
     onOpenProject: (Project) -> Unit,
+    onOpenChat: (sessionId: String, title: String?) -> Unit,
     viewModel: ProjectsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.ui.collectAsStateWithLifecycle()
+    val attention by viewModel.attention.collectAsStateWithLifecycle()
     val connection by viewModel.connection.collectAsStateWithLifecycle()
     val viewOnly by viewModel.viewOnly.collectAsStateWithLifecycle()
     val title = (state as? ProjectsUi.Loaded)?.serverName ?: stringResource(R.string.projects_title)
     Scaffold(topBar = {
         TroupeTopBar(title, onBack = onBack, connection = connection, onRetry = viewModel::retryConnection, viewOnly = viewOnly)
     }) { padding ->
-        Box(Modifier.padding(padding).fillMaxSize()) {
-            when (val s = state) {
-                ProjectsUi.Loading -> Column(
-                    Modifier.align(Alignment.Center),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    CircularProgressIndicator()
-                    Spacer(Modifier.height(12.dp))
-                    Text(stringResource(R.string.projects_loading), style = MaterialTheme.typography.bodyMedium)
-                }
-                is ProjectsUi.Error -> Column(
-                    Modifier.align(Alignment.Center).padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text(
-                        stringResource(s.message, s.arg.orEmpty()),
-                        color = LocalTroupePalette.current.error,
-                        textAlign = TextAlign.Center,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    OutlinedButton(onClick = viewModel::refresh, modifier = Modifier.heightIn(min = 48.dp)) {
-                        Text(stringResource(R.string.projects_retry))
+        Column(Modifier.padding(padding).fillMaxSize()) {
+            AttentionSection(attention, onOpen = { onOpenChat(it.sessionId, it.sessionTitle) })
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                when (val s = state) {
+                    ProjectsUi.Loading -> Column(
+                        Modifier.align(Alignment.Center),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        CircularProgressIndicator()
+                        Spacer(Modifier.height(12.dp))
+                        Text(stringResource(R.string.projects_loading), style = MaterialTheme.typography.bodyMedium)
                     }
-                }
-                is ProjectsUi.Loaded ->
-                    if (s.projects.isEmpty()) {
+                    is ProjectsUi.Error -> Column(
+                        Modifier.align(Alignment.Center).padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
                         Text(
-                            stringResource(R.string.projects_empty),
-                            color = LocalTroupePalette.current.muted,
+                            stringResource(s.message, s.arg.orEmpty()),
+                            color = LocalTroupePalette.current.error,
                             textAlign = TextAlign.Center,
                             style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.align(Alignment.Center).padding(24.dp),
                         )
-                    } else {
-                        LazyColumn(Modifier.fillMaxSize()) {
-                            items(s.projects, key = { it.id }) { project ->
-                                ProjectRow(project, onClick = { onOpenProject(project) })
-                                HorizontalDivider(color = LocalTroupePalette.current.border)
-                            }
+                        Spacer(Modifier.height(16.dp))
+                        OutlinedButton(onClick = viewModel::refresh, modifier = Modifier.heightIn(min = 48.dp)) {
+                            Text(stringResource(R.string.projects_retry))
                         }
                     }
+                    is ProjectsUi.Loaded ->
+                        if (s.projects.isEmpty()) {
+                            Text(
+                                stringResource(R.string.projects_empty),
+                                color = LocalTroupePalette.current.muted,
+                                textAlign = TextAlign.Center,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.align(Alignment.Center).padding(24.dp),
+                            )
+                        } else {
+                            LazyColumn(Modifier.fillMaxSize()) {
+                                items(s.projects, key = { it.id }) { project ->
+                                    ProjectRow(project, onClick = { onOpenProject(project) })
+                                    HorizontalDivider(color = LocalTroupePalette.current.border)
+                                }
+                            }
+                        }
+                }
             }
         }
     }

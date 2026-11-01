@@ -1,6 +1,8 @@
 package dev.troupe.android.core.nav
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -32,9 +34,31 @@ import kotlinx.serialization.Serializable
 /** `serverId` and `sessionId` are read by [dev.troupe.android.chat.ChatViewModel]. */
 @Serializable data class ChatRoute(val serverId: String, val sessionId: String, val title: String?)
 
+/**
+ * The app's screens. [screens] learns which one is on top; a [link] (from a notification) opens its
+ * Agent Chat above its server's screen, then [onLinkHandled] clears it.
+ */
 @Composable
-fun TroupeNavHost() {
+fun TroupeNavHost(screens: Screens, link: ChatLink?, onLinkHandled: () -> Unit) {
     val nav = rememberNavController()
+    LaunchedEffect(nav) {
+        nav.currentBackStackEntryFlow.collect { entry ->
+            val destination = entry.destination
+            screens.onScreen(
+                when {
+                    destination.hasRoute<ProjectsRoute>() -> Screen.Server(entry.toRoute<ProjectsRoute>().serverId)
+                    destination.hasRoute<ChatRoute>() -> entry.toRoute<ChatRoute>().let { Screen.Chat(it.serverId, it.sessionId) }
+                    else -> Screen.Other
+                },
+            )
+        }
+    }
+    LaunchedEffect(link) {
+        if (link == null) return@LaunchedEffect
+        nav.navigate(ProjectsRoute(link.serverId)) { popUpTo(ServersRoute) }
+        nav.navigate(ChatRoute(link.serverId, link.sessionId, link.title))
+        onLinkHandled()
+    }
     NavHost(nav, startDestination = ServersRoute) {
         composable<ServersRoute> {
             ServersScreen(
@@ -59,6 +83,7 @@ fun TroupeNavHost() {
             ProjectsScreen(
                 onBack = { nav.popBackStack() },
                 onOpenProject = { nav.navigate(ProjectRoute(serverId, it.id, it.name)) },
+                onOpenChat = { sessionId, title -> nav.navigate(ChatRoute(serverId, sessionId, title)) },
             )
         }
         composable<ProjectRoute> { entry ->

@@ -232,6 +232,7 @@ class ChatViewModel @Inject constructor(
                 reply.code == ChatErrorCodes.STALE -> resolved += request.id
                 else -> _ui.update { it.copy(notice = refusal(reply)) }
             }
+            if (request.id in resolved) link?.pending?.resolve(request.id)
             publish()
         }
     }
@@ -334,6 +335,10 @@ class ChatViewModel @Inject constructor(
                 answering = answering.toSet(),
             )
         }
+    }
+
+    override fun onCleared() {
+        link?.pending?.release(sessionId)
     }
 
     private fun unavailable() = _ui.update { it.copy(loading = false, error = UiMessage(R.string.chat_unavailable)) }

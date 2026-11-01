@@ -4,6 +4,7 @@ import androidx.datastore.core.DataStoreFactory
 import androidx.datastore.core.okio.OkioStorage
 import androidx.datastore.preferences.core.PreferencesSerializer
 import androidx.lifecycle.SavedStateHandle
+import dev.troupe.android.attention.AttentionCenter
 import dev.troupe.android.chat.ChatViewModel
 import dev.troupe.android.chat.ChatsViewModel
 import dev.troupe.android.chat.net.ChatConnections
@@ -60,11 +61,14 @@ class TestGraph(dir: File, lifecycleDispatcher: CoroutineDispatcher = Dispatcher
     val cursors = TerminalCursorStore(dataStore, cipher)
     private val identity = ClientIdentityStore(dataStore)
     val chatConnections = ChatConnections(ChatSocketFactory(client, identity), repository, api, network, lifecycleDispatcher) { Backoff(jitter = 0.0) }
+    /** Reads [now] for the time a request was first seen. */
+    @Volatile var now = 1_000_000L
+    val attention = AttentionCenter(chatConnections, repository, api, Dispatchers.IO) { now }
 
     fun pairViewModel() = PairViewModel(api, sockets, repository, viewOnly)
 
     fun projectsViewModel(serverId: String) =
-        ProjectsViewModel(SavedStateHandle(mapOf("serverId" to serverId)), api, repository, connections)
+        ProjectsViewModel(SavedStateHandle(mapOf("serverId" to serverId)), api, repository, connections, attention)
 
     fun terminalsViewModel(serverId: String, projectId: String) =
         TerminalsViewModel(SavedStateHandle(mapOf("serverId" to serverId, "projectId" to projectId)), connections, cursors)
@@ -82,6 +86,7 @@ class TestGraph(dir: File, lifecycleDispatcher: CoroutineDispatcher = Dispatcher
 
     /** Joins the storage scope, so a new graph on the same dir can open the file (an app restart). */
     override fun close() {
+        attention.stop()
         connections.closeAll()
         chatConnections.closeAll()
         runBlocking {

@@ -6,6 +6,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.troupe.android.R
+import dev.troupe.android.attention.AttentionCenter
+import dev.troupe.android.attention.AttentionItem
 import dev.troupe.android.core.net.ApiResult
 import dev.troupe.android.core.net.ConnectionState
 import dev.troupe.android.core.net.ServerApi
@@ -16,9 +18,11 @@ import dev.troupe.android.terminal.net.TerminalConnectFailed
 import dev.troupe.android.terminal.net.TerminalConnection
 import dev.troupe.android.terminal.net.TerminalConnections
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -28,13 +32,14 @@ sealed interface ProjectsUi {
     data class Error(@StringRes val message: Int, val arg: String? = null) : ProjectsUi
 }
 
-/** A Paired Server's Projects, with the server's connection state for the header. */
+/** A Paired Server's Projects and its Attention, with the server's connection state for the header. */
 @HiltViewModel
 class ProjectsViewModel @Inject constructor(
     savedState: SavedStateHandle,
     private val api: ServerApi,
     private val repository: PairedServerRepository,
     private val connections: TerminalConnections,
+    attention: AttentionCenter,
 ) : ViewModel() {
     private val serverId: String = checkNotNull(savedState["serverId"])
     private val _ui = MutableStateFlow<ProjectsUi>(ProjectsUi.Loading)
@@ -44,6 +49,9 @@ class ProjectsViewModel @Inject constructor(
     /** The Paired Server is View-only, for the header's badge. */
     val viewOnly: StateFlow<Boolean> = connections.viewOnly.state(serverId)
     private var link: TerminalConnection? = null
+    /** What waits on the user on this server, shown above the Projects. */
+    val attention: StateFlow<List<AttentionItem>> =
+        attention.attention(serverId).stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     init {
         refresh()
