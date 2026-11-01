@@ -9,7 +9,10 @@ import dev.troupe.android.terminal.protocol.TerminalRequest
 import dev.troupe.android.terminal.protocol.parseTerminalFrame
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withTimeout
@@ -52,8 +55,8 @@ class TerminalSocketFactory @Inject constructor(
 /**
  * One `/terminal/ws` connection. [connect] opens it and runs the `authenticate` handshake
  * (protocol 7, device and instance ids, token); a version mismatch or rejected token is final.
- * [request] correlates replies by `id`. Reconnect, output frames and claims arrive with the
- * Terminal slice.
+ * [request] correlates replies by `id`; every other server frame (output, replay) goes to
+ * [frames]. Reconnect arrives with a later slice.
  */
 class TerminalSocket internal constructor(
     private val client: OkHttpClient,
@@ -63,6 +66,11 @@ class TerminalSocket internal constructor(
 ) {
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     val state: StateFlow<ConnectionState> = _state.asStateFlow()
+
+    // Unbounded: output must never be dropped because a collector is slow.
+    private val _frames = MutableSharedFlow<TerminalFrame>(extraBufferCapacity = Int.MAX_VALUE)
+    /** Server frames other than replies, in arrival order. Only collectors subscribed at arrival see a frame. */
+    val frames: SharedFlow<TerminalFrame> = _frames.asSharedFlow()
 
     private val pending = ConcurrentHashMap<String, CompletableDeferred<TerminalFrame.Reply>>()
     @Volatile private var webSocket: WebSocket? = null
@@ -98,9 +106,12 @@ class TerminalSocket internal constructor(
         return ConnectionState.Failed(reason, reply.error)
     }
 
-    /** Sends a request and waits for its reply. Ledgered requests (`spawn`, `write`, `kill`) carry a `commandId`. */
+    /**
+     * Sends a request and waits for its reply. Ledgered requests (`spawn`, `write`, `kill`) carry a `commandId`.
+     * Throws [TerminalDisconnected] when the socket is not connected or drops, [TerminalRequestTimeout] after 15 s.
+     */
     suspend fun request(type: String, payload: JsonObject, ledgered: Boolean = false): TerminalFrame.Reply {
-        check(_state.value == ConnectionState.Connected) { "not connected" }
+        if (_state.value != ConnectionState.Connected) throw TerminalDisconnected()
         return send(type, payload, commandId = if (ledgered) UUID.randomUUID().toString() else null)
     }
 
@@ -141,7 +152,7 @@ class TerminalSocket internal constructor(
 
         override fun onMessage(webSocket: WebSocket, text: String) {
             val frame = parseTerminalFrame(text)
-            if (frame is TerminalFrame.Reply) pending[frame.id]?.complete(frame)
+            if (frame is TerminalFrame.Reply) pending[frame.id]?.complete(frame) else _frames.tryEmit(frame)
         }
 
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {

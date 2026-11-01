@@ -3,7 +3,9 @@ package dev.troupe.android.testing
 import dev.troupe.android.pairing.PairingInput
 import dev.troupe.android.pairing.ServerAddress
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.int
@@ -39,7 +41,8 @@ class FakeTroupeServer : Closeable {
     var projectsBody: String = fixture("projects.json")
     /**
      * Answers authenticated `/terminal/ws` requests other than `authenticate`: return the reply's
-     * `data` object. Later slices script `list_preserved`, `spawn`, `attach` and friends here.
+     * `data` object, or throw [Refused] for an error reply. Frames pushed with [sendTerminalFrame]
+     * from here go out before the reply, as termul sends `replay` before the `attach` reply.
      */
     var onTerminalRequest: (type: String, payload: JsonObject) -> JsonObject = { type, _ ->
         error("FakeTroupeServer: no script for terminal request '$type'")
@@ -49,6 +52,17 @@ class FakeTroupeServer : Closeable {
     val terminalUpgrades: MutableList<RecordedRequest> = CopyOnWriteArrayList()
     /** Every request frame the app sent on `/terminal/ws`, parsed. */
     val terminalRequests: MutableList<JsonObject> = CopyOnWriteArrayList()
+    private val terminalSockets: MutableList<WebSocket> = CopyOnWriteArrayList()
+
+    /** Pushes a server frame (`data`, `replay`, …) to every authenticated `/terminal/ws` connection. */
+    fun sendTerminalFrame(frame: JsonObject) = terminalSockets.forEach { it.send(frame.toString()) }
+
+    /** The recorded requests of one type, in order. */
+    fun terminalRequests(type: String): List<JsonObject> =
+        terminalRequests.filter { it["type"]?.jsonPrimitive?.content == type }
+
+    /** A scripted error reply `{success: false, code, error}`. */
+    class Refused(val code: String, message: String = code) : Exception(message)
 
     private val server = MockWebServer()
 
@@ -96,10 +110,14 @@ class FakeTroupeServer : Closeable {
     /** One `/terminal/ws` connection: refuses everything until a valid `authenticate`. */
     private inner class TerminalSocketScript : WebSocketListener() {
         private var authed = false
+        private lateinit var socket: WebSocket
 
-        override fun onOpen(webSocket: WebSocket, response: Response) = Unit
+        override fun onOpen(webSocket: WebSocket, response: Response) {
+            socket = webSocket
+        }
 
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+            terminalSockets -= webSocket
             webSocket.close(1000, null)
         }
 
@@ -112,8 +130,9 @@ class FakeTroupeServer : Closeable {
             val reply = when {
                 type == "authenticate" -> authenticate(payload)
                 !authed -> Refusal("UNAUTHORIZED", "Unauthorized")
-                else -> runCatching { onTerminalRequest(type, payload) }
-                    .getOrElse { Refusal("INTERNAL", it.message ?: "error") }
+                else -> runCatching { onTerminalRequest(type, payload) }.getOrElse {
+                    if (it is Refused) Refusal(it.code, it.message ?: it.code) else Refusal("INTERNAL", it.message ?: "error")
+                }
             }
             webSocket.send(replyFrame(id, reply))
         }
@@ -134,6 +153,7 @@ class FakeTroupeServer : Closeable {
             }
             if (payload["token"]?.jsonPrimitive?.content != token) return Refusal("UNAUTHORIZED", "Unauthorized")
             authed = true
+            terminalSockets += socket
             return JsonObject(emptyMap())
         }
 
@@ -158,6 +178,33 @@ class FakeTroupeServer : Closeable {
     companion object {
         fun fixture(name: String): String =
             checkNotNull(FakeTroupeServer::class.java.getResource("/fixtures/$name")) { "missing fixture $name" }.readText()
+
+        /** A live output frame, shaped like termul's `WebTerminalDataFrame`. */
+        fun dataFrame(terminalId: String, seq: Long, bytes: ByteArray): JsonObject = buildJsonObject {
+            put("type", "data")
+            put("terminalId", terminalId)
+            put("seq", seq)
+            put("data", bytes.toJsonInts())
+        }
+
+        /** The frame termul sends on `attach`: unseen chunks numbered from 1. */
+        fun replayFrame(terminalId: String, vararg chunks: ByteArray, reset: Boolean = false): JsonObject = buildJsonObject {
+            put("type", "replay")
+            put("terminalId", terminalId)
+            put("chunks", JsonArray(chunks.mapIndexed { i, bytes ->
+                buildJsonObject {
+                    put("seq", i + 1)
+                    put("data", bytes.toJsonInts())
+                }
+            }))
+            put("gap", false)
+            put("reset", reset)
+            put("logEpoch", "ep-1")
+            put("latestSeq", chunks.size)
+            put("snapshot", buildJsonObject { put("exited", false) })
+        }
+
+        private fun ByteArray.toJsonInts() = JsonArray(map { JsonPrimitive(it.toInt() and 0xFF) })
     }
 }
 
@@ -165,3 +212,14 @@ class FakeTroupeServer : Closeable {
 fun JsonObject.payloadInt(field: String): Int = getValue("payload").jsonObject.getValue(field).jsonPrimitive.int
 
 fun JsonObject.payloadString(field: String): String? = getValue("payload").jsonObject[field]?.jsonPrimitive?.content
+
+/** The `data` of a `spawn` reply, shaped like termul's `SpawnedTerminal`. */
+fun spawnedTerminal(id: String, claim: String): JsonObject = buildJsonObject {
+    put("id", id)
+    put("shell", "/bin/bash")
+    put("cwd", "/workspace")
+    put("pid", 42)
+    put("cols", 80)
+    put("rows", 24)
+    put("claim", claim)
+}
