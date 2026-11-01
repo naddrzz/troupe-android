@@ -58,6 +58,7 @@ import dev.troupe.android.core.ui.TroupeTopBar
 fun ServersScreen(
     onPair: () -> Unit,
     onOpenServer: (String) -> Unit,
+    onOpenSettings: () -> Unit,
     viewModel: ServersViewModel = hiltViewModel(),
 ) {
     val rows by viewModel.rows.collectAsStateWithLifecycle()
@@ -73,6 +74,9 @@ fun ServersScreen(
                         IconButton(onClick = onPair) {
                             Icon(painterResource(R.drawable.ic_add), contentDescription = stringResource(R.string.servers_pair_action))
                         }
+                    }
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(painterResource(R.drawable.ic_settings), contentDescription = stringResource(R.string.servers_settings))
                     }
                 },
             )

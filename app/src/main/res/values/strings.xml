@@ -29,6 +29,24 @@
     <string name="servers_cancel">Cancel</string>
     <string name="servers_remove_title">Remove %1$s?</string>
     <string name="servers_remove_body">Troupe forgets this server and its token. To use it again, pair it again.</string>
+    <string name="servers_settings">Settings</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_lock">Lock Troupe</string>
+    <string name="settings_lock_body">Ask for your fingerprint, face or screen lock when Troupe opens.</string>
+    <string name="settings_lock_no_screen_lock">Set up a screen lock (PIN, pattern or password) in your device settings to lock Troupe.</string>
+    <string name="settings_lock_unsupported">This device can\'t lock Troupe: it has no biometrics or screen lock Troupe can use.</string>
+    <string name="settings_lock_delay">Lock after leaving Troupe</string>
+    <string name="settings_lock_delay_immediately">Immediately</string>
+    <string name="settings_lock_delay_one_minute">After 1 minute</string>
+    <string name="settings_lock_delay_five_minutes">After 5 minutes</string>
+
+    <!-- Lock screen -->
+    <string name="lock_title">Troupe is locked</string>
+    <string name="lock_body">Unlock to see your servers.</string>
+    <string name="lock_unlock">Unlock</string>
+    <string name="lock_prompt_title">Unlock Troupe</string>
 
     <!-- Pairing -->
     <string name="pair_title">Pair a server</string>
