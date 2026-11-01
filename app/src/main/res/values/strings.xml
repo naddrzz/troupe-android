@@ -33,4 +33,40 @@
     <string name="projects_default_badge">Default</string>
     <string name="projects_retry">Retry</string>
     <string name="projects_color_description">%1$s color</string>
+
+    <!-- Project -->
+    <string name="project_tab_chats">Chats</string>
+    <string name="project_tab_terminals">Terminals</string>
+    <string name="project_chats_placeholder">Agent chats arrive in the next update.</string>
+
+    <!-- Terminals tab -->
+    <string name="terminals_new">New terminal</string>
+    <string name="terminals_starting">Starting a terminal…</string>
+    <string name="terminals_empty">Start a terminal to run commands in this Project.</string>
+    <string name="terminals_error_spawn">Couldn\'t start a terminal: %1$s</string>
+    <string name="terminals_error_spawn_reply">Couldn\'t start a terminal. The server sent an unexpected reply.</string>
+
+    <!-- Terminal -->
+    <string name="terminal_title">Terminal</string>
+    <string name="terminal_connecting">Connecting…</string>
+    <string name="terminal_unavailable">This terminal is no longer available.</string>
+    <string name="key_paste">Paste</string>
+    <string name="key_esc">Esc</string>
+    <string name="key_esc_description">Escape</string>
+    <string name="key_tab">Tab</string>
+    <string name="key_tab_description">Tab</string>
+    <string name="key_ctrl_c">Ctrl+C</string>
+    <string name="key_ctrl_c_description">Control C</string>
+    <string name="key_left">←</string>
+    <string name="key_left_description">Left arrow</string>
+    <string name="key_up">↑</string>
+    <string name="key_up_description">Up arrow</string>
+    <string name="key_down">↓</string>
+    <string name="key_down_description">Down arrow</string>
+    <string name="key_right">→</string>
+    <string name="key_right_description">Right arrow</string>
+    <string name="key_page_up">PgUp</string>
+    <string name="key_page_up_description">Page up</string>
+    <string name="key_page_down">PgDn</string>
+    <string name="key_page_down_description">Page down</string>
 </resources>
