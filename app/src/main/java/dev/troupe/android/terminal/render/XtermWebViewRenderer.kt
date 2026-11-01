@@ -1,6 +1,7 @@
 package dev.troupe.android.terminal.render
 
 import android.annotation.SuppressLint
+import android.content.pm.ApplicationInfo
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
@@ -48,6 +49,10 @@ class XtermWebViewRenderer(val webView: WebView, private val palette: AnsiPalett
         val assets = WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(webView.context))
             .build()
+        // Debug builds only: lets chrome://inspect attach to the terminal page.
+        if (webView.context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+            WebView.setWebContentsDebuggingEnabled(true)
+        }
         webView.settings.apply {
             javaScriptEnabled = true
             allowFileAccess = false
