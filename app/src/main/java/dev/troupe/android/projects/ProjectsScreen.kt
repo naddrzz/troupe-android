@@ -1,6 +1,7 @@
 package dev.troupe.android.projects
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,7 +43,11 @@ import dev.troupe.android.core.theme.TroupeColors
 import dev.troupe.android.core.ui.TroupeTopBar
 
 @Composable
-fun ProjectsScreen(onBack: () -> Unit, viewModel: ProjectsViewModel = hiltViewModel()) {
+fun ProjectsScreen(
+    onBack: () -> Unit,
+    onOpenProject: (Project) -> Unit,
+    viewModel: ProjectsViewModel = hiltViewModel(),
+) {
     val state by viewModel.ui.collectAsStateWithLifecycle()
     val title = (state as? ProjectsUi.Loaded)?.serverName ?: stringResource(R.string.projects_title)
     Scaffold(topBar = { TroupeTopBar(title, onBack = onBack) }) { padding ->
@@ -83,7 +88,7 @@ fun ProjectsScreen(onBack: () -> Unit, viewModel: ProjectsViewModel = hiltViewMo
                     } else {
                         LazyColumn(Modifier.fillMaxSize()) {
                             items(s.projects, key = { it.id }) { project ->
-                                ProjectRow(project)
+                                ProjectRow(project, onClick = { onOpenProject(project) })
                                 HorizontalDivider(color = LocalTroupePalette.current.border)
                             }
                         }
@@ -94,13 +99,14 @@ fun ProjectsScreen(onBack: () -> Unit, viewModel: ProjectsViewModel = hiltViewMo
 }
 
 @Composable
-private fun ProjectRow(project: Project) {
+private fun ProjectRow(project: Project, onClick: () -> Unit) {
     val palette = LocalTroupePalette.current
     val colorName = project.color ?: "gray"
     val colorDescription = stringResource(R.string.projects_color_description, colorName)
     Row(
         Modifier
             .fillMaxWidth()
+            .clickable(onClick = onClick)
             .heightIn(min = 56.dp)
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
