@@ -1,0 +1,32 @@
+# A real Troupe Server (termul-server) for Troupe's integration test and manual
+# checks on the emulator. Start it with scripts/test-server.ps1, which sets the
+# fixed test-only token. Modeled on termul's own docker-compose.yml.
+
+name: troupe-test-server
+
+services:
+  termul-server:
+    image: ghcr.io/gnoviawan/termul-server:latest
+    ports:
+      # Loopback only. The emulator reaches it through `adb reverse`.
+      - "127.0.0.1:18080:8080"
+    environment:
+      # Test-only token, never used for a real server.
+      TERMUL_WEB_AUTH_TOKEN: ${TROUPE_TEST_TOKEN:?run scripts/test-server.ps1 up}
+      # Requests arrive from the Docker network, so writes need the opt-in.
+      TERMUL_SERVER_ALLOW_REMOTE_WRITES: "true"
+    volumes:
+      - termul-home:/home/termul
+      - type: bind
+        source: ./workspace
+        target: /workspace
+    read_only: true
+    tmpfs:
+      - /tmp:exec,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  termul-home:
