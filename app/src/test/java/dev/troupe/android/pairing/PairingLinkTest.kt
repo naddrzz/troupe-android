@@ -21,6 +21,12 @@ class PairingLinkTest {
             Ok("http://127.0.0.1:18080/?x=1#token=t", "http://127.0.0.1:18080/", "t"),
             Ok("http://box.tail1234.ts.net:8080/#foo=1&token=t2", "http://box.tail1234.ts.net:8080/", "t2"),
             Ok("\thttps://h.example.com/#token=%20spaced%20\r\n", "https://h.example.com/", "spaced"),
+            Ok("\n\nhttps://h.example.com/a/b/#token=t\n\n", "https://h.example.com/a/b/", "t"),
+            Ok("HTTPS://H.Example.COM/#token=t", "https://h.example.com/", "t"),
+            Ok("https://h.example.com/#token=a+b%3D%3D", "https://h.example.com/", "a+b=="),
+            Ok("http://localhost:8080/#token=t", "http://localhost:8080/", "t"),
+            Ok("http://100.64.0.7:8080/#token=t", "http://100.64.0.7:8080/", "t"),
+            Ok("http://box.local:8080/#token=t", "http://box.local:8080/", "t"),
         ).forEach { case ->
             val r = PairingLink.parse(case.raw).getOrThrow()
             assertEquals(case.raw, case.baseUrl, r.address.baseUrl.toString())
@@ -34,6 +40,8 @@ class PairingLinkTest {
         assertEquals("https://h.example.com/troupe/projects", r.address.httpUrl("projects").toString())
         val plain = PairingLink.fromManual("10.0.0.2:8080", "x").getOrThrow()
         assertEquals("ws://10.0.0.2:8080/terminal/ws", plain.address.wsUrl("terminal/ws"))
+        val deep = PairingLink.parse(" https://h.example.com/a/b#token=x\n").getOrThrow()
+        assertEquals("wss://h.example.com/a/b/terminal/ws", deep.address.wsUrl("terminal/ws"))
     }
 
     @Test fun badLinksFail() {
@@ -43,6 +51,10 @@ class PairingLinkTest {
             "https://h.example.com/#other=1" to PairingError.MissingToken::class,
             "http://8.8.8.8:8080/#token=x" to PairingError.CleartextNotAllowed::class,
             "http://example.com/#token=x" to PairingError.CleartextNotAllowed::class,
+            "http://abc.trycloudflare.com/#token=x" to PairingError.CleartextNotAllowed::class,
+            "https://h.example.com/?token=x" to PairingError.MissingToken::class,
+            "  \n " to PairingError.InvalidUrl::class,
+            "h.example.com/#token=x" to PairingError.InvalidUrl::class,
             "not a url" to PairingError.InvalidUrl::class,
             "" to PairingError.InvalidUrl::class,
             "ftp://h.example.com/#token=x" to PairingError.InvalidUrl::class,

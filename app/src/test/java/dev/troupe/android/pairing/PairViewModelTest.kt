@@ -38,6 +38,15 @@ class PairViewModelTest {
         return runBlocking { withTimeout(10_000) { vm.ui.first { it is PairUiState.Error || it is PairUiState.Paired } } }
     }
 
+    private fun pairWith(raw: String, submit: PairViewModel.(String) -> Unit): PairUiState {
+        val vm = graph.pairViewModel()
+        vm.submit(raw)
+        return runBlocking { withTimeout(10_000) { vm.ui.first { it is PairUiState.Error || it is PairUiState.Paired } } }
+    }
+
+    /** The link Troupe on the computer shows as text and as a QR code. */
+    private val link get() = "${server.address.baseUrl}#token=${server.token}"
+
     private fun savedServers() = runBlocking { graph.repository.servers.first() }
 
     private fun assertNothingSaved() {
@@ -108,6 +117,44 @@ class PairViewModelTest {
         assertEquals(PairUiState.Error(R.string.pair_error_cleartext, "8.8.8.8"), pair(address = "http://8.8.8.8:8080"))
         assertNothingSaved()
         assertTrue(server.httpRequests.isEmpty())
+    }
+
+    @Test fun pastedLinkWithNoiseSavesTheServerUnderItsHost() {
+        val paired = pairWith("  $link \n", PairViewModel::onLinkPasted) as PairUiState.Paired
+
+        val saved = savedServers().single()
+        assertEquals(paired.serverId, saved.id)
+        assertEquals(server.address.host, saved.name)
+        assertEquals(server.address, saved.address)
+        assertEquals(server.token, runBlocking { graph.repository.token(saved.id) })
+    }
+
+    @Test fun scannedQrPairsLikeAPastedLink() {
+        assertTrue(pairWith(link, PairViewModel::onQrScanned) is PairUiState.Paired)
+        assertEquals(server.address, savedServers().single().address)
+        assertEquals(server.token, server.terminalRequests.first().payloadString("token"))
+    }
+
+    @Test fun pastedLinkWithoutTokenAsksForTheFullLink() {
+        assertEquals(
+            PairUiState.Error(R.string.pair_error_missing_token),
+            pairWith(server.address.baseUrl.toString(), PairViewModel::onLinkPasted),
+        )
+        assertNothingSaved()
+        assertTrue(server.httpRequests.isEmpty())
+    }
+
+    @Test fun pastedLinkErrorsMatchManualPairing() {
+        assertEquals(PairUiState.Error(R.string.pair_error_invalid_url), pairWith("hello", PairViewModel::onLinkPasted))
+        assertEquals(
+            PairUiState.Error(R.string.pair_error_cleartext, "8.8.8.8"),
+            pairWith("http://8.8.8.8:8080/#token=x", PairViewModel::onQrScanned),
+        )
+        assertEquals(
+            PairUiState.Error(R.string.pair_error_unauthorized),
+            pairWith("${server.address.baseUrl}#token=wrong-token", PairViewModel::onLinkPasted),
+        )
+        assertNothingSaved()
     }
 
     @Test fun malformedAddressAndMissingToken() {
