@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -5,6 +7,36 @@ plugins {
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
 }
+
+// Version: versionName is the `v*` tag on HEAD without its `v` (`v1.2.3` -> `1.2.3`),
+// `0.0.0-dev` when HEAD is not tagged. versionCode is the commit count, which grows
+// with every commit on the release line (see "Releasing" in the README).
+fun git(vararg args: String): String? {
+    val result = providers.exec {
+        commandLine("git", *args)
+        isIgnoreExitValue = true
+    }
+    return if (result.result.get().exitValue == 0) result.standardOutput.asText.get().trim().ifEmpty { null } else null
+}
+
+val troupeVersionName = git("describe", "--tags", "--exact-match", "--match", "v*")?.removePrefix("v") ?: "0.0.0-dev"
+val troupeVersionCode = git("rev-list", "--count", "HEAD")?.toIntOrNull() ?: 1
+
+// Release signing: environment variables first (CI), then a git-ignored keystore.properties
+// at the repo root. Without either, the release APK is built unsigned.
+val keystoreProperties = Properties().apply {
+    val file = rootProject.file("keystore.properties")
+    if (file.isFile) file.inputStream().use { load(it) }
+}
+
+fun signingValue(env: String, property: String): String? =
+    System.getenv(env)?.ifBlank { null } ?: keystoreProperties.getProperty(property)?.ifBlank { null }
+
+val releaseKeystoreFile = signingValue("TROUPE_KEYSTORE_FILE", "storeFile")
+val releaseKeystorePassword = signingValue("TROUPE_KEYSTORE_PASSWORD", "storePassword")
+val releaseKeyAlias = signingValue("TROUPE_KEY_ALIAS", "keyAlias")
+val releaseKeyPassword = signingValue("TROUPE_KEY_PASSWORD", "keyPassword")
+val hasReleaseSigning = listOf(releaseKeystoreFile, releaseKeystorePassword, releaseKeyAlias, releaseKeyPassword).all { it != null }
 
 android {
     namespace = "dev.troupe.android"
@@ -14,14 +46,28 @@ android {
         applicationId = "dev.troupe.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = troupeVersionCode
+        versionName = troupeVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = rootProject.file(releaseKeystoreFile!!)
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
         }
     }
 
