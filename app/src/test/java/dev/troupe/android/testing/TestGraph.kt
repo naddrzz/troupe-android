@@ -9,6 +9,7 @@ import dev.troupe.android.core.net.troupeHttpClient
 import dev.troupe.android.pairing.PairViewModel
 import dev.troupe.android.projects.ProjectsViewModel
 import dev.troupe.android.servers.PairedServerRepository
+import dev.troupe.android.servers.ServersViewModel
 import dev.troupe.android.terminal.TerminalViewModel
 import dev.troupe.android.terminal.TerminalsViewModel
 import dev.troupe.android.terminal.net.ClientIdentityStore
@@ -18,7 +19,9 @@ import dev.troupe.android.terminal.net.TerminalSocketFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.job
+import kotlinx.coroutines.runBlocking
 import okio.FileSystem
 import okio.Path.Companion.toOkioPath
 import java.io.Closeable
@@ -53,8 +56,11 @@ class TestGraph(dir: File) : Closeable {
     fun terminalViewModel(serverId: String, terminalId: String) =
         TerminalViewModel(SavedStateHandle(mapOf("serverId" to serverId, "terminalId" to terminalId)), connections, claims)
 
+    fun serversViewModel() = ServersViewModel(api, sockets, repository)
+
+    /** Joins the storage scope, so a new graph on the same dir can open the file (an app restart). */
     override fun close() {
-        scope.cancel()
+        runBlocking { scope.coroutineContext.job.cancelAndJoin() }
         client.dispatcher.executorService.shutdown()
         client.connectionPool.evictAll()
     }
