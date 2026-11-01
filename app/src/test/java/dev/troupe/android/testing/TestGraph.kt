@@ -4,6 +4,10 @@ import androidx.datastore.core.DataStoreFactory
 import androidx.datastore.core.okio.OkioStorage
 import androidx.datastore.preferences.core.PreferencesSerializer
 import androidx.lifecycle.SavedStateHandle
+import dev.troupe.android.chat.ChatViewModel
+import dev.troupe.android.chat.ChatsViewModel
+import dev.troupe.android.chat.net.ChatConnections
+import dev.troupe.android.chat.net.ChatSocketFactory
 import dev.troupe.android.core.net.Backoff
 import dev.troupe.android.core.net.NetworkMonitor
 import dev.troupe.android.core.net.ServerApi
@@ -52,6 +56,8 @@ class TestGraph(dir: File, lifecycleDispatcher: CoroutineDispatcher = Dispatcher
     val network = FakeNetworkMonitor()
     val connections = TerminalConnections(sockets, repository, api, network, lifecycleDispatcher) { Backoff(jitter = 0.0) }
     val cursors = TerminalCursorStore(dataStore, cipher)
+    private val identity = ClientIdentityStore(dataStore)
+    val chatConnections = ChatConnections(ChatSocketFactory(client, identity), repository, api, network, lifecycleDispatcher) { Backoff(jitter = 0.0) }
 
     fun pairViewModel() = PairViewModel(api, sockets, repository)
 
@@ -64,11 +70,18 @@ class TestGraph(dir: File, lifecycleDispatcher: CoroutineDispatcher = Dispatcher
     fun terminalViewModel(serverId: String, terminalId: String) =
         TerminalViewModel(SavedStateHandle(mapOf("serverId" to serverId, "terminalId" to terminalId)), connections, cursors)
 
+    fun chatsViewModel(serverId: String, projectId: String) =
+        ChatsViewModel(SavedStateHandle(mapOf("serverId" to serverId, "projectId" to projectId)), chatConnections)
+
+    fun chatViewModel(serverId: String, sessionId: String) =
+        ChatViewModel(SavedStateHandle(mapOf("serverId" to serverId, "sessionId" to sessionId)), chatConnections)
+
     fun serversViewModel() = ServersViewModel(api, sockets, repository)
 
     /** Joins the storage scope, so a new graph on the same dir can open the file (an app restart). */
     override fun close() {
         connections.closeAll()
+        chatConnections.closeAll()
         runBlocking {
             connections.background.coroutineContext.job.cancelAndJoin()
             scope.coroutineContext.job.cancelAndJoin()

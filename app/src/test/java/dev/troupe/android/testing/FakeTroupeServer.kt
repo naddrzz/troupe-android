@@ -25,7 +25,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * The primary test seam: a scripted Troupe Server on MockWebServer speaking `/health`,
- * `/projects` and `/terminal/ws` the way termul-server does (shapes from termul's
+ * `/projects`, `/terminal/ws` and (through [chat]) `/ws` the way termul-server does (shapes from termul's
  * `host_routes.rs`, `projects_api.rs`, `router/gate.rs` and `web-terminal-protocol.types.ts`).
  *
  * Tests set the knobs, drive the app, then assert on what the app showed or on the
@@ -47,6 +47,9 @@ class FakeTroupeServer : Closeable {
     var onTerminalRequest: (type: String, payload: JsonObject) -> JsonObject = { type, _ ->
         error("FakeTroupeServer: no script for terminal request '$type'")
     }
+
+    /** The chat socket `/ws`: session logs, the `chat_history` index and its traffic. */
+    val chat = FakeChatServer(token = { token }, protocolVersion = { protocolVersion })
 
     val httpRequests: MutableList<RecordedRequest> = CopyOnWriteArrayList()
     val terminalUpgrades: MutableList<RecordedRequest> = CopyOnWriteArrayList()
@@ -99,6 +102,7 @@ class FakeTroupeServer : Closeable {
         terminalSockets.clear()
         // A server-side WebSocket has no cancel(); 1011 is the abnormal end a crash or a dropped link looks like.
         openSockets.forEach { it.close(1011, null) }
+        chat.closeAll(1011)
         server.close()
     }
 
@@ -115,6 +119,7 @@ class FakeTroupeServer : Closeable {
             terminalUpgrades += request
             return MockResponse.Builder().webSocketUpgrade(TerminalSocketScript()).build()
         }
+        if (path == "/ws") return MockResponse.Builder().webSocketUpgrade(chat.listener()).build()
         httpRequests += request
         return when (path) {
             "/health" -> if (healthy) json(200, healthBody()) else json(503, """{"success":false,"error":"Service unavailable","code":"UNAVAILABLE"}""")

@@ -89,7 +89,32 @@
     <!-- Project -->
     <string name="project_tab_chats">Chats</string>
     <string name="project_tab_terminals">Terminals</string>
-    <string name="project_chats_placeholder">Agent chats arrive in the next update.</string>
+
+    <!-- Chats tab -->
+    <string name="chats_loading">Loading chats…</string>
+    <string name="chats_empty">No agent chats in this Project yet. Start one from Troupe on your computer.</string>
+    <string name="chats_untitled">Untitled chat</string>
+
+    <!-- Agent Chat -->
+    <string name="chat_title">Agent chat</string>
+    <string name="chat_loading">Loading the chat…</string>
+    <string name="chat_empty">Nothing in this chat yet.</string>
+    <string name="chat_unavailable">This chat is no longer available.</string>
+    <string name="chat_you">You</string>
+    <string name="chat_thinking">Thinking</string>
+    <string name="chat_plan">Plan</string>
+    <string name="chat_tool_untitled">Tool call</string>
+    <string name="chat_tool_pending">Pending</string>
+    <string name="chat_tool_running">Running</string>
+    <string name="chat_tool_completed">Done</string>
+    <string name="chat_tool_failed">Failed</string>
+    <string name="chat_plan_done">Done: %1$s</string>
+    <string name="chat_plan_running">In progress: %1$s</string>
+    <string name="chat_plan_pending">To do: %1$s</string>
+    <string name="chat_turn_done">Turn finished</string>
+    <string name="chat_turn_ended">Turn ended: %1$s</string>
+    <string name="chat_permission_request">The agent asks for permission: %1$s. Answer it from Troupe on your computer.</string>
+    <string name="chat_question_request">The agent asks: %1$s. Answer it from Troupe on your computer.</string>
 
     <!-- Terminals tab -->
     <string name="terminals_new">New terminal</string>
