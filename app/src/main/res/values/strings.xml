@@ -10,6 +10,9 @@
     <string name="connection_offline">Server offline</string>
     <string name="connection_disconnected">Disconnected</string>
     <string name="connection_retry">Retry</string>
+    <string name="view_only_badge">View only</string>
+    <string name="view_only_explanation">This server only lets other devices watch. Start it with --allow-remote-writes to type and run commands from your phone.</string>
+    <string name="view_only_ok">OK</string>
 
     <!-- Servers list -->
     <string name="servers_title">Servers</string>
@@ -130,6 +133,7 @@
     <string name="terminals_kill">Kill</string>
     <string name="terminals_kill_confirm">Kill this terminal? Anything running in it will stop.</string>
     <string name="terminals_cancel">Cancel</string>
+    <string name="terminals_view_only">This server only lets other devices watch, so its terminals can\'t be listed, started or killed from here.</string>
 
     <!-- Terminal -->
     <string name="terminal_title">Terminal</string>

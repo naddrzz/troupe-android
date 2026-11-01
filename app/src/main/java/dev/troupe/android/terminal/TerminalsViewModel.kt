@@ -71,6 +71,11 @@ class TerminalsViewModel @Inject constructor(
     private val _connection = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     /** The Paired Server's connection, for the header. */
     val connection: StateFlow<ConnectionState> = _connection.asStateFlow()
+    /**
+     * The Paired Server is View-only: nothing is listed, spawned or killed. termul refuses
+     * `list_preserved` there too, since it reissues claims.
+     */
+    val viewOnly: StateFlow<Boolean> = connections.viewOnly.state(serverId)
     private var link: TerminalConnection? = null
 
     init {
@@ -97,6 +102,7 @@ class TerminalsViewModel @Inject constructor(
      * for each, which replaces the stored one.
      */
     fun refresh() {
+        if (viewOnly.value) return _ui.update { it.copy(loading = false) }
         viewModelScope.launch {
             val result = attempt {
                 val data = request("list_preserved", buildJsonObject { put("projectId", projectId) })
@@ -113,7 +119,7 @@ class TerminalsViewModel @Inject constructor(
 
     /** New terminal: a ledgered `spawn` in this Project. Its claim is stored so the Terminal screen can attach. */
     fun spawn() {
-        if (_ui.value.spawning) return
+        if (_ui.value.spawning || viewOnly.value) return
         _ui.update { it.copy(spawning = true, error = null) }
         viewModelScope.launch {
             val result = attempt {
@@ -138,7 +144,7 @@ class TerminalsViewModel @Inject constructor(
      * connection kill a Terminal it is attached to, so this attaches with the stored claim first.
      */
     fun kill(terminalId: String) {
-        if (_ui.value.killing != null) return
+        if (_ui.value.killing != null || viewOnly.value) return
         _ui.update { it.copy(killing = terminalId, error = null) }
         viewModelScope.launch {
             val result = attempt {
@@ -183,6 +189,7 @@ class TerminalsViewModel @Inject constructor(
             throw Refusal(UiMessage(R.string.pair_error_unreachable))
         }
         if (!reply.success) {
+            connections.viewOnly.onRefusal(serverId, reply.code)
             if (terminalId != null && reply.code == TerminalErrorCodes.UNAUTHORIZED) {
                 cursors.remove(serverId, terminalId)
                 throw Refusal(UiMessage(R.string.terminal_unavailable))

@@ -34,7 +34,12 @@ import java.util.concurrent.CopyOnWriteArrayList
 class FakeTroupeServer : Closeable {
     /** The bearer token the server accepts. */
     var token: String = "fake-token-0123456789abcdef"
-    var allowRemoteWrites: Boolean = true
+    /**
+     * `/health.allowRemoteWrites`. While false, `/terminal/ws` refuses every request but the view
+     * ones ([VIEW_REQUESTS]) with `FORBIDDEN`, as termul refuses a view-only connection. Checked per
+     * request, so flipping it mid-test is a server policy change the app learns from a refusal.
+     */
+    @Volatile var allowRemoteWrites: Boolean = true
     /** The protocol version the server speaks; `authenticate` with any other is refused. */
     var protocolVersion: Int = 7
     /** The `/projects` reply body when the token is accepted. */
@@ -169,6 +174,8 @@ class FakeTroupeServer : Closeable {
             val reply = when {
                 type == "authenticate" -> authenticate(payload)
                 !authed -> Refusal("UNAUTHORIZED", "Unauthorized")
+                !allowRemoteWrites && type !in VIEW_REQUESTS ->
+                    Refusal("FORBIDDEN", "`$type` requires write capability; this connection is view-only")
                 else -> runCatching { onTerminalRequest(type, payload) }.getOrElse {
                     if (it is Refused) Refusal(it.code, it.message ?: it.code) else Refusal("INTERNAL", it.message ?: "error")
                 }
@@ -215,6 +222,9 @@ class FakeTroupeServer : Closeable {
     private data class Refusal(val code: String, val error: String)
 
     companion object {
+        /** termul's `terminal_request_is_view`: what a view-only connection may still send. */
+        val VIEW_REQUESTS = setOf("authenticate", "attach", "detach", "get_cwd", "get_git_branch", "get_git_status", "get_exit_code")
+
         fun fixture(name: String): String =
             checkNotNull(FakeTroupeServer::class.java.getResource("/fixtures/$name")) { "missing fixture $name" }.readText()
 

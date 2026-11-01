@@ -13,6 +13,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.troupe.android.R
 import dev.troupe.android.core.net.ServerApi
+import dev.troupe.android.core.net.ViewOnlyRegistry
 import dev.troupe.android.core.net.troupeHttpClient
 import dev.troupe.android.core.theme.TroupeTheme
 import dev.troupe.android.servers.PairedServerRepository
@@ -40,6 +41,7 @@ class PairScreenTest {
             ServerApi(client),
             TerminalSocketFactory(client, ClientIdentityStore(dataStore)),
             PairedServerRepository(dataStore, TinkTokenCipher(context)),
+            ViewOnlyRegistry(),
         )
     }
 

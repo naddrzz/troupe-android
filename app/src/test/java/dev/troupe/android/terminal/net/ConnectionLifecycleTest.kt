@@ -65,18 +65,22 @@ class ConnectionLifecycleTest {
     private fun connect(): TerminalConnection {
         val serverId = runBlocking { graph.repository.add("Box", server.pairingInput()).id }
         connection = runBlocking { graph.connections.connection(serverId) }
-        until { state() == ConnectionState.Connected }
+        // Every connect also asks `/health` once, for View-only.
+        until { state() == ConnectionState.Connected && server.healthChecks() == 1 }
         return connection
     }
 
     private fun authentications() = server.terminalRequests("authenticate").size
 
+    /** `/health` requests since [connect], other than View-only checks of later connects: the offline polls. */
+    private fun polls() = server.healthChecks() - 1
+
     /**
-     * Waits until the server has answered `/health` [times] times, then a moment more for the
-     * answer to reach the lifecycle, so the next 15 s wait starts before virtual time moves on.
+     * Waits until the server has answered [times] polls, then a moment more for the answer to
+     * reach the lifecycle, so the next 15 s wait starts before virtual time moves on.
      */
     private fun checkedHealth(times: Int) {
-        until { server.healthChecks() == times }
+        until { polls() == times }
         repeat(10) {
             Thread.sleep(20)
             scheduler.runCurrent()
@@ -149,13 +153,13 @@ class ConnectionLifecycleTest {
 
         until { state() == ConnectionState.ServerOffline }
         advance(14.seconds)
-        assertEquals(0, server.healthChecks())
+        assertEquals(0, polls())
         advance(1.seconds)
         checkedHealth(times = 1)
         // No backoff loop while offline: only /health, every 15 s, and the socket is not reopened.
         for (n in 2..20) {
             advance(14.seconds)
-            assertEquals(n - 1, server.healthChecks())
+            assertEquals(n - 1, polls())
             advance(1.seconds)
             checkedHealth(times = n)
         }
@@ -176,8 +180,8 @@ class ConnectionLifecycleTest {
 
         connection.retry()
 
-        until { state() == ConnectionState.Connected }
-        assertEquals(1, server.healthChecks())
+        // One poll, then the new connection's View-only check; virtual time never reached the next poll.
+        until { state() == ConnectionState.Connected && polls() == 2 }
     }
 
     @Test fun aNetworkComingBackChecksHealthAtOnce() {
@@ -187,8 +191,8 @@ class ConnectionLifecycleTest {
 
         graph.network.becameAvailable()
 
-        until { state() == ConnectionState.Connected }
-        assertEquals(1, server.healthChecks())
+        // One poll, then the new connection's View-only check; virtual time never reached the next poll.
+        until { state() == ConnectionState.Connected && polls() == 2 }
     }
 
     @Test fun aServerThatStopsThenRestartsIsReconnectedOnceHealthAnswers() {

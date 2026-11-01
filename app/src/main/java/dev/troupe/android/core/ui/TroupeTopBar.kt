@@ -23,7 +23,8 @@ import dev.troupe.android.core.theme.LocalTroupePalette
 
 /**
  * The screen header. With a [connection], a line under the title says whether what is on screen is
- * live, and "Server offline" comes with a Retry action ([onRetry]).
+ * live, and "Server offline" comes with a Retry action ([onRetry]). A [viewOnly] server gets the
+ * "View only" badge.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -32,6 +33,7 @@ fun TroupeTopBar(
     onBack: (() -> Unit)? = null,
     connection: ConnectionState? = null,
     onRetry: () -> Unit = {},
+    viewOnly: Boolean = false,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     TopAppBar(
@@ -49,6 +51,7 @@ fun TroupeTopBar(
             }
         },
         actions = {
+            if (viewOnly) ViewOnlyBadge()
             if (connection == ConnectionState.ServerOffline) {
                 TextButton(onClick = onRetry) { Text(stringResource(R.string.connection_retry)) }
             }

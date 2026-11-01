@@ -37,8 +37,9 @@ fun ProjectScreen(
 ) {
     var tab by rememberSaveable { mutableIntStateOf(TERMINALS) }
     val connection by terminals.connection.collectAsStateWithLifecycle()
+    val viewOnly by terminals.viewOnly.collectAsStateWithLifecycle()
     Scaffold(topBar = {
-        TroupeTopBar(projectName, onBack = onBack, connection = connection, onRetry = terminals::retryConnection)
+        TroupeTopBar(projectName, onBack = onBack, connection = connection, onRetry = terminals::retryConnection, viewOnly = viewOnly)
     }) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
             PrimaryTabRow(selectedTabIndex = tab) {

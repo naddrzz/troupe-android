@@ -26,6 +26,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -69,6 +70,8 @@ class TerminalViewModel @Inject constructor(
     private val _connection = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     /** The Paired Server's connection, for the header. */
     val connection: StateFlow<ConnectionState> = _connection.asStateFlow()
+    /** The Paired Server is View-only: nothing typed is sent, and the key bar is off. */
+    val viewOnly: StateFlow<Boolean> = connections.viewOnly.state(serverId)
 
     private val live = CompletableDeferred<Unit>()
     private val outgoing = Channel<String>(Channel.UNLIMITED)
@@ -151,9 +154,11 @@ class TerminalViewModel @Inject constructor(
         unrendered.forEach { it(renderer) }
         unrendered.clear()
         binding = viewModelScope.launch {
-            launch { renderer.input.collect { outgoing.send(it) } }
+            launch { renderer.input.collect(::type) }
             live.await()
-            renderer.size.filterNotNull().distinctUntilChanged().debounce(RESIZE_DEBOUNCE_MS).collect(::resize)
+            // termul gates `resize` like a write. A size held back while View-only goes out once writable.
+            renderer.size.combine(viewOnly) { size, watching -> size.takeUnless { watching } }
+                .distinctUntilChanged().filterNotNull().debounce(RESIZE_DEBOUNCE_MS).collect(::resize)
         }
     }
 
@@ -163,13 +168,16 @@ class TerminalViewModel @Inject constructor(
         this.renderer = null
     }
 
-    fun onKey(key: TerminalKey) {
-        outgoing.trySend(key.sequence)
-    }
+    fun onKey(key: TerminalKey) = type(key.sequence)
 
     /** Sends [text] (the clipboard) as typed input in one `write`. */
     fun paste(text: String) {
-        if (text.isNotEmpty()) outgoing.trySend(text)
+        if (text.isNotEmpty()) type(text)
+    }
+
+    /** Queues typed input for [sendInput]; dropped while View-only. */
+    private fun type(data: String) {
+        if (!viewOnly.value) outgoing.trySend(data)
     }
 
     override fun onCleared() {
@@ -263,17 +271,24 @@ class TerminalViewModel @Inject constructor(
                 append(first)
                 while (true) append(outgoing.tryReceive().getOrNull() ?: break)
             }
+            // Input queued before the server turned out View-only is dropped too.
+            if (viewOnly.value) continue
             val payload = buildJsonObject {
                 put("terminalId", terminalId)
                 put("data", data)
             }
             // A refused or lost write is dropped; retrying it is the reconnect's job.
             try {
-                socket?.request("write", payload, ledgered = true)
+                socket?.request("write", payload, ledgered = true)?.let(::onReply)
             } catch (e: IOException) {
                 continue
             }
         }
+    }
+
+    /** A `FORBIDDEN` refusal makes the Paired Server View-only at once. */
+    private fun onReply(reply: TerminalFrame.Reply) {
+        if (!reply.success) connections.viewOnly.onRefusal(serverId, reply.code)
     }
 
     private suspend fun resize(size: TermSize) {
@@ -283,7 +298,7 @@ class TerminalViewModel @Inject constructor(
             put("rows", size.rows)
         }
         try {
-            socket?.request("resize", payload)
+            socket?.request("resize", payload)?.let(::onReply)
         } catch (e: IOException) {
             // The next size change retries.
         }
