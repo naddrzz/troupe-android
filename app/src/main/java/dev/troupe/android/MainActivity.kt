@@ -54,8 +54,9 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         ProcessLifecycleOwner.get().lifecycle.addObserver(process)
         // Collected from onCreate on Main.immediate, so the flag is set before the first frame.
+        // Kept on for as long as the lock is on: the recent-apps thumbnail is taken while still unlocked.
         lifecycleScope.launch {
-            lock.state.map { it.gate != Gate.Unlocked }.distinctUntilChanged().collect { hidden ->
+            lock.state.map { it.enabled || it.gate != Gate.Unlocked }.distinctUntilChanged().collect { hidden ->
                 if (hidden) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
                 else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
             }
