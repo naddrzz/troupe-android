@@ -36,9 +36,17 @@ class PairViewModel @Inject constructor(
      * Pairs by typed address and token. Succeeds only when `/health` answers and the
      * `/terminal/ws` handshake accepts the token; nothing is saved otherwise.
      */
-    fun onManual(url: String, token: String, name: String) {
+    fun onManual(url: String, token: String, name: String) = start(PairingLink.fromManual(url, token), name)
+
+    /** Pairs with a `…#token=…` link copied from Troupe on the computer; named after its host. */
+    fun onLinkPasted(raw: String) = start(PairingLink.parse(raw), name = "")
+
+    /** A scanned QR code holds the same link as the one the user can copy. */
+    fun onQrScanned(raw: String) = onLinkPasted(raw)
+
+    private fun start(parsed: Result<PairingInput>, name: String) {
         if (_ui.value == PairUiState.Checking) return
-        val input = PairingLink.fromManual(url, token).getOrElse { error ->
+        val input = parsed.getOrElse { error ->
             _ui.value = (error as? PairingError)?.toUi() ?: PairUiState.Error(R.string.pair_error_invalid_url)
             return
         }
