@@ -118,6 +118,14 @@
     <string name="chat_turn_ended">Turn ended: %1$s</string>
     <string name="chat_permission_request">The agent asks for permission: %1$s. Answer it from Troupe on your computer.</string>
     <string name="chat_question_request">The agent asks: %1$s. Answer it from Troupe on your computer.</string>
+    <string name="chat_composer_label">Message the agent</string>
+    <string name="chat_send">Send</string>
+    <string name="chat_cancel_turn">Cancel</string>
+    <string name="chat_cancel_turn_description">Cancel the current turn</string>
+    <string name="chat_agent_busy">The agent is still working. Wait or cancel the current turn.</string>
+    <string name="chat_no_agent">This chat\'s agent isn\'t running. Resume it from Troupe on your computer.</string>
+    <string name="chat_action_failed">Couldn\'t reach the agent: %1$s</string>
+    <string name="chat_view_only">This server only lets other devices watch, so you can\'t prompt the agent from here.</string>
 
     <!-- Terminals tab -->
     <string name="terminals_new">New terminal</string>

@@ -25,16 +25,25 @@ import java.util.concurrent.atomic.AtomicInteger
  * The fake Troupe Server's `/ws`, the way termul-server speaks it (`web-protocol.types.ts`,
  * `ws/subscribe.rs`, `ws/sessions.rs`, `ws/watch.rs`): `auth_required`, `authenticate`, the
  * `chat_history` watch and `list_persisted_sessions`, session logs with `subscribe` by
- * `(logEpoch, lastSeq)` and `recover_session_snapshot`, plus `gap` and `heartbeat` frames.
+ * `(logEpoch, lastSeq)` and `recover_session_snapshot`, plus `gap` and `heartbeat` frames, and
+ * prompt turns (`send_prompt` deduped by `turnId`, `cancel_prompt`) of one agent, [AGENT_ID].
  */
 class FakeChatServer internal constructor(
     private val token: () -> String,
     private val protocolVersion: () -> Int,
+    private val allowRemoteWrites: () -> Boolean,
 ) {
-    /** One session log: its epoch and every event it holds, in seq order. */
+    /**
+     * One session log: its epoch and every event it holds, in seq order, plus the turn its agent
+     * ([AGENT_ID]) is running. [turns] maps each `turnId` the host saw to whether it finished.
+     */
     class Session(@Volatile var logEpoch: String) {
         val events: MutableList<JsonObject> = CopyOnWriteArrayList()
         val head: Long get() = events.size.toLong()
+        @Volatile var runningTurn: String? = null
+        val turns: MutableMap<String, Boolean> = ConcurrentHashMap()
+        /** The `send_prompt` that started [runningTurn]: its reply goes out when the turn ends. */
+        @Volatile internal var heldReply: Pair<Connection, String>? = null
     }
 
     /** The persisted-session index: the `chat_history` watch state and the `list_persisted_sessions` reply. */
@@ -75,6 +84,28 @@ class FakeChatServer internal constructor(
 
     fun heartbeat() = connections.forEach { it.send(buildJsonObject { put("type", "heartbeat") }) }
 
+    /**
+     * Ends [sessionId]'s running turn: appends its `prompt_complete` and answers the `send_prompt`
+     * that started it with the stop reason, when that connection is still open.
+     */
+    fun completeTurn(sessionId: String, stopReason: String = "end_turn") = synchronized(lock) {
+        val session = sessions.getValue(sessionId)
+        val turnId = session.runningTurn ?: return@synchronized
+        append(sessionId, "prompt_complete", promptComplete(sessionId, stopReason, turnId))
+        session.turns[turnId] = true
+        session.runningTurn = null
+        session.heldReply?.let { (connection, id) -> connection.reply(id, JsonPrimitive(stopReason)) }
+        session.heldReply = null
+    }
+
+    /** Another device starts a turn in [sessionId]: its `user_prompt` is recorded and the agent is busy. */
+    fun startTurnElsewhere(sessionId: String, text: String, turnId: String = "turn-elsewhere") = synchronized(lock) {
+        val session = sessions.getValue(sessionId)
+        session.turns[turnId] = false
+        session.runningTurn = turnId
+        append(sessionId, "user_prompt", userPrompt(sessionId, text, turnId))
+    }
+
     /** The index changed for [changed]: a `{changed}` delta to every watcher. [lost]: the delta is dropped but keeps its `n`. */
     fun historyChanged(vararg changed: String, lost: Boolean = false) = synchronized(lock) {
         connections.filter { it.watchN > 0 }.forEach { connection ->
@@ -113,7 +144,7 @@ class FakeChatServer internal constructor(
         if (delta != null) put("delta", delta)
     }
 
-    private inner class Connection : WebSocketListener() {
+    internal inner class Connection : WebSocketListener() {
         lateinit var socket: WebSocket
         private var authed = false
         val subscribed: MutableSet<String> = ConcurrentHashMap.newKeySet()
@@ -155,6 +186,10 @@ class FakeChatServer internal constructor(
                 type == "list_persisted_sessions" -> reply(id, JsonArray(history))
                 type == "subscribe" -> subscribe(id, payload)
                 type == "recover_session_snapshot" -> snapshot(id, payload)
+                type in WRITES && !allowRemoteWrites() ->
+                    reply(id, Err("forbidden", "`$type` requires write capability; this connection is view-only"))
+                type == "send_prompt" -> sendPrompt(id, payload, request["command_id"]?.jsonPrimitive?.contentOrNull)
+                type == "cancel_prompt" -> cancelPrompt(id, payload)
                 else -> reply(id, Err("unsupported", "unknown request `$type`"))
             }
         }
@@ -225,7 +260,45 @@ class FakeChatServer internal constructor(
             })
         }
 
-        private fun reply(id: String, result: Any) = send(buildJsonObject {
+        /** termul's `prompt_turn.rs`: the turn id dedupes resends, and a second turn is `rate_limited`. */
+        private fun sendPrompt(id: String, payload: JsonObject, commandId: String?) = synchronized(lock) {
+            val sid = payload["sessionId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val session = sessions[sid]
+            if (session == null || payload["agentId"]?.jsonPrimitive?.contentOrNull != AGENT_ID) {
+                return@synchronized reply(id, Err("not_found", "session does not belong to the supplied live agent"))
+            }
+            val content = payload["content"] as? JsonArray
+            if (content.isNullOrEmpty()) return@synchronized reply(id, Err("unsupported", "send_prompt requires non-empty `text` or `content`"))
+            val turnId = payload["turnId"]?.jsonPrimitive?.contentOrNull ?: commandId
+            if (turnId != null && commandId != null && turnId != commandId) {
+                return@synchronized reply(id, Err("invalid_command_id", "turnId and commandId differ"))
+            }
+            session.turns[turnId]?.let { done ->
+                return@synchronized reply(id, buildJsonObject { put("receipt", if (done) "accepted" else "in_progress") })
+            }
+            if (session.runningTurn != null) return@synchronized reply(id, Err("rate_limited", "a prompt turn is already in progress"))
+            val turn = turnId ?: "turnless-$id"
+            session.turns[turn] = false
+            session.runningTurn = turn
+            session.heldReply = this to id
+            append(sid, "user_prompt", buildJsonObject {
+                put("agentId", AGENT_ID)
+                put("sessionId", sid)
+                put("turnId", turn)
+                put("content", content)
+            })
+        }
+
+        private fun cancelPrompt(id: String, payload: JsonObject) = synchronized(lock) {
+            val sid = payload["sessionId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            if (sessions[sid] == null || payload["agentId"]?.jsonPrimitive?.contentOrNull != AGENT_ID) {
+                return@synchronized reply(id, Err("not_found", "session not found"))
+            }
+            reply(id, JsonObject(emptyMap()))
+            completeTurn(sid, "cancelled")
+        }
+
+        fun reply(id: String, result: Any) = send(buildJsonObject {
             put("id", id)
             when (result) {
                 is Err -> {
@@ -246,6 +319,11 @@ class FakeChatServer internal constructor(
     private data class Err(val code: String, val message: String)
 
     companion object {
+        /** The one live agent of every fake session. */
+        const val AGENT_ID = "agent-1"
+        /** Requests a view-only connection is refused (`forbidden`). */
+        val WRITES = setOf("send_prompt", "cancel_prompt", "respond_permission", "answer_question")
+
         fun event(sessionId: String, seq: Long, type: String, payload: JsonObject) = buildJsonObject {
             put("sid", sessionId)
             put("seq", seq)

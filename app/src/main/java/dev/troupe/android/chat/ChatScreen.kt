@@ -7,13 +7,19 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -25,6 +31,8 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -32,19 +40,32 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.troupe.android.R
+import dev.troupe.android.core.net.ConnectionState
 import dev.troupe.android.core.theme.LocalTroupePalette
 import dev.troupe.android.core.ui.TroupeTopBar
+import dev.troupe.android.terminal.UiMessage
 
-/** An Agent Chat, read-only: the transcript as it streams, the agent's plan, and the connection in the header. */
+/**
+ * An Agent Chat: the transcript as it streams, the agent's plan, the connection in the header and a
+ * composer to prompt the agent or cancel its turn.
+ */
 @Composable
 fun ChatScreen(title: String?, onBack: () -> Unit, viewModel: ChatViewModel = hiltViewModel()) {
     val state by viewModel.ui.collectAsStateWithLifecycle()
     val connection by viewModel.connection.collectAsStateWithLifecycle()
+    val viewOnly by viewModel.viewOnly.collectAsStateWithLifecycle()
+    val draft by viewModel.draft.collectAsStateWithLifecycle()
     val palette = LocalTroupePalette.current
     Scaffold(topBar = {
-        TroupeTopBar(title ?: stringResource(R.string.chat_title), onBack = onBack, connection = connection, onRetry = viewModel::retryConnection)
+        TroupeTopBar(
+            title ?: stringResource(R.string.chat_title),
+            onBack = onBack,
+            connection = connection,
+            onRetry = viewModel::retryConnection,
+            viewOnly = viewOnly,
+        )
     }) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize()) {
+        Column(Modifier.padding(padding).consumeWindowInsets(padding).imePadding().fillMaxSize()) {
             state.error?.let {
                 Text(
                     stringResource(it.text, it.arg.orEmpty()),
@@ -68,6 +89,67 @@ fun ChatScreen(title: String?, onBack: () -> Unit, viewModel: ChatViewModel = hi
                     )
                 }
                 Transcript(state.items)
+            }
+            HorizontalDivider(color = palette.border)
+            Composer(
+                draft = draft,
+                onDraftChange = viewModel::onDraftChange,
+                turnRunning = state.turnRunning,
+                notice = state.notice,
+                viewOnly = viewOnly,
+                connected = connection == ConnectionState.Connected,
+                onSend = viewModel::send,
+                onCancel = viewModel::cancel,
+            )
+        }
+    }
+}
+
+/** The prompt field and its Send button, which becomes Cancel while a turn runs. Disabled when View-only. */
+@Composable
+private fun Composer(
+    draft: String,
+    onDraftChange: (String) -> Unit,
+    turnRunning: Boolean,
+    notice: UiMessage?,
+    viewOnly: Boolean,
+    connected: Boolean,
+    onSend: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    val palette = LocalTroupePalette.current
+    Column(Modifier.fillMaxWidth().background(palette.card).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        val hint = if (viewOnly) UiMessage(R.string.chat_view_only) else notice
+        hint?.let {
+            Text(
+                stringResource(it.text, it.arg.orEmpty()),
+                color = if (viewOnly) palette.muted else palette.warning,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = draft,
+                onValueChange = onDraftChange,
+                enabled = !viewOnly,
+                label = { Text(stringResource(R.string.chat_composer_label)) },
+                maxLines = 5,
+                modifier = Modifier.weight(1f),
+            )
+            if (turnRunning) {
+                val description = stringResource(R.string.chat_cancel_turn_description)
+                Button(
+                    onClick = onCancel,
+                    enabled = !viewOnly && connected,
+                    colors = ButtonDefaults.buttonColors(containerColor = palette.error),
+                    modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = description },
+                ) { Text(stringResource(R.string.chat_cancel_turn)) }
+            } else {
+                Button(
+                    onClick = onSend,
+                    enabled = !viewOnly && connected && draft.isNotBlank(),
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.chat_send)) }
             }
         }
     }

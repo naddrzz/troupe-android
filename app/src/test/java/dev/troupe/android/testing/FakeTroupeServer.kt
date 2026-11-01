@@ -36,7 +36,8 @@ class FakeTroupeServer : Closeable {
     var token: String = "fake-token-0123456789abcdef"
     /**
      * `/health.allowRemoteWrites`. While false, `/terminal/ws` refuses every request but the view
-     * ones ([VIEW_REQUESTS]) with `FORBIDDEN`, as termul refuses a view-only connection. Checked per
+     * ones ([VIEW_REQUESTS]) with `FORBIDDEN`, and `/ws` refuses prompts and answers with
+     * `forbidden`, as termul refuses a view-only connection. Checked per
      * request, so flipping it mid-test is a server policy change the app learns from a refusal.
      */
     @Volatile var allowRemoteWrites: Boolean = true
@@ -54,7 +55,7 @@ class FakeTroupeServer : Closeable {
     }
 
     /** The chat socket `/ws`: session logs, the `chat_history` index and its traffic. */
-    val chat = FakeChatServer(token = { token }, protocolVersion = { protocolVersion })
+    val chat = FakeChatServer(token = { token }, protocolVersion = { protocolVersion }, allowRemoteWrites = { allowRemoteWrites })
 
     val httpRequests: MutableList<RecordedRequest> = CopyOnWriteArrayList()
     val terminalUpgrades: MutableList<RecordedRequest> = CopyOnWriteArrayList()

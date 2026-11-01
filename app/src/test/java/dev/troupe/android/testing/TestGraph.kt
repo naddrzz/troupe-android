@@ -76,7 +76,7 @@ class TestGraph(dir: File, lifecycleDispatcher: CoroutineDispatcher = Dispatcher
         ChatsViewModel(SavedStateHandle(mapOf("serverId" to serverId, "projectId" to projectId)), chatConnections)
 
     fun chatViewModel(serverId: String, sessionId: String) =
-        ChatViewModel(SavedStateHandle(mapOf("serverId" to serverId, "sessionId" to sessionId)), chatConnections)
+        ChatViewModel(SavedStateHandle(mapOf("serverId" to serverId, "sessionId" to sessionId)), chatConnections, viewOnly)
 
     fun serversViewModel() = ServersViewModel(api, sockets, repository)
 

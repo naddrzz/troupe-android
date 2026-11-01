@@ -40,16 +40,26 @@ class Transcript {
     private val toolIndex = HashMap<String, Int>()
     var plan: List<PlanEntry> = emptyList()
         private set
+    /** The agent serving this Session, as its latest event names it; prompts and cancels go to it. */
+    var agentId: String? = null
+        private set
+    /** A prompt was accepted and its turn has not ended yet. */
+    var turnRunning = false
+        private set
 
     fun items(): List<ChatItem> = items.toList()
 
     fun apply(event: ChatFrame.Event) {
         val p = event.payload
+        p.string("agentId")?.let { agentId = it }
         when (event.type) {
-            "user_prompt" -> items += ChatItem.UserPrompt(
-                "u-${event.seq}",
-                (p["content"] as? JsonArray).orEmpty().mapNotNull { it.contentText() }.joinToString(""),
-            )
+            "user_prompt" -> {
+                turnRunning = true
+                items += ChatItem.UserPrompt(
+                    "u-${event.seq}",
+                    (p["content"] as? JsonArray).orEmpty().mapNotNull { it.contentText() }.joinToString(""),
+                )
+            }
             "message_chunk" -> chunk(event.seq, p)
             "tool_call" -> (p["toolCall"] as? JsonObject)?.let(::tool)
             "tool_call_update" -> (p["update"] as? JsonObject)?.let(::tool)
@@ -57,7 +67,10 @@ class Transcript {
                 val e = entry as? JsonObject ?: return@mapNotNull null
                 PlanEntry(e.string("content") ?: return@mapNotNull null, e.string("status"))
             }
-            "prompt_complete" -> items += ChatItem.TurnComplete("c-${event.seq}", p.string("stopReason") ?: "end_turn")
+            "prompt_complete" -> {
+                turnRunning = false
+                items += ChatItem.TurnComplete("c-${event.seq}", p.string("stopReason") ?: "end_turn")
+            }
             "permission_request" -> items += ChatItem.Request(
                 "r-${event.seq}",
                 RequestKind.Permission,

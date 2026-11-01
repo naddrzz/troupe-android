@@ -119,6 +119,8 @@ object ChatErrorCodes {
     const val STALE = "stale"
     const val NOT_FOUND = "not_found"
     const val UNSUPPORTED = "unsupported"
+    const val FORBIDDEN = "forbidden"
+    const val RATE_LIMITED = "rate_limited"
 }
 
 /** One entry of the persisted-session index (termul's `PersistedSessionSummary`). */

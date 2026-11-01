@@ -1,6 +1,7 @@
 package dev.troupe.android.integration
 
 import dev.troupe.android.R
+import dev.troupe.android.chat.protocol.ChatErrorCodes
 import dev.troupe.android.chat.protocol.ChatFrame
 import dev.troupe.android.core.net.ApiResult
 import dev.troupe.android.core.net.ConnectionFailure
@@ -18,8 +19,10 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -81,6 +84,21 @@ class RealChatServerTest {
         val chat = graph.chatViewModel(pair(), "no-such-session-" + UUID.randomUUID())
         val ui = runBlocking { withTimeout(15_000) { chat.ui.first { it.error != null } } }
         assertEquals(UiMessage(R.string.chat_unavailable), ui.error)
+    }
+
+    @Test fun aPromptToAnUnknownSessionIsRefusedAsNotFound() = runBlocking {
+        val connection = graph.chatConnections.connection(pair())
+        withTimeout(15_000) { connection.state.first { it == ConnectionState.Connected } }
+        val turnId = UUID.randomUUID().toString()
+
+        val reply = connection.socket.request("send_prompt", buildJsonObject {
+            put("agentId", "no-such-agent")
+            put("sessionId", "no-such-session-" + UUID.randomUUID())
+            putJsonArray("content") { addJsonObject { put("type", "text"); put("text", "Hello") } }
+            put("turnId", turnId)
+        }, commandId = turnId)
+
+        assertEquals("send_prompt: ${reply.message}", false to ChatErrorCodes.NOT_FOUND, reply.ok to reply.code)
     }
 
     @Test fun aWrongTokenIsRefusedForGood() = runBlocking {
