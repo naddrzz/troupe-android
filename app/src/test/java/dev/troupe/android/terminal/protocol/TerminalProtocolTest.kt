@@ -27,6 +27,44 @@ class TerminalProtocolTest {
         assertArrayEquals(byteArrayOf(0xC3.toByte(), 0xA9.toByte()), frame.chunks[1].data)
     }
 
+    @Test fun replaySnapshotSaysWhetherTheProcessExited() {
+        assertEquals(null, (parseTerminalFrame(fixture("terminal_replay.json")) as TerminalFrame.Replay).exit)
+        val exited = """{"type":"replay","terminalId":"t1","chunks":[],"gap":false,"reset":false,"logEpoch":"e","latestSeq":0,""" +
+            """"snapshot":{"exitCode":2,"exited":true}}"""
+        assertEquals(TerminalFrame.Exit("t1", 2), (parseTerminalFrame(exited) as TerminalFrame.Replay).exit)
+    }
+
+    @Test fun gapFrame() {
+        val frame = parseTerminalFrame(fixture("terminal_gap.json")) as TerminalFrame.Gap
+        assertEquals("t1", frame.terminalId)
+        assertEquals(17L, frame.lastSeq)
+    }
+
+    @Test fun exitEventHasSnakeCaseKeys() =
+        assertEquals(TerminalFrame.Exit("t1", 3), parseTerminalFrame(fixture("terminal_event_exit.json")))
+
+    @Test fun exitBySignalHasNoCode() = assertEquals(
+        TerminalFrame.Exit("t1", null),
+        parseTerminalFrame("""{"type":"event","payload":{"type":"exit","terminal_id":"t1","exit_code":null,"signal":9}}"""),
+    )
+
+    @Test fun otherEventsAreUnknown() = assertTrue(
+        parseTerminalFrame("""{"type":"event","payload":{"type":"cwd_changed","terminal_id":"t1","cwd":"/"}}""") is TerminalFrame.Unknown,
+    )
+
+    @Test fun listPreservedReplyDecodesAndHidesClaims() {
+        val reply = parseTerminalFrame(fixture("terminal_reply_list_preserved.json")) as TerminalFrame.Reply
+        val list = TroupeJson.decodeFromJsonElement(PreservedTerminals.serializer(), reply.data!!).terminals
+        assertEquals(listOf("t1", "t2"), list.map { it.id })
+        assertEquals("/workspace", list[0].cwd)
+        assertEquals("/bin/sh", list[0].shell)
+        assertEquals("c1a1m-one", list[0].claim)
+        assertFalse(list[0].hasLiveAttachment)
+        assertEquals(null, list[1].claim)
+        assertTrue(list[1].hasLiveAttachment)
+        assertFalse(list.toString().contains("c1a1m"))
+    }
+
     @Test fun malformedDataFrameIsUnknown() =
         assertTrue(parseTerminalFrame("""{"type":"data","terminalId":"t1","seq":"x","data":[1]}""") is TerminalFrame.Unknown)
 

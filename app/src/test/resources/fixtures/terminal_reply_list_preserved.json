@@ -1,0 +1,1 @@
+{"id":"r1","success":true,"data":{"projectId":"p1","terminals":[{"id":"t1","shell":"/bin/sh","cwd":"/workspace","pid":7,"cols":80,"rows":24,"claim":"c1a1m-one","hasLiveAttachment":false},{"id":"t2","shell":"/bin/bash","cwd":"/workspace/app","pid":9,"cols":80,"rows":24,"hasLiveAttachment":true}]}}

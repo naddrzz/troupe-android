@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.int
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -19,7 +20,7 @@ const val PROTOCOL_VERSION = 7
 @Serializable
 class TerminalRequest(val id: String, val type: String, val payload: JsonObject, val commandId: String? = null)
 
-/** Server frames, mirroring termul's `WebTerminalFrame`. `gap` and `event` arrive with later slices. */
+/** Server frames, mirroring termul's `WebTerminalFrame`. Of the `event` frames only `exit` is understood. */
 sealed interface TerminalFrame {
     /** `{id, success: true, data}` or `{id, success: false, error, code}`. */
     data class Reply(
@@ -41,9 +42,17 @@ sealed interface TerminalFrame {
         val reset: Boolean,
         val logEpoch: String,
         val latestSeq: Long,
+        /** Set when the snapshot says the process has already exited. */
+        val exit: Exit? = null,
     ) : TerminalFrame
 
     class Chunk(val seq: Long, val data: ByteArray)
+
+    /** Live output after [lastSeq] was lost on the way: the client re-attaches from its cursor. */
+    data class Gap(val terminalId: String, val lastSeq: Long) : TerminalFrame
+
+    /** The `exit` event: the process ended, with [exitCode] or (killed by a signal) none. */
+    data class Exit(val terminalId: String, val exitCode: Int?) : TerminalFrame
 
     /** Anything this app does not understand yet. Never a crash. */
     data class Unknown(val raw: String) : TerminalFrame
@@ -81,7 +90,18 @@ private fun parse(text: String): TerminalFrame? {
             reset = obj["reset"]?.jsonPrimitive?.booleanOrNull ?: false,
             logEpoch = obj["logEpoch"]?.jsonPrimitive?.contentOrNull.orEmpty(),
             latestSeq = obj.getValue("latestSeq").jsonPrimitive.long,
+            exit = obj["snapshot"]?.jsonObject?.takeIf { it["exited"]?.jsonPrimitive?.booleanOrNull == true }?.let {
+                TerminalFrame.Exit(obj.getValue("terminalId").jsonPrimitive.content, it["exitCode"]?.jsonPrimitive?.intOrNull)
+            },
         )
+        "gap" -> TerminalFrame.Gap(
+            terminalId = obj.getValue("terminalId").jsonPrimitive.content,
+            lastSeq = obj.getValue("lastSeq").jsonPrimitive.long,
+        )
+        // Event payload keys are snake_case, unlike the rest of the protocol.
+        "event" -> obj.getValue("payload").jsonObject.takeIf { it["type"]?.jsonPrimitive?.contentOrNull == "exit" }?.let {
+            TerminalFrame.Exit(it.getValue("terminal_id").jsonPrimitive.content, it["exit_code"]?.jsonPrimitive?.intOrNull)
+        }
         else -> null
     }
 }
@@ -104,6 +124,25 @@ class SpawnedTerminal(
     val claim: String,
 ) {
     override fun toString() = "SpawnedTerminal(id=$id, shell=$shell, cwd=$cwd, pid=$pid, cols=$cols, rows=$rows, claim=<redacted>)"
+}
+
+/** The `list_preserved` reply: the Project's running Terminals. */
+@Serializable
+class PreservedTerminals(val projectId: String, val terminals: List<PreservedTerminal>)
+
+/**
+ * A running Terminal with a freshly issued [claim] (none when the server could not issue one).
+ * [hasLiveAttachment] means another connection is attached: the Terminal is open elsewhere.
+ */
+@Serializable
+class PreservedTerminal(
+    val id: String,
+    val shell: String,
+    val cwd: String,
+    val claim: String? = null,
+    val hasLiveAttachment: Boolean = false,
+) {
+    override fun toString() = "PreservedTerminal(id=$id, shell=$shell, cwd=$cwd, hasLiveAttachment=$hasLiveAttachment, claim=<redacted>)"
 }
 
 /** Reply `code`s of `/terminal/ws` (termul's `WEB_TERMINAL_ERROR_CODES`). */
