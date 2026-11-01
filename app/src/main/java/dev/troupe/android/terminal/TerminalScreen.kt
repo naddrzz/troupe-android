@@ -61,6 +61,12 @@ fun TerminalScreen(onBack: () -> Unit, viewModel: TerminalViewModel = hiltViewMo
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.fillMaxWidth().background(palette.card).padding(horizontal = 16.dp, vertical = 12.dp),
                 )
+                is TerminalUi.Exited -> Text(
+                    s.exitCode?.let { stringResource(R.string.terminal_exited, it) } ?: stringResource(R.string.terminal_exited_signal),
+                    color = palette.secondary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.fillMaxWidth().background(palette.elevated).padding(horizontal = 16.dp, vertical = 12.dp),
+                )
                 TerminalUi.Live -> Unit
             }
             Box(Modifier.weight(1f).fillMaxWidth().background(palette.background), contentAlignment = Alignment.TopStart) {

@@ -187,21 +187,49 @@ class FakeTroupeServer : Closeable {
             put("data", bytes.toJsonInts())
         }
 
-        /** The frame termul sends on `attach`: unseen chunks numbered from 1. */
-        fun replayFrame(terminalId: String, vararg chunks: ByteArray, reset: Boolean = false): JsonObject = buildJsonObject {
+        /** The frame termul sends on `attach`: unseen chunks numbered from [firstSeq]. */
+        fun replayFrame(
+            terminalId: String,
+            vararg chunks: ByteArray,
+            reset: Boolean = false,
+            firstSeq: Long = 1,
+            logEpoch: String = "ep-1",
+            exitCode: Int? = null,
+        ): JsonObject = buildJsonObject {
             put("type", "replay")
             put("terminalId", terminalId)
             put("chunks", JsonArray(chunks.mapIndexed { i, bytes ->
                 buildJsonObject {
-                    put("seq", i + 1)
+                    put("seq", firstSeq + i)
                     put("data", bytes.toJsonInts())
                 }
             }))
             put("gap", false)
             put("reset", reset)
-            put("logEpoch", "ep-1")
-            put("latestSeq", chunks.size)
-            put("snapshot", buildJsonObject { put("exited", false) })
+            put("logEpoch", logEpoch)
+            put("latestSeq", firstSeq + chunks.size - 1)
+            put("snapshot", buildJsonObject {
+                put("exited", exitCode != null)
+                put("exitCode", exitCode)
+            })
+        }
+
+        /** Live output after [lastSeq] was lost (termul's `WebTerminalGapFrame`). */
+        fun gapFrame(terminalId: String, lastSeq: Long): JsonObject = buildJsonObject {
+            put("type", "gap")
+            put("terminalId", terminalId)
+            put("lastSeq", lastSeq)
+        }
+
+        /** The `exit` event; its payload keys are snake_case. */
+        fun exitEvent(terminalId: String, exitCode: Int?): JsonObject = buildJsonObject {
+            put("type", "event")
+            put("payload", buildJsonObject {
+                put("type", "exit")
+                put("terminal_id", terminalId)
+                put("exit_code", exitCode)
+                put("signal", null as Int?)
+            })
         }
 
         private fun ByteArray.toJsonInts() = JsonArray(map { JsonPrimitive(it.toInt() and 0xFF) })
@@ -222,4 +250,22 @@ fun spawnedTerminal(id: String, claim: String): JsonObject = buildJsonObject {
     put("cols", 80)
     put("rows", 24)
     put("claim", claim)
+}
+
+/** One entry of a `list_preserved` reply, shaped like termul's `PreservedTerminal`. */
+fun preservedTerminal(id: String, claim: String?, openElsewhere: Boolean = false, cwd: String = "/workspace"): JsonObject = buildJsonObject {
+    put("id", id)
+    put("shell", "/bin/sh")
+    put("cwd", cwd)
+    put("pid", 42)
+    put("cols", 80)
+    put("rows", 24)
+    if (claim != null) put("claim", claim)
+    put("hasLiveAttachment", openElsewhere)
+}
+
+/** The `data` of a `list_preserved` reply. */
+fun preservedList(projectId: String, vararg terminals: JsonObject): JsonObject = buildJsonObject {
+    put("projectId", projectId)
+    put("terminals", JsonArray(terminals.toList()))
 }

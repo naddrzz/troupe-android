@@ -5,6 +5,8 @@ import dev.troupe.android.terminal.render.TermSize
 import dev.troupe.android.terminal.render.TerminalKey
 import dev.troupe.android.testing.FakeTroupeServer
 import dev.troupe.android.testing.FakeTroupeServer.Companion.dataFrame
+import dev.troupe.android.testing.FakeTroupeServer.Companion.exitEvent
+import dev.troupe.android.testing.FakeTroupeServer.Companion.gapFrame
 import dev.troupe.android.testing.FakeTroupeServer.Companion.replayFrame
 import dev.troupe.android.testing.MainDispatcherRule
 import dev.troupe.android.testing.RecordingRenderer
@@ -12,6 +14,7 @@ import dev.troupe.android.testing.TestGraph
 import dev.troupe.android.testing.eventually
 import dev.troupe.android.testing.payloadInt
 import dev.troupe.android.testing.payloadString
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -20,6 +23,8 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -53,7 +58,7 @@ class TerminalViewModelTest {
 
     private fun pairedServerHolding(vararg terminalIds: String): String {
         val serverId = runBlocking { graph.repository.add("Box", server.pairingInput()).id }
-        terminalIds.forEach { graph.claims.put(serverId, it, "claim-$it") }
+        runBlocking { terminalIds.forEach { graph.cursors.putClaim(serverId, it, "claim-$it") } }
         return serverId
     }
 
@@ -75,6 +80,7 @@ class TerminalViewModelTest {
         assertEquals("t1", attach.payloadString("terminalId"))
         assertEquals("claim-t1", attach.payloadString("claim"))
         assertEquals(0, attach.payloadInt("lastSeq"))
+        assertNull(attach.payloadString("logEpoch"))
     }
 
     @Test fun liveOutputReachesTheRendererAsRawBytes() {
@@ -167,14 +173,137 @@ class TerminalViewModelTest {
         assertEquals(30, resize.payloadInt("rows"))
     }
 
-    @Test fun refusedAttachSaysTheTerminalIsGone() {
-        server.onTerminalRequest = { _, _ -> throw FakeTroupeServer.Refused("UNAUTHORIZED", "Not authorized for terminal t1") }
+    @Test fun unauthorizedAttachSaysTheTerminalIsGoneAndDropsTheClaim() {
+        server.onTerminalRequest = { _, _ -> throw FakeTroupeServer.Refused("UNAUTHORIZED", "Unauthorized") }
+        val serverId = pairedServerHolding("t1")
 
-        assertEquals(TerminalUi.Failed(R.string.terminal_unavailable), openTerminal(pairedServerHolding("t1")).ui.value)
+        assertEquals(TerminalUi.Failed(R.string.terminal_unavailable), openTerminal(serverId).ui.value)
+        assertNull(runBlocking { graph.cursors.get(serverId, "t1") })
     }
 
     @Test fun aTerminalWithoutAClaimIsNeverAttached() {
         assertEquals(TerminalUi.Failed(R.string.terminal_unavailable), openTerminal(pairedServerHolding()).ui.value)
         assertTrue(server.terminalRequests("attach").isEmpty())
+    }
+
+    /** Attach #1 replays `$ ` (seq 1); later attaches answer with [replays] in order. */
+    private fun serverReplaying(vararg replays: (attach: JsonObject) -> JsonObject): String {
+        var attaches = 0
+        server.onTerminalRequest = { type, payload ->
+            if (type == "attach") {
+                val frame = if (attaches == 0) replayFrame("t1", "$ ".toByteArray()) else replays[attaches - 1](payload)
+                attaches++
+                server.sendTerminalFrame(frame)
+            }
+            JsonObject(emptyMap())
+        }
+        return pairedServerHolding("t1")
+    }
+
+    private fun attaches() = server.terminalRequests("attach")
+
+    /** The ViewModel's own state lives on the main thread, like a reconnect's call would. */
+    private fun onMain(block: () -> Unit) = runBlocking(Dispatchers.Main) { block() }
+
+    @Test fun outOfOrderDataIsNotDrawnAndReattachesFromTheCursor() {
+        val vm = openTerminal(serverReplaying({ replayFrame("t1", "c".toByteArray(), "d".toByteArray(), firstSeq = 3) }))
+        vm.bind(renderer)
+        server.sendTerminalFrame(dataFrame("t1", 2, "b".toByteArray()))
+        eventually { renderer.text == "$ b" }
+
+        server.sendTerminalFrame(dataFrame("t1", 4, "d".toByteArray()))
+
+        eventually { attaches().size == 2 }
+        assertEquals(2, attaches()[1].payloadInt("lastSeq"))
+        assertEquals("ep-1", attaches()[1].payloadString("logEpoch"))
+        assertEquals("claim-t1", attaches()[1].payloadString("claim"))
+        eventually { renderer.text == "$ bcd" }
+        Thread.sleep(200)
+        assertEquals("$ bcd", renderer.text)
+        assertFalse(renderer.calls.contains(RecordingRenderer.RESET))
+    }
+
+    @Test fun aGapReattachesFromTheCursorWithoutDuplicates() {
+        val vm = openTerminal(serverReplaying({ replayFrame("t1", "b".toByteArray(), firstSeq = 2) }))
+        vm.bind(renderer)
+        eventually { renderer.text == "$ " }
+
+        server.sendTerminalFrame(gapFrame("t1", lastSeq = 1))
+
+        eventually { attaches().size == 2 }
+        assertEquals(1, attaches()[1].payloadInt("lastSeq"))
+        eventually { renderer.text == "$ b" }
+        server.sendTerminalFrame(dataFrame("t1", 3, "c".toByteArray()))
+        eventually { renderer.text == "$ bc" }
+    }
+
+    @Test fun aResetReplayOnReattachClearsTheScreenFirst() {
+        val vm = openTerminal(serverReplaying({ replayFrame("t1", "fresh".toByteArray(), reset = true, logEpoch = "ep-2") }))
+        vm.bind(renderer)
+        eventually { renderer.text == "$ " }
+
+        onMain { vm.reattach() }
+
+        eventually { renderer.text == "fresh" }
+        assertEquals(RecordingRenderer.RESET, renderer.calls[renderer.calls.size - 2])
+        // The cursor moved to the new log: live output continues from it.
+        server.sendTerminalFrame(dataFrame("t1", 2, "!".toByteArray()))
+        eventually { renderer.text == "fresh!" }
+    }
+
+    @Test fun reattachSendsTheCurrentCursor() {
+        val vm = openTerminal(serverReplaying({ replayFrame("t1", firstSeq = 3) }))
+        vm.bind(renderer)
+        server.sendTerminalFrame(dataFrame("t1", 2, "x".toByteArray()))
+        eventually { renderer.text == "$ x" }
+
+        onMain { vm.reattach() }
+
+        eventually { attaches().size == 2 }
+        assertEquals(2, attaches()[1].payloadInt("lastSeq"))
+        assertEquals("ep-1", attaches()[1].payloadString("logEpoch"))
+    }
+
+    @Test fun theCursorIsStoredWithTheClaim() {
+        val serverId = serverWithTerminal()
+        val vm = openTerminal(serverId)
+        vm.bind(renderer)
+        server.sendTerminalFrame(dataFrame("t1", 2, "x".toByteArray()))
+
+        eventually(5_000) { runBlocking { graph.cursors.get(serverId, "t1") }?.cursor == TerminalCursor("ep-1", 2) }
+        assertEquals("claim-t1", runBlocking { graph.cursors.get(serverId, "t1") }!!.claim)
+    }
+
+    @Test fun aRestartedAppAttachesWithTheStoredClaimAndReplaysTheWholeLog() {
+        val serverId = serverWithTerminal()
+        runBlocking { graph.cursors.putCursor(serverId, "t1", TerminalCursor("ep-1", 41)) }
+        graph.close()
+        TestGraph(tmp.root).use { restarted ->
+            val vm = restarted.terminalViewModel(serverId, "t1")
+            vm.bind(renderer)
+
+            eventually { renderer.text == "$ " }
+            val attach = attaches().single()
+            assertEquals("claim-t1", attach.payloadString("claim"))
+            // The new screen is blank, so it asks for everything the server kept.
+            assertEquals(0, attach.payloadInt("lastSeq"))
+        }
+    }
+
+    @Test fun anExitEventShowsTheExitCode() {
+        val vm = openTerminal()
+        vm.bind(renderer)
+
+        server.sendTerminalFrame(exitEvent("t1", 3))
+
+        eventually { vm.ui.value == TerminalUi.Exited(3) }
+    }
+
+    @Test fun attachingToAnExitedProcessShowsItsExitCode() {
+        server.onTerminalRequest = { type, _ ->
+            if (type == "attach") server.sendTerminalFrame(replayFrame("t1", "bye".toByteArray(), exitCode = 0))
+            JsonObject(emptyMap())
+        }
+        assertEquals(TerminalUi.Exited(0), openTerminal(pairedServerHolding("t1")).ui.value)
     }
 }

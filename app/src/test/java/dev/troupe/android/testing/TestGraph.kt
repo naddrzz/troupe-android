@@ -10,10 +10,10 @@ import dev.troupe.android.pairing.PairViewModel
 import dev.troupe.android.projects.ProjectsViewModel
 import dev.troupe.android.servers.PairedServerRepository
 import dev.troupe.android.servers.ServersViewModel
+import dev.troupe.android.terminal.TerminalCursorStore
 import dev.troupe.android.terminal.TerminalViewModel
 import dev.troupe.android.terminal.TerminalsViewModel
 import dev.troupe.android.terminal.net.ClientIdentityStore
-import dev.troupe.android.terminal.net.TerminalClaims
 import dev.troupe.android.terminal.net.TerminalConnections
 import dev.troupe.android.terminal.net.TerminalSocketFactory
 import kotlinx.coroutines.CoroutineScope
@@ -40,10 +40,11 @@ class TestGraph(dir: File) : Closeable {
     )
     private val client = troupeHttpClient()
     val api = ServerApi(client)
-    val repository = PairedServerRepository(dataStore, XorTokenCipher())
+    private val cipher = XorTokenCipher()
+    val repository = PairedServerRepository(dataStore, cipher)
     val sockets = TerminalSocketFactory(client, ClientIdentityStore(dataStore))
     val connections = TerminalConnections(sockets, repository)
-    val claims = TerminalClaims()
+    val cursors = TerminalCursorStore(dataStore, cipher)
 
     fun pairViewModel() = PairViewModel(api, sockets, repository)
 
@@ -51,16 +52,19 @@ class TestGraph(dir: File) : Closeable {
         ProjectsViewModel(SavedStateHandle(mapOf("serverId" to serverId)), api, repository)
 
     fun terminalsViewModel(serverId: String, projectId: String) =
-        TerminalsViewModel(SavedStateHandle(mapOf("serverId" to serverId, "projectId" to projectId)), connections, claims)
+        TerminalsViewModel(SavedStateHandle(mapOf("serverId" to serverId, "projectId" to projectId)), connections, cursors)
 
     fun terminalViewModel(serverId: String, terminalId: String) =
-        TerminalViewModel(SavedStateHandle(mapOf("serverId" to serverId, "terminalId" to terminalId)), connections, claims)
+        TerminalViewModel(SavedStateHandle(mapOf("serverId" to serverId, "terminalId" to terminalId)), connections, cursors)
 
     fun serversViewModel() = ServersViewModel(api, sockets, repository)
 
     /** Joins the storage scope, so a new graph on the same dir can open the file (an app restart). */
     override fun close() {
-        runBlocking { scope.coroutineContext.job.cancelAndJoin() }
+        runBlocking {
+            connections.background.coroutineContext.job.cancelAndJoin()
+            scope.coroutineContext.job.cancelAndJoin()
+        }
         client.dispatcher.executorService.shutdown()
         client.connectionPool.evictAll()
     }

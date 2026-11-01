@@ -58,11 +58,21 @@
     <string name="terminals_empty">Start a terminal to run commands in this Project.</string>
     <string name="terminals_error_spawn">Couldn\'t start a terminal: %1$s</string>
     <string name="terminals_error_spawn_reply">Couldn\'t start a terminal. The server sent an unexpected reply.</string>
+    <string name="terminals_error_list_reply">Couldn\'t list the terminals. The server sent an unexpected reply.</string>
+    <string name="terminals_error_kill">Couldn\'t kill the terminal: %1$s</string>
+    <string name="terminals_loading">Loading terminals…</string>
+    <string name="terminals_open_elsewhere">Open elsewhere</string>
+    <string name="terminals_row_actions">More actions for %1$s</string>
+    <string name="terminals_kill">Kill</string>
+    <string name="terminals_kill_confirm">Kill this terminal? Anything running in it will stop.</string>
+    <string name="terminals_cancel">Cancel</string>
 
     <!-- Terminal -->
     <string name="terminal_title">Terminal</string>
     <string name="terminal_connecting">Connecting…</string>
     <string name="terminal_unavailable">This terminal is no longer available.</string>
+    <string name="terminal_exited">Process exited (code %1$d)</string>
+    <string name="terminal_exited_signal">Process exited</string>
     <string name="key_paste">Paste</string>
     <string name="key_esc">Esc</string>
     <string name="key_esc_description">Escape</string>
