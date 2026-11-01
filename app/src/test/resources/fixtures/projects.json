@@ -1,0 +1,12 @@
+{
+  "success": true,
+  "data": {
+    "projects": [
+      {"id": "p-zeta", "name": "zeta", "color": "green", "path": "/workspace/zeta", "isArchived": false, "isDefault": false},
+      {"id": "p-old", "name": "old-stuff", "color": "red", "path": "/workspace/old", "isArchived": true, "isDefault": false},
+      {"id": "p-home", "name": "troupe", "color": "blue", "path": "/workspace/troupe", "isArchived": false, "isDefault": true, "iconPath": "/ignored/by/the/app.png"},
+      {"id": "p-alpha", "name": "Alpha", "color": "purple", "isArchived": false, "isDefault": false}
+    ],
+    "defaultProjectId": "p-home"
+  }
+}

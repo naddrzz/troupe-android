@@ -1,0 +1,49 @@
+package dev.troupe.android.testing
+
+import androidx.datastore.core.DataStoreFactory
+import androidx.datastore.core.okio.OkioStorage
+import androidx.datastore.preferences.core.PreferencesSerializer
+import androidx.lifecycle.SavedStateHandle
+import dev.troupe.android.core.net.ServerApi
+import dev.troupe.android.core.net.troupeHttpClient
+import dev.troupe.android.pairing.PairViewModel
+import dev.troupe.android.projects.ProjectsViewModel
+import dev.troupe.android.servers.PairedServerRepository
+import dev.troupe.android.terminal.net.ClientIdentityStore
+import dev.troupe.android.terminal.net.TerminalSocketFactory
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import okio.FileSystem
+import okio.Path.Companion.toOkioPath
+import java.io.Closeable
+import java.io.File
+
+/**
+ * The app's real objects wired the way Hilt wires them, except for the two supporting seams:
+ * on-disk storage in [dir] (Okio, so it also works on a Windows JVM) and the deterministic cipher.
+ */
+class TestGraph(dir: File) : Closeable {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    val prefsFile = File(dir, "troupe.preferences_pb")
+    private val dataStore = DataStoreFactory.create(
+        OkioStorage(FileSystem.SYSTEM, PreferencesSerializer) { prefsFile.toOkioPath() },
+        scope = scope,
+    )
+    private val client = troupeHttpClient()
+    val api = ServerApi(client)
+    val repository = PairedServerRepository(dataStore, XorTokenCipher())
+    val sockets = TerminalSocketFactory(client, ClientIdentityStore(dataStore))
+
+    fun pairViewModel() = PairViewModel(api, sockets, repository)
+
+    fun projectsViewModel(serverId: String) =
+        ProjectsViewModel(SavedStateHandle(mapOf("serverId" to serverId)), api, repository)
+
+    override fun close() {
+        scope.cancel()
+        client.dispatcher.executorService.shutdown()
+        client.connectionPool.evictAll()
+    }
+}
