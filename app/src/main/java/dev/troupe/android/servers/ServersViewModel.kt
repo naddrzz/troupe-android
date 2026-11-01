@@ -5,8 +5,8 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.troupe.android.core.net.ApiResult
 import dev.troupe.android.core.net.ServerApi
-import dev.troupe.android.terminal.net.ConnectionFailure
-import dev.troupe.android.terminal.net.ConnectionState
+import dev.troupe.android.core.net.ConnectionFailure
+import dev.troupe.android.core.net.ConnectionState
 import dev.troupe.android.terminal.net.TerminalSocketFactory
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow

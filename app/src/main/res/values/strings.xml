@@ -3,6 +3,14 @@
     <string name="app_name">Troupe</string>
     <string name="action_back">Back</string>
 
+    <!-- Connection state, in the headers -->
+    <string name="connection_connecting">Connecting…</string>
+    <string name="connection_connected">Connected</string>
+    <string name="connection_reconnecting">Reconnecting (attempt %1$d)…</string>
+    <string name="connection_offline">Server offline</string>
+    <string name="connection_disconnected">Disconnected</string>
+    <string name="connection_retry">Retry</string>
+
     <!-- Servers list -->
     <string name="servers_title">Servers</string>
     <string name="servers_empty_title">No servers yet</string>

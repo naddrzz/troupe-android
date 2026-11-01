@@ -53,9 +53,23 @@ class FakeTroupeServer : Closeable {
     /** Every request frame the app sent on `/terminal/ws`, parsed. */
     val terminalRequests: MutableList<JsonObject> = CopyOnWriteArrayList()
     private val terminalSockets: MutableList<WebSocket> = CopyOnWriteArrayList()
+    /** Every open `/terminal/ws` connection, authenticated or not. */
+    private val openSockets: MutableList<WebSocket> = CopyOnWriteArrayList()
+
+    /** `false`: `/health` answers 503, like a server that is stopping or not ready yet. */
+    @Volatile var healthy: Boolean = true
 
     /** Pushes a server frame (`data`, `replay`, …) to every authenticated `/terminal/ws` connection. */
     fun sendTerminalFrame(frame: JsonObject) = terminalSockets.forEach { it.send(frame.toString()) }
+
+    /** Closes every authenticated `/terminal/ws` connection with [code]: 1001 is a deliberate stop, 1011 a crash. */
+    fun closeTerminalSockets(code: Int) = terminalSockets.toList().forEach {
+        terminalSockets -= it
+        it.close(code, null)
+    }
+
+    /** `/health` requests answered so far. */
+    fun healthChecks(): Int = httpRequests.count { it.url.encodedPath == "/health" }
 
     /** The recorded requests of one type, in order. */
     fun terminalRequests(type: String): List<JsonObject> =
@@ -64,24 +78,34 @@ class FakeTroupeServer : Closeable {
     /** A scripted error reply `{success: false, code, error}`. */
     class Refused(val code: String, message: String = code) : Exception(message)
 
-    private val server = MockWebServer()
+    private var server = started(port = 0)
 
-    init {
-        server.dispatcher = object : Dispatcher() {
+    private fun started(port: Int) = MockWebServer().apply {
+        dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse = route(request)
         }
-        server.start()
+        start(port)
     }
 
-    val address: ServerAddress get() = ServerAddress(server.url("/"))
+    val address: ServerAddress = ServerAddress(server.url("/"))
 
     /** The address as a user would type it, e.g. `127.0.0.1:54321`. */
-    val typedAddress: String get() = "${server.hostName}:${server.port}"
+    val typedAddress: String = "${server.hostName}:${server.port}"
 
     fun pairingInput(token: String = this.token) = PairingInput(address, token)
 
-    /** Stops answering: connections are refused from now on. */
-    fun goOffline() = server.close()
+    /** Stops answering: open connections drop and new ones are refused. */
+    fun goOffline() {
+        terminalSockets.clear()
+        // A server-side WebSocket has no cancel(); 1011 is the abnormal end a crash or a dropped link looks like.
+        openSockets.forEach { it.close(1011, null) }
+        server.close()
+    }
+
+    /** Answers again on the same address, like a restarted server. */
+    fun comeBack() {
+        server = started(port = server.port)
+    }
 
     override fun close() = server.close()
 
@@ -93,7 +117,7 @@ class FakeTroupeServer : Closeable {
         }
         httpRequests += request
         return when (path) {
-            "/health" -> json(200, healthBody())
+            "/health" -> if (healthy) json(200, healthBody()) else json(503, """{"success":false,"error":"Service unavailable","code":"UNAVAILABLE"}""")
             "/projects" ->
                 if (request.headers["Authorization"] == "Bearer $token") json(200, projectsBody)
                 else json(401, """{"success":false,"error":"Unauthorized","code":"UNAUTHORIZED"}""")
@@ -114,11 +138,21 @@ class FakeTroupeServer : Closeable {
 
         override fun onOpen(webSocket: WebSocket, response: Response) {
             socket = webSocket
+            openSockets += webSocket
         }
 
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
             terminalSockets -= webSocket
             webSocket.close(1000, null)
+        }
+
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            openSockets -= webSocket
+        }
+
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            terminalSockets -= webSocket
+            openSockets -= webSocket
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {

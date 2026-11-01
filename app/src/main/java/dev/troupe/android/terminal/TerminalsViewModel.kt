@@ -7,8 +7,10 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.troupe.android.R
 import dev.troupe.android.core.protocol.TroupeJson
-import dev.troupe.android.terminal.net.ConnectionFailure
+import dev.troupe.android.core.net.ConnectionFailure
+import dev.troupe.android.core.net.ConnectionState
 import dev.troupe.android.terminal.net.TerminalConnectFailed
+import dev.troupe.android.terminal.net.TerminalConnection
 import dev.troupe.android.terminal.net.TerminalConnections
 import dev.troupe.android.terminal.protocol.PreservedTerminals
 import dev.troupe.android.terminal.protocol.SpawnedTerminal
@@ -28,13 +30,16 @@ import javax.inject.Inject
 /** A user-facing message: a string resource and its optional `%1$s` argument. */
 data class UiMessage(@StringRes val text: Int, val arg: String? = null)
 
-/** What to tell the user when a Paired Server's `/terminal/ws` can't be opened. */
-internal fun TerminalConnectFailed.userMessage(): UiMessage = when (failure) {
+/** What to tell the user when a Paired Server's connection fails; [message] is the server's reason. */
+internal fun ConnectionFailure.userMessage(message: String?): UiMessage = when (this) {
     ConnectionFailure.Unreachable -> UiMessage(R.string.pair_error_unreachable)
     ConnectionFailure.Unauthorized -> UiMessage(R.string.pair_error_unauthorized)
     ConnectionFailure.ProtocolMismatch -> UiMessage(R.string.pair_error_protocol)
     ConnectionFailure.Refused -> UiMessage(R.string.pair_error_server, message)
 }
+
+/** What to tell the user when a Paired Server's `/terminal/ws` can't be opened. */
+internal fun TerminalConnectFailed.userMessage(): UiMessage = failure.userMessage(message)
 
 /** A running Terminal of the Project. [openElsewhere]: another device is attached to it. */
 data class TerminalRow(val id: String, val shell: String, val cwd: String, val openElsewhere: Boolean)
@@ -52,7 +57,7 @@ data class TerminalsUi(
 /** Thrown inside this ViewModel to end an operation with a message for the user. */
 private class Refusal(val reason: UiMessage) : Exception()
 
-/** A Project's Terminals tab: the running Terminals, "New terminal" and kill. */
+/** A Project's Terminals tab: the running Terminals, "New terminal" and kill, plus the header's connection state. */
 @HiltViewModel
 class TerminalsViewModel @Inject constructor(
     savedState: SavedStateHandle,
@@ -63,6 +68,29 @@ class TerminalsViewModel @Inject constructor(
     private val projectId: String = checkNotNull(savedState["projectId"])
     private val _ui = MutableStateFlow(TerminalsUi())
     val ui: StateFlow<TerminalsUi> = _ui.asStateFlow()
+    private val _connection = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
+    /** The Paired Server's connection, for the header. */
+    val connection: StateFlow<ConnectionState> = _connection.asStateFlow()
+    private var link: TerminalConnection? = null
+
+    init {
+        viewModelScope.launch {
+            val current = try {
+                connections.connection(serverId)
+            } catch (e: TerminalConnectFailed) {
+                return@launch _ui.update { it.copy(loading = false, error = e.userMessage()) }
+            }
+            link = current
+            // No list_preserved on reconnect: it reissues the claim of every Terminal without a
+            // live attachment, racing the Terminal screen's re-attach with the old claim.
+            current.state.collect { _connection.value = it }
+        }
+    }
+
+    /** The header's Retry: reconnect or check the server now. */
+    fun retryConnection() {
+        link?.retry()
+    }
 
     /**
      * Lists the Project's running Terminals with `list_preserved`. The server issues a fresh claim

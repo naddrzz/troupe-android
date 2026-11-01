@@ -6,8 +6,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.troupe.android.R
+import dev.troupe.android.core.net.ConnectionState
 import dev.troupe.android.terminal.net.TerminalConnectFailed
+import dev.troupe.android.terminal.net.TerminalConnection
 import dev.troupe.android.terminal.net.TerminalConnections
+import dev.troupe.android.terminal.net.TerminalDisconnected
 import dev.troupe.android.terminal.net.TerminalSocket
 import dev.troupe.android.terminal.protocol.TerminalErrorCodes
 import dev.troupe.android.terminal.protocol.TerminalFrame
@@ -25,6 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
@@ -48,6 +52,9 @@ sealed interface TerminalUi {
  * the in-memory cursor `(logEpoch, lastSeq)` says what is on screen: live `data` is drawn only
  * when it is the next seq, and anything else, or a `gap`, re-attaches from the cursor ([reattach]).
  * The cursor is also persisted with the claim, at most once a second.
+ *
+ * Every new connection of the Paired Server (the first one, and each reconnect) attaches again from
+ * the cursor, so output missed while it was down is replayed once and nothing is drawn twice.
  */
 @HiltViewModel
 class TerminalViewModel @Inject constructor(
@@ -59,6 +66,9 @@ class TerminalViewModel @Inject constructor(
     private val terminalId: String = checkNotNull(savedState["terminalId"])
     private val _ui = MutableStateFlow<TerminalUi>(TerminalUi.Connecting)
     val ui: StateFlow<TerminalUi> = _ui.asStateFlow()
+    private val _connection = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
+    /** The Paired Server's connection, for the header. */
+    val connection: StateFlow<ConnectionState> = _connection.asStateFlow()
 
     private val live = CompletableDeferred<Unit>()
     private val outgoing = Channel<String>(Channel.UNLIMITED)
@@ -67,22 +77,42 @@ class TerminalViewModel @Inject constructor(
     private var renderer: TerminalRenderer? = null
     private var binding: Job? = null
     private val unrendered = mutableListOf<(TerminalRenderer) -> Unit>()
+    private var link: TerminalConnection? = null
     private var socket: TerminalSocket? = null
-    private var framesJob: Job? = null
     private var inputJob: Job? = null
     private var saveJob: Job? = null
     private var cursor = TerminalCursor()
     private var attaching = false
+    /** A new connection came up while an attach was in flight on the old one. */
+    private var attachAgain = false
     /** Between sending `attach` and its `replay`: live frames are dropped, the replay covers them. */
     private var awaitingReplay = false
 
     init {
-        reattach()
+        viewModelScope.launch {
+            val current = try {
+                connections.connection(serverId)
+            } catch (e: TerminalConnectFailed) {
+                val message = e.userMessage()
+                return@launch fail(message.text, message.arg)
+            }
+            link = current
+            socket = current.socket
+            // Subscribe before attaching: the server sends the replay ahead of the attach reply.
+            launch(start = CoroutineStart.UNDISPATCHED) { current.socket.frames.collect(::onFrame) }
+            launch { current.state.collect(::onConnection) }
+            current.generation.filter { it > 0 }.collect { onConnected() }
+        }
+    }
+
+    /** The header's Retry: reconnect or check the server now. */
+    fun retryConnection() {
+        link?.retry()
     }
 
     /**
      * Attaches again from the cursor of what is on screen, over the Paired Server's current
-     * connection. Also the hook for a reconnect. Does nothing while an attach is in flight.
+     * connection. Does nothing while an attach is in flight.
      */
     fun reattach() {
         if (attaching) return
@@ -93,7 +123,23 @@ class TerminalViewModel @Inject constructor(
                 attach()
             } finally {
                 attaching = false
+                if (attachAgain) {
+                    attachAgain = false
+                    reattach()
+                }
             }
+        }
+    }
+
+    private fun onConnected() {
+        if (attaching) attachAgain = true else reattach()
+    }
+
+    private fun onConnection(state: ConnectionState) {
+        _connection.value = state
+        if (state is ConnectionState.Failed) {
+            val message = state.reason.userMessage(state.message)
+            fail(message.text, message.arg)
         }
     }
 
@@ -135,20 +181,11 @@ class TerminalViewModel @Inject constructor(
 
     private suspend fun attach() {
         val claim = cursors.get(serverId, terminalId)?.claim ?: return fail(R.string.terminal_unavailable)
-        val current = try {
-            connections.socket(serverId)
-        } catch (e: TerminalConnectFailed) {
-            val message = e.userMessage()
-            return fail(message.text, message.arg)
-        }
-        if (current !== socket) {
-            framesJob?.cancel()
-            socket = current
-            // Subscribe before attaching: the server sends the replay ahead of the attach reply.
-            framesJob = viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) { current.frames.collect(::onFrame) }
-        }
+        val current = socket ?: return
         val reply = try {
             current.request("attach", attachPayload(claim))
+        } catch (e: TerminalDisconnected) {
+            return // The next connection attaches again.
         } catch (e: IOException) {
             return fail(R.string.pair_error_unreachable)
         }

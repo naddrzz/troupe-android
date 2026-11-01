@@ -19,16 +19,30 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.troupe.android.R
 import dev.troupe.android.core.theme.LocalTroupePalette
 import dev.troupe.android.core.ui.TroupeTopBar
 import dev.troupe.android.terminal.TerminalsTab
+import dev.troupe.android.terminal.TerminalsViewModel
 
-/** A Project: its Agent Chats and its Terminals, one tab apart. Opens on Terminals. */
+/**
+ * A Project: its Agent Chats and its Terminals, one tab apart. Opens on Terminals. [terminals] is
+ * the same ViewModel the Terminals tab uses; the header shows its connection.
+ */
 @Composable
-fun ProjectScreen(projectName: String, onBack: () -> Unit, onOpenTerminal: (terminalId: String) -> Unit) {
+fun ProjectScreen(
+    projectName: String,
+    onBack: () -> Unit,
+    onOpenTerminal: (terminalId: String) -> Unit,
+    terminals: TerminalsViewModel = hiltViewModel(),
+) {
     var tab by rememberSaveable { mutableIntStateOf(TERMINALS) }
-    Scaffold(topBar = { TroupeTopBar(projectName, onBack = onBack) }) { padding ->
+    val connection by terminals.connection.collectAsStateWithLifecycle()
+    Scaffold(topBar = {
+        TroupeTopBar(projectName, onBack = onBack, connection = connection, onRetry = terminals::retryConnection)
+    }) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
             PrimaryTabRow(selectedTabIndex = tab) {
                 Tab(selected = tab == CHATS, onClick = { tab = CHATS }, text = { Text(stringResource(R.string.project_tab_chats)) })
@@ -43,7 +57,7 @@ fun ProjectScreen(projectName: String, onBack: () -> Unit, onOpenTerminal: (term
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.align(Alignment.Center).padding(24.dp),
                     )
-                    else -> TerminalsTab(onOpenTerminal = onOpenTerminal)
+                    else -> TerminalsTab(onOpenTerminal = onOpenTerminal, viewModel = terminals)
                 }
             }
         }

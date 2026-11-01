@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.troupe.android.R
+import dev.troupe.android.core.net.ConnectionState
 import dev.troupe.android.core.theme.LocalTroupePalette
 import dev.troupe.android.core.ui.TroupeTopBar
 import dev.troupe.android.terminal.render.KeyBar
@@ -38,6 +39,7 @@ import dev.troupe.android.terminal.render.XtermWebViewRenderer
 @Composable
 fun TerminalScreen(onBack: () -> Unit, viewModel: TerminalViewModel = hiltViewModel()) {
     val state by viewModel.ui.collectAsStateWithLifecycle()
+    val connection by viewModel.connection.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val palette = LocalTroupePalette.current
     val renderer = remember { XtermWebViewRenderer(WebView(context)) }
@@ -49,7 +51,12 @@ fun TerminalScreen(onBack: () -> Unit, viewModel: TerminalViewModel = hiltViewMo
         }
     }
     val connecting = stringResource(R.string.terminal_connecting)
-    Scaffold(topBar = { TroupeTopBar(stringResource(R.string.terminal_title), onBack = onBack) }) { padding ->
+    Scaffold(topBar = { TroupeTopBar(
+            stringResource(R.string.terminal_title),
+            onBack = onBack,
+            connection = connection,
+            onRetry = viewModel::retryConnection,
+        ) }) { padding ->
         Column(Modifier.padding(padding).consumeWindowInsets(padding).imePadding().fillMaxSize()) {
             when (val s = state) {
                 TerminalUi.Connecting -> LinearProgressIndicator(
@@ -73,7 +80,7 @@ fun TerminalScreen(onBack: () -> Unit, viewModel: TerminalViewModel = hiltViewMo
                 TerminalView(renderer, Modifier.fillMaxSize())
             }
             KeyBar(
-                enabled = state == TerminalUi.Live,
+                enabled = state == TerminalUi.Live && connection == ConnectionState.Connected,
                 onKey = viewModel::onKey,
                 onPaste = {
                     val clip = context.getSystemService(ClipboardManager::class.java)?.primaryClip

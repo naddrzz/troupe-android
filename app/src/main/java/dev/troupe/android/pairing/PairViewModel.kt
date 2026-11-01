@@ -8,8 +8,8 @@ import dev.troupe.android.R
 import dev.troupe.android.core.net.ApiResult
 import dev.troupe.android.core.net.ServerApi
 import dev.troupe.android.servers.PairedServerRepository
-import dev.troupe.android.terminal.net.ConnectionFailure
-import dev.troupe.android.terminal.net.ConnectionState
+import dev.troupe.android.core.net.ConnectionFailure
+import dev.troupe.android.core.net.ConnectionState
 import dev.troupe.android.terminal.net.TerminalSocketFactory
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

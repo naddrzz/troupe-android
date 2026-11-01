@@ -7,12 +7,18 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.troupe.android.R
 import dev.troupe.android.core.net.ApiResult
+import dev.troupe.android.core.net.ConnectionState
 import dev.troupe.android.core.net.ServerApi
 import dev.troupe.android.core.protocol.Project
 import dev.troupe.android.core.protocol.ProjectsState
 import dev.troupe.android.servers.PairedServerRepository
+import dev.troupe.android.terminal.net.TerminalConnectFailed
+import dev.troupe.android.terminal.net.TerminalConnection
+import dev.troupe.android.terminal.net.TerminalConnections
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -22,18 +28,40 @@ sealed interface ProjectsUi {
     data class Error(@StringRes val message: Int, val arg: String? = null) : ProjectsUi
 }
 
+/** A Paired Server's Projects, with the server's connection state for the header. */
 @HiltViewModel
 class ProjectsViewModel @Inject constructor(
     savedState: SavedStateHandle,
     private val api: ServerApi,
     private val repository: PairedServerRepository,
+    private val connections: TerminalConnections,
 ) : ViewModel() {
     private val serverId: String = checkNotNull(savedState["serverId"])
     private val _ui = MutableStateFlow<ProjectsUi>(ProjectsUi.Loading)
     val ui: StateFlow<ProjectsUi> = _ui
+    private val _connection = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
+    val connection: StateFlow<ConnectionState> = _connection.asStateFlow()
+    private var link: TerminalConnection? = null
 
     init {
         refresh()
+        viewModelScope.launch {
+            val current = try {
+                connections.connection(serverId)
+            } catch (e: TerminalConnectFailed) {
+                return@launch
+            }
+            link = current
+            launch { current.state.collect { _connection.value = it } }
+            // A list that failed to load while the server was away loads again once it is back.
+            current.generation.filter { it > 0 }.collect { if (_ui.value is ProjectsUi.Error) refresh() }
+        }
+    }
+
+    /** The header's Retry: reconnect or check the server now, and reload a list that failed. */
+    fun retryConnection() {
+        link?.retry()
+        if (_ui.value is ProjectsUi.Error) refresh()
     }
 
     fun refresh() {
