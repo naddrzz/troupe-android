@@ -10,6 +10,12 @@ Troupe is a native Android client (Kotlin, Jetpack Compose) for a Troupe Server,
 
 Unit tests run against a scripted fake Troupe Server (`app/src/test/java/dev/troupe/android/testing/FakeTroupeServer.kt`).
 
+The xterm.js renderer has an instrumented test that runs on a device or emulator:
+
+```powershell
+.\gradlew.bat connectedDebugAndroidTest
+```
+
 The integration test runs against a real Troupe Server in Docker and skips when that server is not running:
 
 ```powershell
@@ -30,5 +36,7 @@ Each license below was read before the asset was bundled. Full texts are in [`li
 | Asset | Used for | License | Decision |
 | --- | --- | --- | --- |
 | [Inter](https://github.com/rsms/inter) variable font (`Inter[opsz,wght].ttf` from google/fonts) | UI text | SIL Open Font License 1.1 ([`licenses/OFL-Inter.txt`](licenses/OFL-Inter.txt)) | Bundled as `app/src/main/res/font/inter_variable.ttf`. |
-| [Paper Mono](https://github.com/paper-design/paper-mono) | Terminal text | SIL Open Font License 1.1 (read from termul's `src/renderer/assets/fonts/paper-mono/OFL.txt`) | Redistribution allowed, so Paper Mono is the terminal font (not JetBrains Mono). It ships with the terminal renderer in a later slice; nothing is bundled yet. |
+| [Paper Mono](https://github.com/paper-design/paper-mono) (`PaperMono[wght].woff2`, from termul's `src/renderer/assets/fonts/paper-mono/`) | Terminal text | SIL Open Font License 1.1 ([`licenses/OFL-PaperMono.txt`](licenses/OFL-PaperMono.txt)) | Redistribution allowed, so Paper Mono is the terminal font (not JetBrains Mono). Bundled as `app/src/main/assets/terminal/PaperMono.woff2` and loaded by the terminal page with `@font-face`. |
+| [xterm.js](https://github.com/xtermjs/xterm.js) `@xterm/xterm` 6.0.0 (`lib/xterm.js`, `css/xterm.css`) | Terminal rendering (ADR-0001) | MIT ([`licenses/MIT-xterm.txt`](licenses/MIT-xterm.txt)) | Built files from the npm package, bundled unchanged in `app/src/main/assets/terminal/`. |
+| `@xterm/addon-fit` 0.11.0 (`lib/addon-fit.js`) | Fitting the terminal to the screen | MIT ([`licenses/MIT-xterm.txt`](licenses/MIT-xterm.txt)) | Built file from the npm package, bundled unchanged in `app/src/main/assets/terminal/`. |
 | [Hugeicons free set](https://hugeicons.com) (`@hugeicons/core-free-icons` 4.4.0) | Icons | MIT ([`licenses/MIT-Hugeicons.md`](licenses/MIT-Hugeicons.md)) | Usable in an Android app, so Hugeicons is the icon set (not Material Symbols). Icons are converted by hand to vector drawables (`app/src/main/res/drawable/ic_*.xml`). |
