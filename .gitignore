@@ -8,3 +8,8 @@ captures/
 integration/workspace/
 
 .claude/
+
+# Release signing: never commit a keystore or its passwords.
+*.jks
+*.keystore
+keystore.properties
