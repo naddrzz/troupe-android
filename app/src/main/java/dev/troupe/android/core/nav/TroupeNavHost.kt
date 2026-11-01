@@ -5,6 +5,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import dev.troupe.android.lock.SettingsScreen
 import dev.troupe.android.pairing.PairScreen
 import dev.troupe.android.projects.ProjectScreen
 import dev.troupe.android.projects.ProjectsScreen
@@ -15,6 +16,8 @@ import kotlinx.serialization.Serializable
 @Serializable data object ServersRoute
 
 @Serializable data object PairRoute
+
+@Serializable data object SettingsRoute
 
 /** `serverId` is read by [dev.troupe.android.projects.ProjectsViewModel] from its SavedStateHandle. */
 @Serializable data class ProjectsRoute(val serverId: String)
@@ -33,7 +36,11 @@ fun TroupeNavHost() {
             ServersScreen(
                 onPair = { nav.navigate(PairRoute) },
                 onOpenServer = { nav.navigate(ProjectsRoute(it)) },
+                onOpenSettings = { nav.navigate(SettingsRoute) },
             )
+        }
+        composable<SettingsRoute> {
+            SettingsScreen(onBack = { nav.popBackStack() })
         }
         composable<PairRoute> {
             PairScreen(
