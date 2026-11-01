@@ -73,4 +73,34 @@ class PairedServerRepositoryTest {
         assertFalse(s.toString().contains("secret-abc"))
         assertFalse(repo.servers.first().toString().contains("secret-abc"))
     }
+
+    @Test fun stayConnectedIsOffByDefaultAndKeptPerServer() = runBlocking {
+        val a = repo.add("A", input("http://10.0.0.2", "one"))
+        val b = repo.add("B", input("http://10.0.0.3", "two"))
+        assertFalse(a.stayConnected)
+
+        repo.setStayConnected(a.id, true)
+
+        assertEquals(mapOf(a.id to true, b.id to false), repo.servers.first().associate { it.id to it.stayConnected })
+    }
+
+    @Test fun rePairingKeepsStayConnected() = runBlocking {
+        val a = repo.add("A", input("http://10.0.0.2", "one"))
+        repo.setStayConnected(a.id, true)
+
+        repo.add("A", input("http://10.0.0.2", "two"))
+
+        assertTrue(repo.servers.first().single().stayConnected)
+    }
+
+    @Test fun disconnectingTurnsEveryToggleOff() = runBlocking {
+        val a = repo.add("A", input("http://10.0.0.2", "one"))
+        val b = repo.add("B", input("http://10.0.0.3", "two"))
+        repo.setStayConnected(a.id, true)
+        repo.setStayConnected(b.id, true)
+
+        repo.stopStayingConnected()
+
+        assertTrue(repo.servers.first().none { it.stayConnected })
+    }
 }

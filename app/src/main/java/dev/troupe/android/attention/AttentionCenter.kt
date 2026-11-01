@@ -13,7 +13,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
@@ -47,6 +50,10 @@ class AttentionCenter internal constructor(
     /** Each Paired Server's Attention, by server id. */
     val servers: StateFlow<Map<String, ServerAttention>> = _servers.asStateFlow()
 
+    private val _finished = MutableSharedFlow<FinishedTurn>(extraBufferCapacity = 64)
+    /** Turns that ended in live Sessions of any Paired Server. */
+    val finished: SharedFlow<FinishedTurn> = _finished.asSharedFlow()
+
     /** One server's Attention list, oldest first. */
     fun attention(serverId: String): Flow<List<AttentionItem>> =
         servers.map { it[serverId]?.items.orEmpty() }.distinctUntilChanged()
@@ -76,6 +83,20 @@ class AttentionCenter internal constructor(
         val seen = HashMap<String, Long>()
         coroutineScope {
             launch { monitor.run() }
+            launch {
+                monitor.finished.collect { sessionId ->
+                    val state = monitor.state.value
+                    val session = state.index.firstOrNull { it.sessionId == sessionId }
+                    _finished.emit(
+                        FinishedTurn(
+                            serverId,
+                            sessionId,
+                            projectName = session?.projectId?.let(state.projects::get),
+                            sessionTitle = session?.title?.takeIf(String::isNotBlank),
+                        ),
+                    )
+                }
+            }
             combine(monitor.state, connection.pending.bySession, connection.pending.resolved) { state, openChats, resolved ->
                 val items = deriveAttention(serverId, state.index, state.tracked, openChats, resolved, state.projects) { id ->
                     seen.getOrPut(id) { clock() }

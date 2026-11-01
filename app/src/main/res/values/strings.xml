@@ -33,6 +33,22 @@
     <string name="servers_remove_title">Remove %1$s?</string>
     <string name="servers_remove_body">Troupe forgets this server and its token. To use it again, pair it again.</string>
     <string name="servers_settings">Settings</string>
+    <string name="servers_stay_connected">Stay connected in background</string>
+    <string name="servers_stay_connected_turn_on">Stay connected in background</string>
+    <string name="servers_stay_connected_turn_off">Stop staying connected in background</string>
+    <string name="servers_stays_connected">Stays connected in background</string>
+
+    <!-- Background connection: the foreground service and what it notifies -->
+    <string name="background_channel">Background connection</string>
+    <string name="background_channel_description">Shown while Troupe stays connected to your servers in the background.</string>
+    <string name="background_connected">Troupe is connected to %1$s</string>
+    <string name="background_connected_public">Troupe is connected</string>
+    <string name="background_disconnect">Disconnect</string>
+    <string name="turns_channel">Finished turns</string>
+    <string name="turns_channel_description">When an agent finishes its turn while Troupe is in the background.</string>
+    <string name="turn_finished">%1$s finished</string>
+    <string name="turn_finished_untitled">Untitled chat finished</string>
+    <string name="turn_finished_locked">An agent finished its turn</string>
 
     <!-- Settings -->
     <string name="settings_title">Settings</string>

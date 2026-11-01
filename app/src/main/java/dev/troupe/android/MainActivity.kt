@@ -33,6 +33,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
 import dev.troupe.android.attention.AttentionNotifier
+import dev.troupe.android.background.BackgroundConnection
 import dev.troupe.android.core.nav.ChatLink
 import dev.troupe.android.core.nav.Screens
 import dev.troupe.android.core.nav.TroupeNavHost
@@ -56,6 +57,7 @@ class MainActivity : FragmentActivity() {
     private val authenticator by lazy { BiometricAuthenticator(this) }
     @Inject lateinit var screens: Screens
     @Inject lateinit var notifier: AttentionNotifier
+    @Inject lateinit var background: BackgroundConnection
     /** The Agent Chat a tapped notification leads to, until the navigation has opened it. */
     private val link = MutableStateFlow<ChatLink?>(null)
 
@@ -107,6 +109,19 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
+    }
+
+    // The app has this one activity: it being visible is the app being in the foreground.
+    override fun onStart() {
+        super.onStart()
+        screens.onForeground(true)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (isChangingConfigurations) return
+        screens.onForeground(false)
+        background.onAppHidden()
     }
 
     override fun onNewIntent(intent: Intent) {

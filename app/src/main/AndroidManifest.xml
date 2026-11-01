@@ -9,6 +9,9 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- Android 13+: Attention notifications; asked with a rationale the first time one would show. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- "Stay connected in background": a foreground service holds the opted-in servers' connections. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
     <application
@@ -34,5 +37,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- specialUse, not dataSync: it holds a connection open for notifications rather than syncing
+             data, and Android 15 limits dataSync to 6 hours a day. -->
+        <service
+            android:name=".background.BackgroundConnectionService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the user's opted-in WebSocket connections to their own self-hosted Troupe Servers open while the app is closed, so agent permission requests, questions and finished turns can notify. There is no push service." />
+        </service>
     </application>
 </manifest>

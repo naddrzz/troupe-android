@@ -14,11 +14,14 @@ import kotlinx.serialization.Serializable
 import java.util.Base64
 import java.util.UUID
 
-/** A Troupe Server the app remembers. Holds no token: that lives encrypted in [PairedServerRepository]. */
-data class PairedServer(val id: String, val name: String, val address: ServerAddress)
+/**
+ * A Troupe Server the app remembers. Holds no token: that lives encrypted in [PairedServerRepository].
+ * [stayConnected]: its connection is held in the background, so it still notifies with the app closed.
+ */
+data class PairedServer(val id: String, val name: String, val address: ServerAddress, val stayConnected: Boolean = false)
 
 @Serializable
-private data class StoredServer(val id: String, val name: String, val baseUrl: String)
+private data class StoredServer(val id: String, val name: String, val baseUrl: String, val stayConnected: Boolean = false)
 
 /**
  * Paired Servers in one JSON preference; each token is AEAD ciphertext under `token_<id>`,
@@ -29,23 +32,24 @@ class PairedServerRepository(
     private val cipher: TokenCipher,
 ) {
     val servers: Flow<List<PairedServer>> = store.data.map { prefs ->
-        stored(prefs).map { PairedServer(it.id, it.name, ServerAddress.of(it.baseUrl)) }
+        stored(prefs).map { PairedServer(it.id, it.name, ServerAddress.of(it.baseUrl), it.stayConnected) }
     }
 
     suspend fun server(id: String): PairedServer? = servers.first().firstOrNull { it.id == id }
 
-    /** Adds a server, or replaces the token of the one already paired at the same base URL. */
+    /** Adds a server, or replaces the token of the one already paired at the same base URL (keeping its settings). */
     suspend fun add(name: String, input: PairingInput): PairedServer {
         val baseUrl = input.address.baseUrl.toString()
         lateinit var saved: StoredServer
         store.edit { prefs ->
             val list = stored(prefs)
-            val id = list.firstOrNull { it.baseUrl == baseUrl }?.id ?: UUID.randomUUID().toString()
-            saved = StoredServer(id, name, baseUrl)
+            val existing = list.firstOrNull { it.baseUrl == baseUrl }
+            val id = existing?.id ?: UUID.randomUUID().toString()
+            saved = StoredServer(id, name, baseUrl, existing?.stayConnected ?: false)
             prefs[SERVERS] = TroupeJson.encodeToString(list.filterNot { it.id == id } + saved)
             prefs[tokenKey(id)] = Base64.getEncoder().encodeToString(cipher.encrypt(input.token, id))
         }
-        return PairedServer(saved.id, saved.name, input.address)
+        return PairedServer(saved.id, saved.name, input.address, saved.stayConnected)
     }
 
     suspend fun token(serverId: String): String? {
@@ -56,6 +60,19 @@ class PairedServerRepository(
     suspend fun rename(id: String, name: String) {
         store.edit { prefs ->
             prefs[SERVERS] = TroupeJson.encodeToString(stored(prefs).map { if (it.id == id) it.copy(name = name) else it })
+        }
+    }
+
+    suspend fun setStayConnected(id: String, value: Boolean) {
+        store.edit { prefs ->
+            prefs[SERVERS] = TroupeJson.encodeToString(stored(prefs).map { if (it.id == id) it.copy(stayConnected = value) else it })
+        }
+    }
+
+    /** The background connection's Disconnect: every "Stay connected in background" goes off. */
+    suspend fun stopStayingConnected() {
+        store.edit { prefs ->
+            prefs[SERVERS] = TroupeJson.encodeToString(stored(prefs).map { it.copy(stayConnected = false) })
         }
     }
 

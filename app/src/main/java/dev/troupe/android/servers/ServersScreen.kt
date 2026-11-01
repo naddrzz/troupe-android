@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -43,6 +44,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -93,6 +98,7 @@ fun ServersScreen(
                         onClick = { onOpenServer(row.server.id) },
                         onRename = { renaming = row.server.id },
                         onRemove = { removing = row.server.id },
+                        onStayConnected = { viewModel.setStayConnected(row.server.id, it) },
                     )
                     HorizontalDivider(color = LocalTroupePalette.current.border)
                 }
@@ -137,13 +143,25 @@ private fun EmptyServers(onPair: () -> Unit, modifier: Modifier = Modifier) {
     }
 }
 
-/** Tap opens the server; long-press, the overflow button and TalkBack actions all offer Rename and Remove. */
+/**
+ * Tap opens the server; long-press, the overflow button and TalkBack actions all offer Rename,
+ * Remove and the "Stay connected in background" toggle.
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ServerRowItem(row: ServerRow, onClick: () -> Unit, onRename: () -> Unit, onRemove: () -> Unit) {
+private fun ServerRowItem(
+    row: ServerRow,
+    onClick: () -> Unit,
+    onRename: () -> Unit,
+    onRemove: () -> Unit,
+    onStayConnected: (Boolean) -> Unit,
+) {
     var menuOpen by remember { mutableStateOf(false) }
     val renameLabel = stringResource(R.string.servers_rename)
     val removeLabel = stringResource(R.string.servers_remove)
+    val stayConnected = row.server.stayConnected
+    val stayLabel = stringResource(R.string.servers_stay_connected)
+    val stayActionLabel = stringResource(if (stayConnected) R.string.servers_stay_connected_turn_off else R.string.servers_stay_connected_turn_on)
     Row(
         Modifier
             .fillMaxWidth()
@@ -153,6 +171,7 @@ private fun ServerRowItem(row: ServerRow, onClick: () -> Unit, onRename: () -> U
                 customActions = listOf(
                     CustomAccessibilityAction(renameLabel) { onRename(); true },
                     CustomAccessibilityAction(removeLabel) { onRemove(); true },
+                    CustomAccessibilityAction(stayActionLabel) { onStayConnected(!stayConnected); true },
                 )
             }
             .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
@@ -168,6 +187,13 @@ private fun ServerRowItem(row: ServerRow, onClick: () -> Unit, onRename: () -> U
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (stayConnected) {
+                Text(
+                    stringResource(R.string.servers_stays_connected),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = LocalTroupePalette.current.brandText,
+                )
+            }
         }
         ConnectionBadge(row.status)
         Box {
@@ -180,6 +206,12 @@ private fun ServerRowItem(row: ServerRow, onClick: () -> Unit, onRename: () -> U
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(text = { Text(renameLabel) }, onClick = { menuOpen = false; onRename() })
                 DropdownMenuItem(text = { Text(removeLabel) }, onClick = { menuOpen = false; onRemove() })
+                DropdownMenuItem(
+                    text = { Text(stayLabel) },
+                    trailingIcon = { Checkbox(checked = stayConnected, onCheckedChange = null) },
+                    onClick = { menuOpen = false; onStayConnected(!stayConnected) },
+                    modifier = Modifier.semantics { toggleableState = ToggleableState(stayConnected); role = Role.Checkbox },
+                )
             }
         }
     }

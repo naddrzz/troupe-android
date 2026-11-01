@@ -33,11 +33,16 @@ internal class AttentionAlerts {
 }
 
 /**
- * Whether new Attention gets a notification: while the app is in the foreground on another screen
- * than that server's screen or that Agent Chat, where it already shows.
+ * Whether new Attention gets a notification: in the foreground, on another screen than that
+ * server's screen or that Agent Chat, where it already shows; in the background, when its server
+ * stays connected ([stayConnected] ids), as the background connection then holds its socket.
  */
-internal fun mayAlert(item: AttentionItem, foreground: Boolean, screen: Screen): Boolean =
-    foreground && !screen.shows(item.serverId, item.sessionId)
+internal fun mayAlert(item: AttentionItem, foreground: Boolean, screen: Screen, stayConnected: Set<String>): Boolean =
+    if (foreground) !screen.shows(item.serverId, item.sessionId) else item.serverId in stayConnected
+
+/** Whether a finished turn gets a notification: in the background, from a server that stays connected. */
+internal fun mayNotifyFinished(turn: FinishedTurn, foreground: Boolean, stayConnected: Set<String>): Boolean =
+    !foreground && turn.serverId in stayConnected
 
 /** A string resource and its arguments, resolved by the Android layer. */
 internal data class Text(@StringRes val res: Int, val args: List<String> = emptyList())

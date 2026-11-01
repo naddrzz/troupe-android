@@ -20,6 +20,9 @@ data class AttentionItem(
     val since: Long,
 )
 
+/** A turn that ended in [sessionId]: `prompt_complete`, whatever its stop reason. */
+data class FinishedTurn(val serverId: String, val sessionId: String, val projectName: String?, val sessionTitle: String?)
+
 /** A Paired Server's Attention; [ready] once its first index and the requests of its live Sessions are in. */
 data class ServerAttention(val ready: Boolean, val items: List<AttentionItem>)
 

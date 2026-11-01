@@ -42,13 +42,30 @@ class AttentionAlertsTest {
 
     @Test fun notifiesInTheForegroundUnlessTheScreenAlreadyShowsIt() {
         val attention = item("a", server = "srv", session = "s1")
+        val none = emptySet<String>()
 
-        assertTrue(mayAlert(attention, foreground = true, screen = Screen.Other))
-        assertTrue(mayAlert(attention, foreground = true, screen = Screen.Server("other")))
-        assertTrue(mayAlert(attention, foreground = true, screen = Screen.Chat("srv", "s2")))
-        assertFalse(mayAlert(attention, foreground = true, screen = Screen.Server("srv")))
-        assertFalse(mayAlert(attention, foreground = true, screen = Screen.Chat("srv", "s1")))
-        assertFalse(mayAlert(attention, foreground = false, screen = Screen.Other))
+        assertTrue(mayAlert(attention, foreground = true, screen = Screen.Other, stayConnected = none))
+        assertTrue(mayAlert(attention, foreground = true, screen = Screen.Server("other"), stayConnected = none))
+        assertTrue(mayAlert(attention, foreground = true, screen = Screen.Chat("srv", "s2"), stayConnected = none))
+        assertFalse(mayAlert(attention, foreground = true, screen = Screen.Server("srv"), stayConnected = none))
+        assertFalse(mayAlert(attention, foreground = true, screen = Screen.Chat("srv", "s1"), stayConnected = none))
+    }
+
+    @Test fun inTheBackgroundOnlyAServerThatStaysConnectedNotifies() {
+        val attention = item("a", server = "srv", session = "s1")
+
+        assertFalse(mayAlert(attention, foreground = false, screen = Screen.Other, stayConnected = emptySet()))
+        assertFalse(mayAlert(attention, foreground = false, screen = Screen.Other, stayConnected = setOf("other")))
+        // The screen left on top no longer shows anything once the app is hidden.
+        assertTrue(mayAlert(attention, foreground = false, screen = Screen.Chat("srv", "s1"), stayConnected = setOf("srv")))
+    }
+
+    @Test fun aFinishedTurnNotifiesOnlyInTheBackgroundFromAServerThatStaysConnected() {
+        val turn = FinishedTurn("srv", "s1", "troupe", "Fix login")
+
+        assertTrue(mayNotifyFinished(turn, foreground = false, stayConnected = setOf("srv")))
+        assertFalse(mayNotifyFinished(turn, foreground = true, stayConnected = setOf("srv")))
+        assertFalse(mayNotifyFinished(turn, foreground = false, stayConnected = emptySet()))
     }
 
     @Test fun theNotificationNamesTheKindAndTheChat() {

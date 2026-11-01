@@ -12,7 +12,10 @@ import dev.troupe.android.core.protocol.TroupeJson
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -50,6 +53,9 @@ internal data class MonitorState(
  *
  * The subscription is shared with an open Agent Chat on the same socket (the host keeps one per
  * Session and connection): events seen twice are skipped by seq.
+ *
+ * [finished] names each Session whose turn ended (`prompt_complete`) after the app first
+ * subscribed it: live, or missed while disconnected and replayed on resume.
  */
 internal class AttentionMonitor(
     private val connection: ChatConnection,
@@ -57,12 +63,16 @@ internal class AttentionMonitor(
 ) {
     private val _state = MutableStateFlow(MonitorState())
     val state: StateFlow<MonitorState> = _state.asStateFlow()
+    private val _finished = MutableSharedFlow<String>(extraBufferCapacity = 64)
+    val finished: SharedFlow<String> = _finished.asSharedFlow()
 
     private class Tracked {
         val fold = PendingFold()
         var logEpoch = ""
         var lastSeq = 0L
         var subscribed = false
+        /** Seqs up to here were in the log before the app first subscribed: history, not news. */
+        var historyUpTo = Long.MAX_VALUE
     }
 
     private sealed interface Input {
@@ -178,6 +188,7 @@ internal class AttentionMonitor(
 
     private fun accept(sid: String, tracked: Tracked, payload: JsonElement?, liveOnly: Boolean) {
         val subscribed = payload?.let { runCatching { TroupeJson.decodeFromJsonElement(SubscribeReply.serializer(), it) }.getOrNull() } ?: return
+        if (tracked.logEpoch.isEmpty()) tracked.historyUpTo = subscribed.headSeq
         tracked.logEpoch = subscribed.logEpoch
         if (liveOnly) tracked.lastSeq = maxOf(tracked.lastSeq, subscribed.headSeq)
         parsePendingPermissions(sid, payload)?.let { tracked.fold.installPermissions(it, subscribed.headSeq) }
@@ -190,6 +201,7 @@ internal class AttentionMonitor(
         if (event.seq <= tracked.lastSeq) return
         tracked.fold.apply(event)
         tracked.lastSeq = event.seq
+        if (event.type == "prompt_complete" && event.seq > tracked.historyUpTo) _finished.tryEmit(event.sid.orEmpty())
         publish()
     }
 

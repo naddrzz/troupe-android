@@ -59,6 +59,11 @@ class ServersViewModel @Inject constructor(
         viewModelScope.launch { repository.rename(id, trimmed) }
     }
 
+    /** "Stay connected in background" for one server. */
+    fun setStayConnected(id: String, value: Boolean) {
+        viewModelScope.launch { repository.setStayConnected(id, value) }
+    }
+
     fun remove(id: String) {
         probes.remove(id)?.cancel()
         viewModelScope.launch { repository.remove(id) }

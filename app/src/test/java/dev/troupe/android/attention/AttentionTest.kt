@@ -13,6 +13,7 @@ import dev.troupe.android.testing.MainDispatcherRule
 import dev.troupe.android.testing.TestGraph
 import dev.troupe.android.testing.eventually
 import dev.troupe.android.testing.payloadString
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.jsonObject
 import org.junit.After
@@ -180,6 +181,38 @@ class AttentionTest {
         vm.respond(vm.ui.value.requests.single() as PendingRequest.Permission, "allow")
 
         eventually { keys().isEmpty() }
+    }
+
+    @Test fun aTurnThatEndsInALiveSessionIsReportedAsFinishedOnce() {
+        liveSession()
+        val finished = java.util.concurrent.CopyOnWriteArrayList<FinishedTurn>()
+        val collector = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            graph.attention.finished.collect { finished += it }
+        }
+        start()
+
+        chat.append("s1", "prompt_complete", promptComplete("s1"))
+
+        eventually { finished.isNotEmpty() }
+        assertEquals(listOf(FinishedTurn(serverId, "s1", "troupe", "Fix login")), finished.toList())
+        collector.cancel()
+    }
+
+    @Test fun aTurnThatEndedBeforeTheAppConnectedIsHistory() {
+        liveSession(turnActive = true)
+        chat.append("s1", "prompt_complete", promptComplete("s1"))
+        chat.append("s1", "user_prompt", userPrompt("s1", "Again", turnId = "turn-2"))
+        val finished = java.util.concurrent.CopyOnWriteArrayList<FinishedTurn>()
+        val collector = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            graph.attention.finished.collect { finished += it }
+        }
+
+        start()
+        chat.append("s1", "permission_request", permissionRequest("s1", "req-1", "Edit Login.kt"))
+        eventually { keys() == listOf("req-1") }
+
+        assertEquals(emptyList<FinishedTurn>(), finished.toList())
+        collector.cancel()
     }
 
     @Test fun removingTheServerDropsItsAttention() {

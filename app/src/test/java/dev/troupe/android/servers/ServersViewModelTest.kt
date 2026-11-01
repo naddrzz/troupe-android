@@ -85,6 +85,18 @@ class ServersViewModelTest {
         assertEquals(server.token, runBlocking { graph().repository.token(s.id) })
     }
 
+    @Test fun stayConnectedInBackgroundIsAPerServerToggleOffByDefault() {
+        val s = paired(name = "Box")
+        val vm = graph().serversViewModel()
+        assertFalse(shownRows(vm).single().server.stayConnected)
+
+        vm.setStayConnected(s.id, true)
+        runBlocking { withTimeout(10_000) { vm.rows.first { it?.single()?.server?.stayConnected == true } } }
+
+        vm.setStayConnected(s.id, false)
+        runBlocking { withTimeout(10_000) { vm.rows.first { it?.single()?.server?.stayConnected == false } } }
+    }
+
     @Test fun blankRenameIsIgnored() {
         val s = paired(name = "Box")
         val vm = graph().serversViewModel()
