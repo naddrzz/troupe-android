@@ -52,6 +52,14 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v5
 
+      # The version code is the commit count, which only grows along main.
+      - name: Require the tag on main
+        run: |
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::Release tags must point at a commit on main."
+            exit 1
+          fi
+
       - name: Decode keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.TROUPE_KEYSTORE_BASE64 }}

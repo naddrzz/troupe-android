@@ -5,7 +5,7 @@
 .DESCRIPTION
   up       Start the server on http://127.0.0.1:18080 with the fixed test token and wait for /health.
   down     Stop it and delete its volume.
-  reverse  Let the LDPlayer emulator reach it at http://127.0.0.1:18080 (adb reverse).
+  reverse  Let the LDPlayer emulator reach it at http://127.0.0.1:18080 (adb reverse; adb from TROUPE_ADB, else PATH).
   token    Print the test token (for pairing by hand on the emulator).
 
   The token below is test-only and also lives in RealServerTest. Never reuse it for a real server.
@@ -17,7 +17,8 @@ $ErrorActionPreference = 'Continue'
 $TestToken = '7e57700c7e57700c7e57700c7e57700c7e57700c7e57700c7e57700c7e57700c'
 $Root = Split-Path -Parent $PSScriptRoot
 $Compose = Join-Path $Root 'integration\docker-compose.yml'
-$Adb = 'D:\LDPlayer\LDPlayer9\adb.exe'
+# TROUPE_ADB picks an adb (for example LDPlayer's own); otherwise the one on PATH.
+$Adb = if ($env:TROUPE_ADB) { $env:TROUPE_ADB } else { 'adb' }
 $env:TROUPE_TEST_TOKEN = $TestToken
 
 switch ($Command) {
@@ -40,6 +41,7 @@ switch ($Command) {
     }
     'reverse' {
         & $Adb reverse tcp:18080 tcp:18080
+        if ($LASTEXITCODE -ne 0) { throw "adb reverse failed (adb: $Adb)" }
     }
     'token' {
         Write-Output $TestToken
