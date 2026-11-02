@@ -174,6 +174,17 @@ class ChatViewModelTest {
         assertEquals("ep-1", chat.requests("subscribe")[1].payloadString("logEpoch"))
     }
 
+    @Test fun aSubscribeTheHostNeverAnswersSaysTheChatIsUnavailable() {
+        chat.session("s1")
+        chat.unanswered = setOf("subscribe")
+        val serverId = runBlocking { graph.repository.add("Box", server.pairingInput()).id }
+        val vm = graph.chatViewModel(serverId, "s1")
+
+        eventually(timeoutMs = 25_000) { vm.ui.value.error != null }
+        assertEquals(UiMessage(R.string.chat_unavailable), vm.ui.value.error)
+        assertEquals(false, vm.ui.value.loading)
+    }
+
     @Test fun anUnknownSessionSaysTheChatIsUnavailable() {
         val serverId = runBlocking { graph.repository.add("Box", server.pairingInput()).id }
         val vm = graph.chatViewModel(serverId, "gone")

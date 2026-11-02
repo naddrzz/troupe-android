@@ -63,6 +63,8 @@ class FakeChatServer internal constructor(
     @Volatile var hostEpoch: String = "host-1"
     /** true: a subscribe's replay goes out before its reply, the events-overtake-the-reply case. */
     @Volatile var replayBeforeReply: Boolean = true
+    /** Request types the host receives but never answers, as a host that hangs on them. */
+    @Volatile var unanswered: Set<String> = emptySet()
     val sessions: MutableMap<String, Session> = ConcurrentHashMap()
     /** Every request frame the app sent on `/ws`, parsed. */
     val requests: MutableList<JsonObject> = CopyOnWriteArrayList()
@@ -212,6 +214,7 @@ class FakeChatServer internal constructor(
             when {
                 type == "authenticate" -> reply(id, authenticate(payload))
                 !authed -> reply(id, Err("unauthorized", "Unauthorized"))
+                type in unanswered -> Unit
                 type == "watch" -> watch(id, payload)
                 type == "list_persisted_sessions" -> reply(id, JsonArray(history))
                 type == "subscribe" -> subscribe(id, payload)

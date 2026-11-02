@@ -318,6 +318,10 @@ class ChatViewModel @Inject constructor(
 
     private suspend fun request(connection: ChatConnection, type: String, payload: JsonObject): ChatFrame.Reply? = try {
         connection.socket.request(type, payload)
+    } catch (e: ChatRequestTimeout) {
+        // The connection is up but the host never answered: nothing would retry, so say so.
+        unavailable()
+        null
     } catch (e: IOException) {
         // The connection dropped; the next one subscribes again from the cursor.
         null
