@@ -90,6 +90,14 @@ class FakeTroupeServer : Closeable {
     private var server = started(port = 0)
 
     private fun started(port: Int) = MockWebServer().apply {
+        // Connections this server closed sit in TIME_WAIT on its port; Linux refuses the rebind in comeBack() without this.
+        serverSocketFactory = object : javax.net.ServerSocketFactory() {
+            override fun createServerSocket() = java.net.ServerSocket().apply { reuseAddress = true }
+            override fun createServerSocket(port: Int) = getDefault().createServerSocket(port)
+            override fun createServerSocket(port: Int, backlog: Int) = getDefault().createServerSocket(port, backlog)
+            override fun createServerSocket(port: Int, backlog: Int, address: java.net.InetAddress?) =
+                getDefault().createServerSocket(port, backlog, address)
+        }
         dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse = route(request)
         }
@@ -114,17 +122,7 @@ class FakeTroupeServer : Closeable {
 
     /** Answers again on the same address, like a restarted server. */
     fun comeBack() {
-        val port = server.port
-        // Linux can refuse the just-closed port for a moment; a real restarted server would simply retry.
-        repeat(50) { attempt ->
-            try {
-                server = started(port)
-                return
-            } catch (e: java.net.BindException) {
-                if (attempt == 49) throw e
-                Thread.sleep(100)
-            }
-        }
+        server = started(port = server.port)
     }
 
     override fun close() = server.close()
