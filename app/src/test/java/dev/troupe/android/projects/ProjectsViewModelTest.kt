@@ -55,10 +55,14 @@ class ProjectsViewModelTest {
     }
 
     @Test fun sendsTheStoredTokenAsBearer() {
-        load(pairedServerId())
+        val stored = server.token
+        val id = pairedServerId()
+        // The server now accepts another token: the request still carries the one stored at pairing.
+        server.token = "rotated-token-fedcba9876543210"
 
+        assertEquals(ProjectsUi.Error(R.string.pair_error_unauthorized), load(id))
         val request = server.httpRequests.single { it.url.encodedPath == "/projects" }
-        assertEquals("Bearer ${server.token}", request.headers["Authorization"])
+        assertEquals("Bearer $stored", request.headers["Authorization"])
         assertEquals(null, request.headers["Origin"])
     }
 
