@@ -109,18 +109,13 @@ private fun CameraPreview(onResult: (String) -> Unit) {
             BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build(),
         )
         val executor = ContextCompat.getMainExecutor(context)
-        // The analyzer sees the same code every frame; hand each distinct value over once.
-        var lastValue: String? = null
+        val sightings = QrSightings()
         val controller = LifecycleCameraController(context).apply {
             setEnabledUseCases(CameraController.IMAGE_ANALYSIS)
             setImageAnalysisAnalyzer(
                 executor,
                 MlKitAnalyzer(listOf(scanner), ImageAnalysis.COORDINATE_SYSTEM_ORIGINAL, executor) { result ->
-                    val value = result.getValue(scanner)?.firstNotNullOfOrNull { it.rawValue }
-                    if (value != null && value != lastValue) {
-                        lastValue = value
-                        latest(value)
-                    }
+                    sightings.next(result.getValue(scanner)?.firstNotNullOfOrNull { it.rawValue })?.let { latest(it) }
                 },
             )
             bindToLifecycle(lifecycleOwner)
@@ -140,6 +135,21 @@ private fun CameraPreview(onResult: (String) -> Unit) {
             .aspectRatio(1f)
             .semantics { contentDescription = description },
     )
+}
+
+/**
+ * The analyzer sees the same code every frame: hand each value over once while it stays in view.
+ * A frame without a code resets that, so pointing at the same code again (after a failed pairing) retries.
+ */
+internal class QrSightings {
+    private var last: String? = null
+
+    /** The value to hand over for this frame's [value], or `null`. */
+    fun next(value: String?): String? {
+        val fresh = value?.takeIf { it != last }
+        last = value
+        return fresh
+    }
 }
 
 private fun Context.hasCameraPermission(): Boolean =
