@@ -114,7 +114,17 @@ class FakeTroupeServer : Closeable {
 
     /** Answers again on the same address, like a restarted server. */
     fun comeBack() {
-        server = started(port = server.port)
+        val port = server.port
+        // Linux can refuse the just-closed port for a moment; a real restarted server would simply retry.
+        repeat(50) { attempt ->
+            try {
+                server = started(port)
+                return
+            } catch (e: java.net.BindException) {
+                if (attempt == 49) throw e
+                Thread.sleep(100)
+            }
+        }
     }
 
     override fun close() = server.close()
