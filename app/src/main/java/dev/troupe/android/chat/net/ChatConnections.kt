@@ -106,6 +106,8 @@ class ChatConnections internal constructor(
      */
     suspend fun connection(serverId: String): ChatConnection = mutex.withLock {
         open[serverId]?.takeIf { it.state.value !is ConnectionState.Failed }?.let { return it }
+        // A connection that failed for good still has its health watch running; stop it before replacing it.
+        open.remove(serverId)?.stop()
         val server = repository.server(serverId)
         val token = repository.token(serverId)
         if (server == null || token == null) throw ChatConnectFailed(ConnectionFailure.Unauthorized)
