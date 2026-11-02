@@ -27,8 +27,7 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - uses: android-actions/setup-android@v3
-
+      # The runner image ships the Android SDK (ANDROID_HOME, licenses accepted); Gradle fetches missing platforms.
       - uses: gradle/actions/setup-gradle@v5
 
       # The integration test needs a real Troupe Server in Docker, so CI runs only the unit tests.
@@ -50,8 +49,6 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-
-      - uses: android-actions/setup-android@v3
 
       - uses: gradle/actions/setup-gradle@v5
 
