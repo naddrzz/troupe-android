@@ -42,7 +42,10 @@ class TerminalCursorStore(
         it?.let { StoredTerminal(it.claim, cursor.logEpoch, cursor.lastSeq) }
     }
 
-    suspend fun remove(serverId: String, terminalId: String) = edit(serverId, terminalId) { null }
+    /** Deletes without reading, so a record that no longer decrypts can still go. */
+    suspend fun remove(serverId: String, terminalId: String) {
+        store.edit { it.remove(key(serverId, terminalId)) }
+    }
 
     private suspend fun edit(serverId: String, terminalId: String, change: (StoredTerminal?) -> StoredTerminal?) {
         store.edit { prefs ->
