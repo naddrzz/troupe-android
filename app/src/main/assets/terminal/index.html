@@ -2,6 +2,9 @@
 <html>
 <head>
   <meta charset="utf-8">
+  <!-- Zoom is locked on purpose: pinch-zoom would magnify the viewport, not the font, so the
+       terminal's cols/rows (fit to the page) would stop matching what is visible and part of
+       every line would scroll off screen. -->
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <!-- Bundled assets only: nothing may load from the network. -->
   <meta http-equiv="Content-Security-Policy"

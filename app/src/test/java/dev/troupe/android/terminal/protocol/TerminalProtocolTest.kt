@@ -34,6 +34,11 @@ class TerminalProtocolTest {
         assertEquals(TerminalFrame.Exit("t1", 2), (parseTerminalFrame(exited) as TerminalFrame.Replay).exit)
     }
 
+    @Test fun aReplyNeverPrintsItsData() {
+        val reply = parseTerminalFrame("""{"id":"r1","success":true,"data":{"id":"t1","claim":"secret-claim"}}""")
+        assertFalse(reply.toString().contains("secret-claim"))
+    }
+
     @Test fun gapFrame() {
         val frame = parseTerminalFrame(fixture("terminal_gap.json")) as TerminalFrame.Gap
         assertEquals("t1", frame.terminalId)

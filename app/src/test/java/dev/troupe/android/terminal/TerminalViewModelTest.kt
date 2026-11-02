@@ -160,9 +160,9 @@ class TerminalViewModelTest {
         val vm = openTerminal()
         vm.bind(renderer)
 
+        // Back to back: a pause between sizes as long as the debounce would let one through.
         renderer.size.value = TermSize(100, 30)
         renderer.size.value = TermSize(60, 20)
-        Thread.sleep(50)
         renderer.size.value = TermSize(48, 30)
 
         eventually { server.terminalRequests("resize").isNotEmpty() }
@@ -249,6 +249,23 @@ class TerminalViewModelTest {
         // The cursor moved to the new log: live output continues from it.
         server.sendTerminalFrame(dataFrame("t1", 2, "!".toByteArray()))
         eventually { renderer.text == "fresh!" }
+    }
+
+    @Test fun aNewRendererGetsTheWholeLogReplayed() {
+        val vm = openTerminal(serverReplaying({ replayFrame("t1", "$ ".toByteArray(), "b".toByteArray()) }))
+        vm.bind(renderer)
+        server.sendTerminalFrame(dataFrame("t1", 2, "b".toByteArray()))
+        eventually { renderer.text == "$ b" }
+
+        // The Activity is recreated: a blank WebView takes the old one's place.
+        val recreated = RecordingRenderer()
+        onMain {
+            vm.unbind(renderer)
+            vm.bind(recreated)
+        }
+
+        eventually { recreated.text == "$ b" }
+        assertEquals(0, attaches()[1].payloadInt("lastSeq"))
     }
 
     @Test fun reattachSendsTheCurrentCursor() {

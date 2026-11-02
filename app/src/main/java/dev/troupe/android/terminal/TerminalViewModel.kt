@@ -26,6 +26,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -78,6 +79,8 @@ class TerminalViewModel @Inject constructor(
 
     // Touched only on the main thread (viewModelScope and the screen).
     private var renderer: TerminalRenderer? = null
+    /** The renderer what is on screen was drawn into: the cursor describes its contents. */
+    private var drawnInto: TerminalRenderer? = null
     private var binding: Job? = null
     private val unrendered = mutableListOf<(TerminalRenderer) -> Unit>()
     private var link: TerminalConnection? = null
@@ -93,24 +96,38 @@ class TerminalViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            val current = try {
+            try {
                 connections.connection(serverId)
             } catch (e: TerminalConnectFailed) {
                 val message = e.userMessage()
                 return@launch fail(message.text, message.arg)
             }
-            link = current
-            socket = current.socket
-            // Subscribe before attaching: the server sends the replay ahead of the attach reply.
-            launch(start = CoroutineStart.UNDISPATCHED) { current.socket.frames.collect(::onFrame) }
-            launch { current.state.collect(::onConnection) }
-            current.generation.filter { it > 0 }.collect { onConnected() }
+            // A connection replaced after pairing again is followed; its first connect attaches from the cursor.
+            connections.watch(serverId).collectLatest { current ->
+                link = current
+                socket = current.socket
+                // Subscribe before attaching: the server sends the replay ahead of the attach reply.
+                launch(start = CoroutineStart.UNDISPATCHED) { current.socket.frames.collect(::onFrame) }
+                launch { current.state.collect(::onConnection) }
+                current.generation.filter { it > 0 }.collect { onConnected() }
+            }
         }
     }
 
-    /** The header's Retry: reconnect or check the server now. */
+    /** The header's Retry: reconnect or check the server now; a connection that failed for good is replaced. */
     fun retryConnection() {
-        link?.retry()
+        if (link?.state?.value is ConnectionState.Failed) {
+            viewModelScope.launch {
+                try {
+                    connections.connection(serverId)
+                } catch (e: TerminalConnectFailed) {
+                    val message = e.userMessage()
+                    fail(message.text, message.arg)
+                }
+            }
+        } else {
+            link?.retry()
+        }
     }
 
     /**
@@ -146,11 +163,21 @@ class TerminalViewModel @Inject constructor(
         }
     }
 
-    /** Draws into [renderer] from now on (with any output that arrived before) and forwards its input and size. */
+    /**
+     * Draws into [renderer] from now on and forwards its input and size. The renderer bound before
+     * gets the output that arrived while unbound; a different one (a new screen, a recreated
+     * Activity) starts blank, so the cursor goes back to zero and the whole log is replayed into it.
+     */
     @OptIn(FlowPreview::class)
     fun bind(renderer: TerminalRenderer) {
         binding?.cancel()
         this.renderer = renderer
+        if (drawnInto != null && drawnInto !== renderer) {
+            unrendered.clear()
+            cursor = TerminalCursor()
+            if (live.isCompleted) onConnected()
+        }
+        drawnInto = renderer
         unrendered.forEach { it(renderer) }
         unrendered.clear()
         binding = viewModelScope.launch {

@@ -12,19 +12,25 @@ import dev.troupe.android.servers.PairedServerRepository
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.io.IOException
-import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -32,20 +38,31 @@ import javax.inject.Singleton
 class TerminalConnectFailed(val failure: ConnectionFailure, message: String?) : IOException(message ?: failure.name)
 
 /** A Paired Server's `/terminal/ws`: the [socket] to talk over, kept connected by its lifecycle. */
-class TerminalConnection internal constructor(val socket: TerminalSocket, private val lifecycle: ConnectionLifecycle) {
+class TerminalConnection internal constructor(
+    val socket: TerminalSocket,
+    private val lifecycle: ConnectionLifecycle,
+    /** The token it authenticates with. */
+    internal val token: String,
+    /** Reads View-only from `/health` on every connect. */
+    private val healthWatch: Job,
+) {
     val state: StateFlow<ConnectionState> get() = lifecycle.state
     /** Changes on every new connection; the server has then forgotten every attachment. */
     val generation: StateFlow<Int> get() = lifecycle.generation
 
     fun retry() = lifecycle.retry()
 
-    internal fun stop() = lifecycle.stop()
+    internal fun stop() {
+        healthWatch.cancel()
+        lifecycle.stop()
+    }
 }
 
 /**
  * One shared `/terminal/ws` connection per Paired Server, opened on first use and kept connected
  * from then on. A Terminal spawned from the Terminals tab and the Terminal screen that shows it
- * talk over the same connection.
+ * talk over the same connection. Forgetting the server stops its connection; pairing it again with
+ * a new token replaces it on the next [connection], and screens following [watch] move to the new one.
  */
 @Singleton
 class TerminalConnections internal constructor(
@@ -67,26 +84,36 @@ class TerminalConnections internal constructor(
     ) : this(sockets, repository, api, network, viewOnly, Dispatchers.IO, { Backoff() })
 
     private val mutex = Mutex()
-    private val open = ConcurrentHashMap<String, TerminalConnection>()
+    private val open = MutableStateFlow<Map<String, TerminalConnection>>(emptyMap())
     private val lifecycles = CoroutineScope(SupervisorJob() + dispatcher)
 
     /** For work that must outlive the screen that started it, such as a last cursor write. */
     val background = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     init {
-        lifecycles.launch { network.available.collect { open.values.forEach { it.retry() } } }
+        lifecycles.launch { network.available.collect { open.value.values.forEach { it.retry() } } }
+        lifecycles.launch {
+            repository.servers.collect { servers ->
+                val paired = servers.mapTo(HashSet()) { it.id }
+                mutex.withLock { open.value.keys.filterNot(paired::contains).forEach(::drop) }
+            }
+        }
     }
 
     /**
      * The connection of [serverId], started if it isn't yet. One that failed for good (a rejected
-     * token) is replaced, so pairing again takes effect. Throws [TerminalConnectFailed] for a server
-     * that is no longer paired.
+     * token) or that holds a token the server was paired again without is replaced, so pairing again
+     * takes effect. Throws [TerminalConnectFailed] for a server that is no longer paired.
      */
     suspend fun connection(serverId: String): TerminalConnection = mutex.withLock {
-        open[serverId]?.takeIf { it.state.value !is ConnectionState.Failed }?.let { return it }
         val server = repository.server(serverId)
         val token = repository.token(serverId)
-        if (server == null || token == null) throw TerminalConnectFailed(ConnectionFailure.Unauthorized, null)
+        if (server == null || token == null) {
+            drop(serverId)
+            throw TerminalConnectFailed(ConnectionFailure.Unauthorized, null)
+        }
+        open.value[serverId]?.takeIf { it.token == token && it.state.value !is ConnectionState.Failed }?.let { return it }
+        drop(serverId)
         val socket = sockets.create(server.address, token)
         val lifecycle = ConnectionLifecycle(
             socket,
@@ -94,15 +121,25 @@ class TerminalConnections internal constructor(
             scope = lifecycles,
             backoff = newBackoff(),
         )
-        lifecycles.launch {
+        val healthWatch = lifecycles.launch {
             lifecycle.generation.filter { it > 0 }.collectLatest {
                 (api.health(server.address) as? ApiResult.Ok)?.let { viewOnly.set(serverId, !it.value.allowRemoteWrites) }
             }
         }
-        TerminalConnection(socket, lifecycle).also {
-            open[serverId] = it
+        TerminalConnection(socket, lifecycle, token, healthWatch).also {
+            open.update { all -> all + (serverId to it) }
             lifecycle.start()
         }
+    }
+
+    /** Every connection [serverId] has from now on: the current one, then each that replaces it. */
+    fun watch(serverId: String): Flow<TerminalConnection> = open.map { it[serverId] }.filterNotNull().distinctUntilChanged()
+
+    /** Stops and forgets the connection of [serverId]; call with [mutex] held. */
+    private fun drop(serverId: String) {
+        val gone = open.value[serverId] ?: return
+        open.update { it - serverId }
+        gone.stop()
     }
 
     /**
@@ -123,7 +160,7 @@ class TerminalConnections internal constructor(
      * not reported as open elsewhere once its screen is gone.
      */
     fun detach(serverId: String, terminalId: String) {
-        val connection = open[serverId]?.takeIf { it.state.value == ConnectionState.Connected } ?: return
+        val connection = open.value[serverId]?.takeIf { it.state.value == ConnectionState.Connected } ?: return
         background.launch {
             try {
                 connection.socket.request("detach", buildJsonObject { put("terminalId", terminalId) })
@@ -135,7 +172,7 @@ class TerminalConnections internal constructor(
 
     /** Drops every connection; for tests that end. */
     internal fun closeAll() {
-        open.values.forEach { it.stop() }
+        open.value.values.forEach { it.stop() }
         lifecycles.cancel()
     }
 }

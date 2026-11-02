@@ -11,6 +11,8 @@ import dev.troupe.android.testing.TestGraph
 import dev.troupe.android.testing.eventually
 import dev.troupe.android.testing.payloadInt
 import dev.troupe.android.testing.payloadString
+import dev.troupe.android.testing.preservedList
+import dev.troupe.android.testing.preservedTerminal
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
@@ -99,12 +101,23 @@ class TerminalReconnectTest {
         val vm = openTerminal()
         assertEquals(ConnectionState.Connected, vm.connection.value)
 
+        server.healthy = false
         server.closeTerminalSockets(1001)
         until { vm.connection.value == ConnectionState.ServerOffline }
         // What is on screen stays, and nothing is re-attached until the server is back.
         assertEquals(TerminalUi.Live, vm.ui.value)
         assertEquals("$ ", renderer.text)
 
+        // Retry while the server is still down only asks `/health`.
+        val checks = server.healthChecks()
+        vm.retryConnection()
+        until { server.healthChecks() > checks }
+        Thread.sleep(200)
+        scheduler.runCurrent()
+        assertEquals(ConnectionState.ServerOffline, vm.connection.value)
+        assertEquals(1, server.terminalUpgrades.size)
+
+        server.healthy = true
         vm.retryConnection()
 
         until { vm.connection.value == ConnectionState.Connected && attaches().size == 2 }
@@ -124,10 +137,30 @@ class TerminalReconnectTest {
         assertEquals(1, attaches().size)
     }
 
+    @Test fun pairingAgainAfterARejectedTokenReconnectsTheOpenScreenOnRetry() {
+        val vm = openTerminal()
+        server.token = "rotated"
+        server.closeTerminalSockets(1011)
+        until { vm.connection.value is ConnectionState.Reconnecting }
+        advance(500.milliseconds)
+        until { vm.ui.value == TerminalUi.Failed(R.string.pair_error_unauthorized) }
+
+        runBlocking { graph.repository.add("Box", server.pairingInput()) }
+        vm.retryConnection()
+
+        until { vm.connection.value == ConnectionState.Connected && vm.ui.value == TerminalUi.Live && attaches().size == 2 }
+    }
+
     @Test fun aReconnectDoesNotListTheTerminalsAgainSoTheClaimIsNotReissued() {
         val vm = openTerminal()
+        val attach = server.onTerminalRequest
+        server.onTerminalRequest = { type, payload ->
+            if (type == "list_preserved") preservedList("p1", preservedTerminal("t1", claim = "claim-t1")) else attach(type, payload)
+        }
         val terminals = graph.terminalsViewModel(serverId, "p1")
         until { terminals.connection.value == ConnectionState.Connected }
+        terminals.refresh()
+        until { terminals.ui.value.terminals.isNotEmpty() }
 
         server.closeTerminalSockets(1011)
         until { vm.connection.value is ConnectionState.Reconnecting }
@@ -136,7 +169,7 @@ class TerminalReconnectTest {
         until { attaches().size == 2 && vm.connection.value == ConnectionState.Connected }
         Thread.sleep(200)
         scheduler.runCurrent()
-        assertEquals(0, server.terminalRequests("list_preserved").size)
+        assertEquals(1, server.terminalRequests("list_preserved").size)
         assertEquals(ConnectionState.Connected, terminals.connection.value)
     }
 }
