@@ -54,12 +54,13 @@ class TestGraph(dir: File, lifecycleDispatcher: CoroutineDispatcher = Dispatcher
     val api = ServerApi(client)
     private val cipher = XorTokenCipher()
     val repository = PairedServerRepository(dataStore, cipher)
-    val sockets = TerminalSocketFactory(client, ClientIdentityStore(dataStore))
+    // One identity for both sockets, like Hilt's @Singleton: the same clientInstanceId on /terminal/ws and /ws.
+    private val identity = ClientIdentityStore(dataStore)
+    val sockets = TerminalSocketFactory(client, identity)
     val network = FakeNetworkMonitor()
     val viewOnly = ViewOnlyRegistry()
     val connections = TerminalConnections(sockets, repository, api, network, viewOnly, lifecycleDispatcher) { Backoff(jitter = 0.0) }
     val cursors = TerminalCursorStore(dataStore, cipher)
-    private val identity = ClientIdentityStore(dataStore)
     val chatConnections = ChatConnections(ChatSocketFactory(client, identity), repository, api, network, lifecycleDispatcher) { Backoff(jitter = 0.0) }
     /** Reads [now] for the time a request was first seen. */
     @Volatile var now = 1_000_000L

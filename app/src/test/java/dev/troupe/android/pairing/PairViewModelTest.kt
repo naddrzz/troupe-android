@@ -80,7 +80,7 @@ class PairViewModelTest {
         assertFalse(auth.payloadString("deviceId").isNullOrEmpty())
         assertFalse(auth.payloadString("clientInstanceId").isNullOrEmpty())
         assertNull("no Origin header", server.terminalUpgrades.single().headers["Origin"])
-        assertTrue("token never in a URL", server.httpRequests.none { server.token in it.url.toString() })
+        assertTrue("token never in a URL", (server.httpRequests + server.terminalUpgrades).none { server.token in it.url.toString() })
     }
 
     @Test fun deviceIdIsStableAcrossPairings() {
