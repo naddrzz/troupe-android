@@ -28,7 +28,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -38,7 +41,8 @@ import javax.inject.Singleton
  * notification down once its Attention is gone; in the background it also posts "<Session>
  * finished" for servers that stay connected ([mayNotifyFinished]). Every notification is
  * `VISIBILITY_PRIVATE`, with a public version without names; while the app lock is on the private
- * one says no more. Tapping one opens its Agent Chat.
+ * one says no more, and turning the lock on or off posts the ones still shown again to match.
+ * Tapping one opens its Agent Chat.
  *
  * On Android 13+ the first notification without permission, or turning "Stay connected in
  * background" on, makes [permissionWanted] ask the app to show its rationale, once; what was held
@@ -58,6 +62,10 @@ class AttentionNotifier @Inject constructor(
     private val manager = NotificationManagerCompat.from(context)
     private val alerts = AttentionAlerts()
     private val held = LinkedHashMap<String, AttentionItem>()
+    private val heldTurns = LinkedHashMap<String, FinishedTurn>()
+    /** What is posted, by tag: posted again when the app lock changes. */
+    private val posted = HashMap<String, AttentionItem>()
+    private val postedTurns = HashMap<String, FinishedTurn>()
     /** Ids of the Paired Servers that stay connected in the background. */
     private var stayConnected: Set<String> = emptySet()
     private val _permissionWanted = MutableStateFlow(false)
@@ -88,6 +96,7 @@ class AttentionNotifier @Inject constructor(
                 val changes = alerts.update(servers)
                 changes.gone.forEach { (serverId, key) ->
                     held.remove(tag(serverId, key))
+                    posted.remove(tag(serverId, key))
                     manager.cancel(tag(serverId, key), 0)
                 }
                 changes.added.filter { mayAlert(it, screens.foreground.value, screens.current.value, stayConnected) }.forEach { notify(it) }
@@ -98,6 +107,9 @@ class AttentionNotifier @Inject constructor(
                 if (mayNotifyFinished(turn, screens.foreground.value, stayConnected)) notifyFinished(turn)
             }
         }
+        scope.launch {
+            lock.settings.map { it.enabled }.distinctUntilChanged().drop(1).collect { repost() }
+        }
     }
 
     /** The user answered the rationale or the system prompt; asked once either way. */
@@ -106,8 +118,13 @@ class AttentionNotifier @Inject constructor(
             store.edit { it[ASKED] = true }
             _permissionWanted.value = false
             val waiting = held.values.toList()
+            val waitingTurns = heldTurns.values.toList()
             held.clear()
-            if (granted) waiting.forEach { notify(it) }
+            heldTurns.clear()
+            if (granted) {
+                waiting.forEach { notify(it) }
+                waitingTurns.forEach { notifyFinished(it) }
+            }
         }
     }
 
@@ -128,17 +145,22 @@ class AttentionNotifier @Inject constructor(
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setPublicVersion(publicVersion())
             .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
             .setContentIntent(openChatIntent(context, ChatLink(item.serverId, item.sessionId, item.sessionTitle), tag.hashCode()))
             .build()
         manager.notify(tag, 0, notification)
+        posted[tag] = item
     }
 
     @SuppressLint("MissingPermission") // canPost() checks it.
     private suspend fun notifyFinished(turn: FinishedTurn) {
-        if (!canPost()) return
+        val tag = "${turn.serverId}/finished/${turn.sessionId}"
+        if (!canPost()) {
+            if (askOnce()) heldTurns[tag] = turn
+            return
+        }
         val locked = lock.settings.first().enabled
         val content = finishedContent(turn, locked)
-        val tag = "${turn.serverId}/finished/${turn.sessionId}"
         val notification = NotificationCompat.Builder(context, TURNS_CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(content.title.resolve())
@@ -146,9 +168,20 @@ class AttentionNotifier @Inject constructor(
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setPublicVersion(publicVersion(TURNS_CHANNEL, R.string.turn_finished_locked))
             .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
             .setContentIntent(openChatIntent(context, ChatLink(turn.serverId, turn.sessionId, turn.sessionTitle), tag.hashCode()))
             .build()
         manager.notify(tag, 0, notification)
+        postedTurns[tag] = turn
+    }
+
+    /** The app lock was turned on or off: the notifications still shown are posted again, silently, to match. */
+    private suspend fun repost() {
+        val shown = manager.activeNotifications.mapNotNull { it.tag }.toSet()
+        posted.keys.retainAll(shown)
+        postedTurns.keys.retainAll(shown)
+        posted.values.toList().forEach { notify(it) }
+        postedTurns.values.toList().forEach { notifyFinished(it) }
     }
 
     /** On Android 13+, asks the app to explain and request the permission unless it already did; true when it will. */

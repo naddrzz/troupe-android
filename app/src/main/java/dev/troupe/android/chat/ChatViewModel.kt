@@ -250,8 +250,9 @@ class ChatViewModel @Inject constructor(
 
     /**
      * Sends a write and waits for its reply. A dropped connection resends it once the next one is up,
-     * under the same [commandId], so it never runs twice. Null when no reply came in time or the
-     * connection failed for good.
+     * under the same [commandId], so it never runs twice. A write without one (`cancel_prompt`) is not
+     * resent: it may have run, and a resend could hit a later turn. Null when no reply came in time,
+     * the connection failed for good, or a write without [commandId] lost its connection.
      */
     private suspend fun command(type: String, payload: JsonObject, commandId: String?): ChatFrame.Reply? {
         val connection = link ?: return null
@@ -260,6 +261,7 @@ class ChatViewModel @Inject constructor(
             try {
                 return connection.socket.request(type, payload, commandId)
             } catch (e: ChatDisconnected) {
+                if (commandId == null) return null
                 combine(connection.generation, connection.state) { generation, state ->
                     generation > before || state is ConnectionState.Failed
                 }.first { it }
@@ -316,6 +318,10 @@ class ChatViewModel @Inject constructor(
 
     private suspend fun request(connection: ChatConnection, type: String, payload: JsonObject): ChatFrame.Reply? = try {
         connection.socket.request(type, payload)
+    } catch (e: ChatRequestTimeout) {
+        // The connection is up but the host never answered: nothing would retry, so say so.
+        unavailable()
+        null
     } catch (e: IOException) {
         // The connection dropped; the next one subscribes again from the cursor.
         null

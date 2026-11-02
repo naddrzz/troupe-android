@@ -1,6 +1,8 @@
 package dev.troupe.android.chat
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -348,7 +350,11 @@ private fun QuestionCard(question: PendingRequest.Question, enabled: Boolean, on
 @Composable
 private fun Plan(entries: List<PlanEntry>) {
     val palette = LocalTroupePalette.current
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    // Capped and scrollable, so a long plan never pushes the composer off the screen.
+    Column(
+        Modifier.fillMaxWidth().heightIn(max = 160.dp).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
         Text(stringResource(R.string.chat_plan), style = MaterialTheme.typography.labelMedium, color = palette.muted)
         entries.forEach { entry ->
             val (text, color) = when (entry.status) {

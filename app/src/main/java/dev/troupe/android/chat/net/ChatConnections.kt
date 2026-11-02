@@ -46,8 +46,8 @@ class ChatConnection internal constructor(
 }
 
 /**
- * One shared `/ws` connection per Paired Server, opened on first use and kept connected from then
- * on. The host writes a heartbeat every 10 s, so 25 s of silence reconnects.
+ * One shared `/ws` connection per Paired Server, opened on first use and kept connected until the
+ * server is removed. The host writes a heartbeat every 10 s, so 25 s of silence reconnects.
  */
 @Singleton
 class ChatConnections internal constructor(
@@ -72,6 +72,17 @@ class ChatConnections internal constructor(
 
     init {
         lifecycles.launch { network.available.collect { open.values.forEach { it.retry() } } }
+        // A server that is no longer paired keeps no connection: it would go on with a removed token.
+        lifecycles.launch {
+            repository.servers.collect {
+                mutex.withLock {
+                    open.keys.filter { repository.server(it) == null }.forEach { id ->
+                        open.remove(id)?.stop()
+                        pending.remove(id)
+                    }
+                }
+            }
+        }
     }
 
     /** The permission requests and questions waiting on the user on [serverId], by Session. */

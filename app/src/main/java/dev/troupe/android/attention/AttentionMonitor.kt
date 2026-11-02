@@ -8,6 +8,8 @@ import dev.troupe.android.chat.protocol.ChatErrorCodes
 import dev.troupe.android.chat.protocol.ChatFrame
 import dev.troupe.android.chat.protocol.SessionSummary
 import dev.troupe.android.chat.protocol.SubscribeReply
+import dev.troupe.android.chat.protocol.parseSnapshot
+import dev.troupe.android.core.net.ConnectionState
 import dev.troupe.android.core.protocol.TroupeJson
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.channels.Channel
@@ -48,8 +50,10 @@ internal data class MonitorState(
  *   Session with no open turn subscribes live-only (no replay); one with an open turn replays its
  *   log once, so a question asked before the app connected is seen. Later subscribes resume from
  *   the cursor `(logEpoch, lastSeq)`. Every reply's `pendingPermissions` is authoritative.
- * - Events fold through [PendingFold]. A `gap` subscribes live-only again for a fresh
- *   `pendingPermissions`, since a dropped `tool_call_update` may have been the only sign of an answer.
+ * - Events fold through [PendingFold]. A `gap`, or a `stale` cursor, rebuilds the fold from
+ *   `recover_session_snapshot`: a dropped `question_cancelled` or `tool_call_update` may have been
+ *   the only sign of an answer, and a question asked before a stale cursor is still in the log.
+ * - A connection that fails for good (a revoked token) takes the server's Attention with it.
  *
  * The subscription is shared with an open Agent Chat on the same socket (the host keeps one per
  * Session and connection): events seen twice are skipped by seq.
@@ -67,7 +71,7 @@ internal class AttentionMonitor(
     val finished: SharedFlow<String> = _finished.asSharedFlow()
 
     private class Tracked {
-        val fold = PendingFold()
+        var fold = PendingFold()
         var logEpoch = ""
         var lastSeq = 0L
         var subscribed = false
@@ -78,6 +82,7 @@ internal class AttentionMonitor(
     private sealed interface Input {
         data class Frame(val frame: ChatFrame) : Input
         data object Connected : Input
+        data object Failed : Input
     }
 
     private val inbox = Channel<Input>(Channel.UNLIMITED)
@@ -95,6 +100,7 @@ internal class AttentionMonitor(
             }
         }
         launch { connection.generation.collect { if (it > 0) inbox.send(Input.Connected) } }
+        launch { connection.state.collect { if (it is ConnectionState.Failed) inbox.send(Input.Failed) } }
         for (input in inbox) {
             when (input) {
                 Input.Connected -> {
@@ -102,10 +108,15 @@ internal class AttentionMonitor(
                     projectNames()?.let { names -> _state.update { it.copy(projects = names) } }
                     watch()
                 }
+                Input.Failed -> {
+                    sessions.clear()
+                    revision = null
+                    _state.value = MonitorState()
+                }
                 is Input.Frame -> when (val frame = input.frame) {
                     is ChatFrame.Watch -> onWatchFrame(frame)
                     is ChatFrame.Event -> onEvent(frame)
-                    is ChatFrame.Gap -> sessions[frame.sid]?.let { refresh(frame.sid, it) }
+                    is ChatFrame.Gap -> sessions[frame.sid]?.let { recover(frame.sid, it) }
                     else -> Unit
                 }
             }
@@ -169,9 +180,9 @@ internal class AttentionMonitor(
         }) ?: return
         if (!reply.ok) {
             if (reply.code == ChatErrorCodes.STALE) {
-                // Another log incarnation: start over from its head.
+                // Another log incarnation: start over from its snapshot.
                 sessions[sid] = Tracked()
-                refresh(sid, sessions.getValue(sid))
+                recover(sid, sessions.getValue(sid))
             } else {
                 sessions.remove(sid)
             }
@@ -180,10 +191,29 @@ internal class AttentionMonitor(
         accept(sid, tracked, reply.payload, liveOnly = tracked.logEpoch.isEmpty() && session.turnActive != true)
     }
 
-    /** A live-only subscribe: the host's current `pendingPermissions`, and the cursor moves to its head. */
-    private suspend fun refresh(sid: String, tracked: Tracked) {
-        val reply = request("subscribe", buildJsonObject { put("sessionId", sid) }) ?: return
-        if (reply.ok) accept(sid, tracked, reply.payload, liveOnly = true)
+    /**
+     * Rebuilds [tracked] from `recover_session_snapshot`, which also subscribes: the fold of its
+     * events, its `pendingPermissions` (or the permissions held, when it sends none), and the cursor
+     * at its watermark. What the snapshot holds is not news: no finished turn is reported from it.
+     */
+    private suspend fun recover(sid: String, tracked: Tracked) {
+        val reply = request("recover_session_snapshot", buildJsonObject { put("sessionId", sid) }) ?: return
+        val snapshot = parseSnapshot(reply.payload)
+        if (!reply.ok || snapshot == null) {
+            sessions.remove(sid)
+            return publish()
+        }
+        val permissions = parsePendingPermissions(sid, reply.payload)
+            ?: tracked.fold.pending().filterIsInstance<PendingRequest.Permission>()
+        tracked.fold = PendingFold().apply {
+            snapshot.events.filter { it.sid == null || it.sid == sid }.forEach(::apply)
+            installPermissions(permissions, snapshot.watermark)
+        }
+        if (tracked.logEpoch.isEmpty()) tracked.historyUpTo = snapshot.watermark
+        tracked.logEpoch = snapshot.logEpoch
+        tracked.lastSeq = snapshot.watermark
+        tracked.subscribed = true
+        publish()
     }
 
     private fun accept(sid: String, tracked: Tracked, payload: JsonElement?, liveOnly: Boolean) {

@@ -1,5 +1,6 @@
 package dev.troupe.android.chat
 
+import dev.troupe.android.core.net.ConnectionState
 import dev.troupe.android.testing.FakeChatServer.Companion.summary
 import dev.troupe.android.testing.FakeTroupeServer
 import dev.troupe.android.testing.MainDispatcherRule
@@ -98,5 +99,17 @@ class ChatsViewModelTest {
         server.chat.closeAll(1011)
 
         eventually { server.chat.requests("watch").size == 2 && ids(vm) == listOf("b", "a") }
+    }
+
+    @Test fun theHeaderShowsTheChatConnectionAndItsRetryReconnectsIt() {
+        val vm = open()
+        eventually { vm.connection.value == ConnectionState.Connected }
+
+        // A deliberate stop: the connection waits for the Retry before checking /health.
+        server.chat.closeAll(1001)
+        eventually { vm.connection.value == ConnectionState.ServerOffline }
+        vm.retryConnection()
+
+        eventually { vm.connection.value == ConnectionState.Connected && server.chat.requests("watch").size == 2 }
     }
 }

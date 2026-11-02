@@ -1,6 +1,7 @@
 package dev.troupe.android.integration
 
 import dev.troupe.android.R
+import dev.troupe.android.attention.AttentionKind
 import dev.troupe.android.chat.protocol.ChatErrorCodes
 import dev.troupe.android.chat.protocol.ChatFrame
 import dev.troupe.android.core.net.ApiResult
@@ -74,12 +75,15 @@ class RealChatServerTest {
         assertTrue("list_persisted_sessions: ${index.code} ${index.message}", index.ok && index.payload is JsonArray)
     }
 
-    /** No agent runs on the Docker server, so nothing can wait on the user: the list is ready and empty. */
-    @Test fun theAttentionOfAServerWithoutAgentsIsReadyAndEmpty() {
+    /**
+     * No agent runs on the Docker server, so no request can wait on the user: the list is ready and
+     * holds none. A stopped chat may be left in the fixture's volume by an earlier run, so it is not counted.
+     */
+    @Test fun theAttentionOfAServerWithoutAgentsIsReadyAndHoldsNoRequest() {
         val serverId = pair()
         graph.attention.start()
         val attention = runBlocking { withTimeout(15_000) { graph.attention.servers.first { it[serverId]?.ready == true } } }
-        assertEquals(emptyList<Any>(), attention.getValue(serverId).items)
+        assertEquals(emptyList<Any>(), attention.getValue(serverId).items.filter { it.kind != AttentionKind.Stopped })
     }
 
     @Test fun theChatsTabOfAProjectWithoutSessionsIsEmpty() {

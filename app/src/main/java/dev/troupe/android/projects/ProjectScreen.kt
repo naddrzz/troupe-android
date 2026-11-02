@@ -19,13 +19,14 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.troupe.android.R
 import dev.troupe.android.chat.ChatsTab
+import dev.troupe.android.chat.ChatsViewModel
 import dev.troupe.android.core.ui.TroupeTopBar
 import dev.troupe.android.terminal.TerminalsTab
 import dev.troupe.android.terminal.TerminalsViewModel
 
 /**
- * A Project: its Agent Chats and its Terminals, one tab apart. Opens on Terminals. [terminals] is
- * the same ViewModel the Terminals tab uses; the header shows its connection.
+ * A Project: its Agent Chats and its Terminals, one tab apart. Opens on Terminals. [terminals] and
+ * [chats] are the ViewModels the tabs use; the header shows the connection of the tab shown.
  */
 @Composable
 fun ProjectScreen(
@@ -34,12 +35,21 @@ fun ProjectScreen(
     onOpenTerminal: (terminalId: String) -> Unit,
     onOpenChat: (sessionId: String, title: String?) -> Unit,
     terminals: TerminalsViewModel = hiltViewModel(),
+    chats: ChatsViewModel = hiltViewModel(),
 ) {
     var tab by rememberSaveable { mutableIntStateOf(TERMINALS) }
-    val connection by terminals.connection.collectAsStateWithLifecycle()
+    val terminalConnection by terminals.connection.collectAsStateWithLifecycle()
+    val chatConnection by chats.connection.collectAsStateWithLifecycle()
     val viewOnly by terminals.viewOnly.collectAsStateWithLifecycle()
     Scaffold(topBar = {
-        TroupeTopBar(projectName, onBack = onBack, connection = connection, onRetry = terminals::retryConnection, viewOnly = viewOnly)
+        val onChats = tab == CHATS
+        TroupeTopBar(
+            projectName,
+            onBack = onBack,
+            connection = if (onChats) chatConnection else terminalConnection,
+            onRetry = if (onChats) chats::retryConnection else terminals::retryConnection,
+            viewOnly = viewOnly,
+        )
     }) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
             PrimaryTabRow(selectedTabIndex = tab) {
@@ -48,7 +58,7 @@ fun ProjectScreen(
             }
             Box(Modifier.fillMaxSize()) {
                 when (tab) {
-                    CHATS -> ChatsTab(onOpenChat = onOpenChat)
+                    CHATS -> ChatsTab(onOpenChat = onOpenChat, viewModel = chats)
                     else -> TerminalsTab(onOpenTerminal = onOpenTerminal, viewModel = terminals)
                 }
             }

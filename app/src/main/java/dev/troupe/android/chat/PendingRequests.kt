@@ -74,7 +74,8 @@ class PendingRequests {
  *
  * A permission request is live only (never in the durable log), so a `subscribe` or snapshot
  * reply's `pendingPermissions` is the authoritative list: [installPermissions] replaces the
- * permissions held and settles every `permission_request` at or below that reply's head.
+ * permissions held and settles every event at or below that reply's head, so a replayed
+ * `permission_request`, `tool_call_update` or `prompt_complete` leaves the permissions as listed.
  *
  * The host sends no "answered" event, so a request leaves when the signals it does send say so:
  * - a question on `question_cancelled`;
@@ -99,8 +100,9 @@ class PendingFold {
 
     fun apply(event: ChatFrame.Event) {
         val p = event.payload
+        val settled = event.seq <= permissionsSettledAt
         when (event.type) {
-            "permission_request" -> if (event.seq > permissionsSettledAt) {
+            "permission_request" -> if (!settled) {
                 parsePermissionRequest(event.sid.orEmpty(), p)?.let { pending[it.id] = it }
             }
             "question_request" -> parseQuestionRequest(event.sid.orEmpty(), p)?.let { pending[it.id] = it }
@@ -108,9 +110,11 @@ class PendingFold {
             "tool_call_update" -> (p["update"] as? JsonObject)?.let { update ->
                 val toolCallId = update.string("toolCallId") ?: return@let
                 val status = update.string("status") ?: return@let
-                if (status != "pending") pending.values.removeAll { it is PendingRequest.Permission && it.toolCallId == toolCallId }
+                if (status != "pending" && !settled) {
+                    pending.values.removeAll { it is PendingRequest.Permission && it.toolCallId == toolCallId }
+                }
             }
-            "prompt_complete", "session_closed" -> pending.clear()
+            "prompt_complete", "session_closed" -> pending.values.removeAll { !settled || it !is PendingRequest.Permission }
         }
     }
 }

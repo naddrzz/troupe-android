@@ -1,6 +1,7 @@
 package dev.troupe.android.attention
 
 import dev.troupe.android.chat.PendingRequest
+import dev.troupe.android.chat.net.ChatConnectFailed
 import dev.troupe.android.testing.FakeChatServer.Companion.permissionRequest
 import dev.troupe.android.testing.FakeChatServer.Companion.promptComplete
 import dev.troupe.android.testing.FakeChatServer.Companion.questionCancelled
@@ -13,6 +14,9 @@ import dev.troupe.android.testing.MainDispatcherRule
 import dev.troupe.android.testing.TestGraph
 import dev.troupe.android.testing.eventually
 import dev.troupe.android.testing.payloadString
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.jsonObject
@@ -186,7 +190,7 @@ class AttentionTest {
     @Test fun aTurnThatEndsInALiveSessionIsReportedAsFinishedOnce() {
         liveSession()
         val finished = java.util.concurrent.CopyOnWriteArrayList<FinishedTurn>()
-        val collector = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+        val collector = CoroutineScope(Dispatchers.IO).launch(start = CoroutineStart.UNDISPATCHED) {
             graph.attention.finished.collect { finished += it }
         }
         start()
@@ -203,7 +207,7 @@ class AttentionTest {
         chat.append("s1", "prompt_complete", promptComplete("s1"))
         chat.append("s1", "user_prompt", userPrompt("s1", "Again", turnId = "turn-2"))
         val finished = java.util.concurrent.CopyOnWriteArrayList<FinishedTurn>()
-        val collector = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+        val collector = CoroutineScope(Dispatchers.IO).launch(start = CoroutineStart.UNDISPATCHED) {
             graph.attention.finished.collect { finished += it }
         }
 
@@ -223,6 +227,60 @@ class AttentionTest {
         runBlocking { graph.repository.remove(serverId) }
 
         eventually { graph.attention.servers.value[serverId] == null }
+        // Its `/ws` is closed too: no connection is left to go on with the removed token.
+        eventually { runCatching { runBlocking { graph.chatConnections.connection(serverId) } }.exceptionOrNull() is ChatConnectFailed }
+    }
+
+    @Test fun aReplayedTurnEndLeavesThePermissionsTheSubscribeReplyListed() {
+        liveSession(turnActive = true)
+        chat.append("s1", "prompt_complete", promptComplete("s1"))
+        chat.append("s1", "user_prompt", userPrompt("s1", "Again", turnId = "turn-2"))
+        chat.append("s1", "permission_request", permissionRequest("s1", "req-1", "Edit Login.kt"))
+
+        start()
+        // Folded after the replay, so the replay is in by then.
+        chat.append("s1", "question_request", questionRequest("s1", "q-1", "Which branch?"))
+
+        eventually(message = { "keys: ${keys()}" }) { keys().toSet() == setOf("req-1", "q-1") }
+    }
+
+    @Test fun aGapRecoversFromASnapshotSoADroppedCancelTakesTheQuestionAway() {
+        liveSession()
+        start()
+        chat.append("s1", "question_request", questionRequest("s1", "q-1", "Which branch?"))
+        eventually { keys() == listOf("q-1") }
+
+        chat.append("s1", "question_cancelled", questionCancelled("s1", "q-1"), deliver = false)
+        chat.gap("s1")
+
+        eventually { chat.requests("recover_session_snapshot").size == 1 }
+        eventually(message = { "keys: ${keys()}" }) { keys().isEmpty() }
+    }
+
+    @Test fun aStaleCursorRecoversFromASnapshotSoAQuestionAskedMeanwhileIsSeen() {
+        liveSession()
+        start()
+        eventually { chat.requests("subscribe").size == 1 }
+
+        chat.closeAll(1011)
+        // The host restarted: its log was reborn under a new epoch, and the agent asked meanwhile.
+        chat.sessions.getValue("s1").logEpoch = "ep-2"
+        chat.append("s1", "question_request", questionRequest("s1", "q-1", "Which branch?"))
+
+        eventually { chat.requests("recover_session_snapshot").size == 1 }
+        eventually(message = { "keys: ${keys()}" }) { keys() == listOf("q-1") }
+    }
+
+    @Test fun aConnectionThatFailsForGoodTakesTheServersAttentionWithIt() {
+        chat.history = listOf(summary("s9", "p-zeta", "Crashed run", lastActivityAt = 7_000, status = "error"))
+        start()
+        eventually { keys() == listOf("stopped:s9") }
+
+        // The token is revoked: the next handshake is refused for good.
+        server.token = "revoked-token-0000000000000000"
+        chat.closeAll(1011)
+
+        eventually { graph.attention.servers.value[serverId] == ServerAttention(ready = false, items = emptyList()) }
     }
 
     @Test fun theProjectsScreenListsTheServersAttention() {

@@ -28,7 +28,13 @@ class BackgroundConnectionTest {
     @Test fun theOngoingNotificationNamesTheServersThatStayConnected() {
         val servers = listOf(server("Laptop", stay = true), server("VPS", stay = false), server("Desktop", stay = true))
 
-        assertEquals(Text(R.string.background_connected, listOf("Laptop, Desktop")), connectedContent(servers))
+        assertEquals(Text(R.string.background_connected, listOf("Laptop, Desktop")), connectedContent(servers, locked = false))
+    }
+
+    @Test fun whileTheAppLockIsOnTheOngoingNotificationNamesNoServer() {
+        val servers = listOf(server("Laptop", stay = true))
+
+        assertEquals(Text(R.string.background_connected_public), connectedContent(servers, locked = true))
     }
 
     @Test fun aFinishedTurnNamesItsSessionAndProject() {

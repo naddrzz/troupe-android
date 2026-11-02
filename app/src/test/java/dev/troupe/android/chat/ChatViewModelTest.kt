@@ -18,6 +18,9 @@ import dev.troupe.android.testing.eventually
 import dev.troupe.android.testing.payloadInt
 import dev.troupe.android.testing.payloadString
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -98,6 +101,15 @@ class ChatViewModelTest {
         assertEquals(0, chat.requests("recover_session_snapshot").size)
     }
 
+    @Test fun subagentTextStaysOutButAnExplicitNullParentIsTheMainAgent() {
+        val vm = open()
+
+        chat.append("s1", "message_chunk", JsonObject(messageChunk("s1", " (subagent)") + ("parentToolCallId" to JsonPrimitive("tc-9"))))
+        chat.append("s1", "message_chunk", JsonObject(messageChunk("s1", ", done.") + ("parentToolCallId" to JsonNull)))
+
+        assertSettles(vm, listOf("Fix the bug", "On it, done."))
+    }
+
     @Test fun replayThatFollowsTheSubscribeReplyRendersTheSame() {
         chat.replayBeforeReply = false
         val vm = open()
@@ -160,6 +172,17 @@ class ChatViewModelTest {
         chat.append("s1", "user_prompt", userPrompt("s1", "Thanks", turnId = "turn-2"))
         assertSettles(vm, listOf("Fix the bug", "On it", "done:end_turn", "Thanks"))
         assertEquals("ep-1", chat.requests("subscribe")[1].payloadString("logEpoch"))
+    }
+
+    @Test fun aSubscribeTheHostNeverAnswersSaysTheChatIsUnavailable() {
+        chat.session("s1")
+        chat.unanswered = setOf("subscribe")
+        val serverId = runBlocking { graph.repository.add("Box", server.pairingInput()).id }
+        val vm = graph.chatViewModel(serverId, "s1")
+
+        eventually(timeoutMs = 25_000) { vm.ui.value.error != null }
+        assertEquals(UiMessage(R.string.chat_unavailable), vm.ui.value.error)
+        assertEquals(false, vm.ui.value.loading)
     }
 
     @Test fun anUnknownSessionSaysTheChatIsUnavailable() {

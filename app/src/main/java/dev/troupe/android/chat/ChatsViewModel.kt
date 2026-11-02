@@ -47,6 +47,10 @@ class ChatsViewModel @Inject constructor(
     private val projectId: String = checkNotNull(savedState["projectId"])
     private val _ui = MutableStateFlow(ChatsUi())
     val ui: StateFlow<ChatsUi> = _ui.asStateFlow()
+    private val _connection = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
+    /** The Paired Server's `/ws` connection, for the header while this tab shows. */
+    val connection: StateFlow<ConnectionState> = _connection.asStateFlow()
+    private var link: ChatConnection? = null
 
     /** `(hostEpoch, n)` of the last watch frame applied. */
     private var revision: Pair<String, Long>? = null
@@ -58,6 +62,7 @@ class ChatsViewModel @Inject constructor(
             } catch (e: ChatConnectFailed) {
                 return@launch _ui.update { it.copy(loading = false, error = e.failure.userMessage(null)) }
             }
+            link = connection
             // Collect before watching: the host queues the state frame ahead of the watch reply.
             launch(start = CoroutineStart.UNDISPATCHED) {
                 connection.socket.frames.collect { frame ->
@@ -66,11 +71,17 @@ class ChatsViewModel @Inject constructor(
             }
             launch {
                 connection.state.collect { state ->
+                    _connection.value = state
                     if (state is ConnectionState.Failed) _ui.update { it.copy(loading = false, error = state.reason.userMessage(state.message)) }
                 }
             }
             connection.generation.collect { if (it > 0) watch(connection) }
         }
+    }
+
+    /** The header's Retry: reconnect or check the server now. */
+    fun retryConnection() {
+        link?.retry()
     }
 
     private suspend fun watch(connection: ChatConnection) {

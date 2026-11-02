@@ -16,6 +16,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -26,12 +27,20 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.troupe.android.R
 import dev.troupe.android.core.theme.LocalTroupePalette
+import kotlinx.coroutines.delay
 
 /** A Project's Chats tab: its Sessions, newest first, kept current by the server. */
 @Composable
 fun ChatsTab(onOpenChat: (sessionId: String, title: String?) -> Unit, viewModel: ChatsViewModel = hiltViewModel()) {
     val state by viewModel.ui.collectAsStateWithLifecycle()
     val palette = LocalTroupePalette.current
+    // The ages tick on their own; once a minute is as precise as they read.
+    val now by produceState(System.currentTimeMillis()) {
+        while (true) {
+            delay(30_000)
+            value = System.currentTimeMillis()
+        }
+    }
     Column(Modifier.fillMaxSize()) {
         val notice = when {
             state.error != null -> null
@@ -59,7 +68,7 @@ fun ChatsTab(onOpenChat: (sessionId: String, title: String?) -> Unit, viewModel:
         }
         LazyColumn(Modifier.weight(1f)) {
             items(state.sessions, key = { it.id }) { row ->
-                SessionRowItem(row, onClick = { onOpenChat(row.id, row.title) })
+                SessionRowItem(row, now, onClick = { onOpenChat(row.id, row.title) })
                 HorizontalDivider(color = palette.border)
             }
         }
@@ -67,7 +76,7 @@ fun ChatsTab(onOpenChat: (sessionId: String, title: String?) -> Unit, viewModel:
 }
 
 @Composable
-private fun SessionRowItem(row: SessionRow, onClick: () -> Unit) {
+private fun SessionRowItem(row: SessionRow, now: Long, onClick: () -> Unit) {
     val palette = LocalTroupePalette.current
     Row(
         Modifier
@@ -87,7 +96,7 @@ private fun SessionRowItem(row: SessionRow, onClick: () -> Unit) {
         )
         if (row.lastActivityAt > 0) {
             Text(
-                DateUtils.getRelativeTimeSpanString(row.lastActivityAt, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS).toString(),
+                DateUtils.getRelativeTimeSpanString(row.lastActivityAt, now, DateUtils.MINUTE_IN_MILLIS).toString(),
                 style = MaterialTheme.typography.bodySmall,
                 color = palette.muted,
                 maxLines = 1,

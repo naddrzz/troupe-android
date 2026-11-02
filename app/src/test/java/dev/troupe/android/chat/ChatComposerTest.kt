@@ -1,6 +1,7 @@
 package dev.troupe.android.chat
 
 import dev.troupe.android.R
+import dev.troupe.android.core.net.ConnectionState
 import dev.troupe.android.terminal.UiMessage
 import dev.troupe.android.testing.FakeChatServer.Companion.messageChunk
 import dev.troupe.android.testing.FakeChatServer.Companion.promptComplete
@@ -10,6 +11,7 @@ import dev.troupe.android.testing.MainDispatcherRule
 import dev.troupe.android.testing.TestGraph
 import dev.troupe.android.testing.eventually
 import dev.troupe.android.testing.payloadString
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -115,6 +117,23 @@ class ChatComposerTest {
         assertEquals("s1", cancel.payloadString("sessionId"))
         assertEquals(ChatItem.TurnComplete::class, vm.ui.value.items.last()::class)
         assertEquals("cancelled", (vm.ui.value.items.last() as ChatItem.TurnComplete).stopReason)
+    }
+
+    @Test fun aCancelThatLostItsConnectionIsNotResentOnTheNextOne() {
+        val vm = open()
+        chat.startTurnElsewhere("s1", "From my laptop")
+        eventually { vm.ui.value.turnRunning }
+        // A deliberate stop: the connection waits for the user's Retry before checking /health.
+        chat.closeAll(1001)
+        eventually { vm.connection.value == ConnectionState.ServerOffline }
+
+        vm.cancel()
+        runBlocking(Dispatchers.Main) {}
+        vm.retryConnection()
+
+        eventually { chat.requests("subscribe").size == 2 }
+        Thread.sleep(200)
+        assertEquals(0, chat.requests("cancel_prompt").size)
     }
 
     @Test fun aTurnRunningOnAnotherDeviceShowsCancel() {
