@@ -17,6 +17,7 @@ import mockwebserver3.Dispatcher
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import mockwebserver3.RecordedRequest
+import mockwebserver3.SocketEffect
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
@@ -87,17 +88,12 @@ class FakeTroupeServer : Closeable {
     /** A scripted error reply `{success: false, code, error}`. */
     class Refused(val code: String, message: String = code) : Exception(message)
 
-    private var server = started(port = 0)
+    private val server = started(port = 0)
+
+    /** While true every connection is dropped before a response, which the app sees as an unreachable server. */
+    @Volatile private var offline = false
 
     private fun started(port: Int) = MockWebServer().apply {
-        // Connections this server closed sit in TIME_WAIT on its port; Linux refuses the rebind in comeBack() without this.
-        serverSocketFactory = object : javax.net.ServerSocketFactory() {
-            override fun createServerSocket() = java.net.ServerSocket().apply { reuseAddress = true }
-            override fun createServerSocket(port: Int) = getDefault().createServerSocket(port)
-            override fun createServerSocket(port: Int, backlog: Int) = getDefault().createServerSocket(port, backlog)
-            override fun createServerSocket(port: Int, backlog: Int, address: java.net.InetAddress?) =
-                getDefault().createServerSocket(port, backlog, address)
-        }
         dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse = route(request)
         }
@@ -113,21 +109,23 @@ class FakeTroupeServer : Closeable {
 
     /** Stops answering: open connections drop and new ones are refused. */
     fun goOffline() {
+        // The listener stays up: rebinding a closed port in comeBack() fails on Linux CI.
+        offline = true
         terminalSockets.clear()
         // A server-side WebSocket has no cancel(); 1011 is the abnormal end a crash or a dropped link looks like.
         openSockets.forEach { it.close(1011, null) }
         chat.closeAll(1011)
-        server.close()
     }
 
     /** Answers again on the same address, like a restarted server. */
     fun comeBack() {
-        server = started(port = server.port)
+        offline = false
     }
 
     override fun close() = server.close()
 
     private fun route(request: RecordedRequest): MockResponse {
+        if (offline) return MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build()
         val path = request.url.encodedPath
         if (path == "/terminal/ws") {
             terminalUpgrades += request
