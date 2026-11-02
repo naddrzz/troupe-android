@@ -32,4 +32,10 @@ class BackoffTest {
         assertTrue("$delays", delays.all { it in 24.seconds..30.seconds })
         assertTrue("jitter varies the delay: $delays", delays.toSet().size > 1)
     }
+
+    @Test fun cappedDelaysDoNotClusterAtTheCap() {
+        val b = Backoff(random = Random(7))
+        val capped = List(110) { b.next() }.drop(10)
+        assertTrue("$capped", capped.none { it == 30.seconds })
+    }
 }

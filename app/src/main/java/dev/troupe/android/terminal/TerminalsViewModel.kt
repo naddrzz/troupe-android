@@ -19,6 +19,7 @@ import dev.troupe.android.terminal.protocol.TerminalFrame
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
@@ -80,21 +81,33 @@ class TerminalsViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            val current = try {
+            try {
                 connections.connection(serverId)
             } catch (e: TerminalConnectFailed) {
                 return@launch _ui.update { it.copy(loading = false, error = e.userMessage()) }
             }
-            link = current
             // No list_preserved on reconnect: it reissues the claim of every Terminal without a
             // live attachment, racing the Terminal screen's re-attach with the old claim.
-            current.state.collect { _connection.value = it }
+            connections.watch(serverId).collectLatest { current ->
+                link = current
+                current.state.collect { _connection.value = it }
+            }
         }
     }
 
-    /** The header's Retry: reconnect or check the server now. */
+    /** The header's Retry: reconnect or check the server now; a connection that failed for good is replaced. */
     fun retryConnection() {
-        link?.retry()
+        if (link?.state?.value is ConnectionState.Failed) {
+            viewModelScope.launch {
+                try {
+                    connections.connection(serverId)
+                } catch (e: TerminalConnectFailed) {
+                    _ui.update { it.copy(error = e.userMessage()) }
+                }
+            }
+        } else {
+            link?.retry()
+        }
     }
 
     /**
@@ -111,9 +124,9 @@ class TerminalsViewModel @Inject constructor(
                 list.terminals.forEach { t -> t.claim?.let { cursors.putClaim(serverId, t.id, it) } }
                 list.terminals.map { TerminalRow(it.id, it.shell, it.cwd, it.hasLiveAttachment) }
             }
-            _ui.update { it.copy(loading = false) }
-            result.onSuccess { rows -> _ui.update { it.copy(terminals = rows, error = null) } }
-                .onFailure { e -> _ui.update { it.copy(error = (e as Refusal).reason) } }
+            // One update: a state that is done loading but has no rows yet would read as "no Terminals".
+            result.onSuccess { rows -> _ui.update { it.copy(loading = false, terminals = rows, error = null) } }
+                .onFailure { e -> _ui.update { it.copy(loading = false, error = (e as Refusal).reason) } }
         }
     }
 

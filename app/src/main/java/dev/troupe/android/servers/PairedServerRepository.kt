@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
+import java.security.GeneralSecurityException
 import java.util.Base64
 import java.util.UUID
 
@@ -52,9 +53,14 @@ class PairedServerRepository(
         return PairedServer(saved.id, saved.name, input.address, saved.stayConnected)
     }
 
+    /** The server's token; null when there is none or it can no longer be decrypted (pair again). */
     suspend fun token(serverId: String): String? {
         val encoded = store.data.first()[tokenKey(serverId)] ?: return null
-        return cipher.decrypt(Base64.getDecoder().decode(encoded), serverId)
+        return try {
+            cipher.decrypt(Base64.getDecoder().decode(encoded), serverId)
+        } catch (e: GeneralSecurityException) {
+            null
+        }
     }
 
     suspend fun rename(id: String, name: String) {

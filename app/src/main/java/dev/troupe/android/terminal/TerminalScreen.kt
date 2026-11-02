@@ -17,7 +17,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -43,7 +46,9 @@ fun TerminalScreen(onBack: () -> Unit, viewModel: TerminalViewModel = hiltViewMo
     val viewOnly by viewModel.viewOnly.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val palette = LocalTroupePalette.current
-    val renderer = remember { XtermWebViewRenderer(WebView(context)) }
+    // A WebView whose renderer process died is replaced by a fresh one, which the log is replayed into.
+    var webViews by remember { mutableIntStateOf(0) }
+    val renderer = remember(webViews) { XtermWebViewRenderer(WebView(context), onGone = { webViews++ }) }
     DisposableEffect(renderer) {
         viewModel.bind(renderer)
         onDispose {
@@ -79,14 +84,15 @@ fun TerminalScreen(onBack: () -> Unit, viewModel: TerminalViewModel = hiltViewMo
                 TerminalUi.Live -> Unit
             }
             Box(Modifier.weight(1f).fillMaxWidth().background(palette.background), contentAlignment = Alignment.TopStart) {
-                TerminalView(renderer, Modifier.fillMaxSize())
+                key(renderer) { TerminalView(renderer, Modifier.fillMaxSize()) }
             }
             KeyBar(
                 enabled = state == TerminalUi.Live && connection == ConnectionState.Connected && !viewOnly,
                 onKey = viewModel::onKey,
                 onPaste = {
+                    // Plain text only: coerceToText would read a URI-backed clip on the main thread.
                     val clip = context.getSystemService(ClipboardManager::class.java)?.primaryClip
-                    if (clip != null && clip.itemCount > 0) viewModel.paste(clip.getItemAt(0).coerceToText(context).toString())
+                    if (clip != null && clip.itemCount > 0) clip.getItemAt(0).text?.let { viewModel.paste(it.toString()) }
                 },
                 modifier = Modifier.background(palette.card),
             )

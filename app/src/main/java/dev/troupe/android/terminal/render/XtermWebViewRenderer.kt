@@ -6,6 +6,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Base64
 import android.webkit.JavascriptInterface
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -29,9 +30,16 @@ import java.io.ByteArrayOutputStream
  * turns back into bytes for `term.write(Uint8Array)`; it is never decoded to text here.
  * JS calls back through one `TroupeBridge` object: `onData`, `onResize`, `onReady` and `theme`.
  * Create and use it on the main thread; [write] may be called from any thread.
+ *
+ * If the WebView's renderer process dies, this renderer is dead too: [onGone] runs (on the main
+ * thread) so the screen can replace it, and the app survives.
  */
 @SuppressLint("SetJavaScriptEnabled")
-class XtermWebViewRenderer(val webView: WebView, private val palette: AnsiPalette = AnsiPalette.Termul) : TerminalRenderer {
+class XtermWebViewRenderer(
+    val webView: WebView,
+    private val palette: AnsiPalette = AnsiPalette.Termul,
+    private val onGone: () -> Unit = {},
+) : TerminalRenderer {
     private val typed = Channel<String>(Channel.UNLIMITED)
     override val input: Flow<String> = typed.receiveAsFlow()
 
@@ -66,6 +74,12 @@ class XtermWebViewRenderer(val webView: WebView, private val palette: AnsiPalett
                 assets.shouldInterceptRequest(request.url) ?: refused()
 
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) = true
+
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                synchronized(lock) { ready = false }
+                onGone()
+                return true
+            }
         }
         webView.addJavascriptInterface(Bridge(), "TroupeBridge")
         webView.loadUrl(PAGE)
@@ -74,6 +88,12 @@ class XtermWebViewRenderer(val webView: WebView, private val palette: AnsiPalett
     override fun write(bytes: ByteArray) {
         synchronized(lock) {
             pending.write(bytes)
+            // A page that never becomes ready must not hold output without bound: keep the newest.
+            if (pending.size() > MAX_PENDING) {
+                val kept = pending.toByteArray().copyOfRange(pending.size() - MAX_PENDING, pending.size())
+                pending.reset()
+                pending.write(kept)
+            }
             if (flushScheduled) return
             flushScheduled = true
         }
@@ -139,5 +159,6 @@ class XtermWebViewRenderer(val webView: WebView, private val palette: AnsiPalett
     private companion object {
         const val PAGE = "https://appassets.androidplatform.net/assets/terminal/index.html"
         const val FRAME_MS = 16L
+        const val MAX_PENDING = 4 shl 20
     }
 }

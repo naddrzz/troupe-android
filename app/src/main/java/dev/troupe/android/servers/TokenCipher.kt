@@ -6,10 +6,20 @@ import com.google.crypto.tink.KeyTemplates
 import com.google.crypto.tink.RegistryConfiguration
 import com.google.crypto.tink.aead.AeadConfig
 import com.google.crypto.tink.integration.android.AndroidKeysetManager
+import java.io.IOException
+import java.security.GeneralSecurityException
 
-/** Encrypts secrets at rest. [associated] binds a ciphertext to its owner (the server id). */
+/**
+ * Encrypts secrets at rest. [associated] binds a ciphertext to its owner (the server id).
+ * Both calls throw [GeneralSecurityException] when the keyset is unusable (e.g. the Keystore key
+ * was lost); [decrypt] also when [cipher] is corrupt or bound to another owner. Callers treat an
+ * unreadable secret as absent.
+ */
 interface TokenCipher {
+    @Throws(GeneralSecurityException::class)
     fun encrypt(plain: String, associated: String): ByteArray
+
+    @Throws(GeneralSecurityException::class)
     fun decrypt(cipher: ByteArray, associated: String): String
 }
 
@@ -17,13 +27,17 @@ interface TokenCipher {
 class TinkTokenCipher(context: Context) : TokenCipher {
     private val aead: Aead by lazy {
         AeadConfig.register()
-        AndroidKeysetManager.Builder()
-            .withSharedPref(context, "troupe_keyset", "troupe_keyset_prefs")
-            .withKeyTemplate(KeyTemplates.get("AES256_GCM"))
-            .withMasterKeyUri("android-keystore://troupe_master_key")
-            .build()
-            .keysetHandle
-            .getPrimitive(RegistryConfiguration.get(), Aead::class.java)
+        try {
+            AndroidKeysetManager.Builder()
+                .withSharedPref(context, "troupe_keyset", "troupe_keyset_prefs")
+                .withKeyTemplate(KeyTemplates.get("AES256_GCM"))
+                .withMasterKeyUri("android-keystore://troupe_master_key")
+                .build()
+                .keysetHandle
+                .getPrimitive(RegistryConfiguration.get(), Aead::class.java)
+        } catch (e: IOException) {
+            throw GeneralSecurityException("keyset unreadable", e)
+        }
     }
 
     override fun encrypt(plain: String, associated: String): ByteArray =

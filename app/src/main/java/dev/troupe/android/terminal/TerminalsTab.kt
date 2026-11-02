@@ -112,7 +112,8 @@ fun TerminalsTab(onOpenTerminal: (terminalId: String) -> Unit, viewModel: Termin
                     row,
                     killing = state.killing == row.id,
                     onClick = { onOpenTerminal(row.id) },
-                    onKill = if (viewOnly) null else { { confirmKill = row.id } },
+                    // One kill at a time: other rows offer none while one is in flight.
+                    onKill = if (viewOnly || (state.killing != null && state.killing != row.id)) null else { { confirmKill = row.id } },
                 )
                 HorizontalDivider(color = palette.border)
             }
@@ -123,7 +124,7 @@ fun TerminalsTab(onOpenTerminal: (terminalId: String) -> Unit, viewModel: Termin
     }
 }
 
-/** [onKill] is null when the Terminal can't be killed from here (a View-only server): no Kill action then. */
+/** [onKill] is null when the Terminal can't be killed from here (a View-only server, another kill running): no Kill action then. */
 @Composable
 private fun TerminalRowItem(row: TerminalRow, killing: Boolean, onClick: () -> Unit, onKill: (() -> Unit)?) {
     val palette = LocalTroupePalette.current

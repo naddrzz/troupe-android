@@ -22,6 +22,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.security.GeneralSecurityException
 
 /** Supporting seam: Keystore is unavailable on the JVM, so tokens go through a deterministic cipher. */
 class PairedServerRepositoryTest {
@@ -59,6 +60,18 @@ class PairedServerRepositoryTest {
         assertEquals(a.id, b.id)
         assertEquals("two", repo.token(a.id))
         assertEquals(1, repo.servers.first().size)
+    }
+
+    @Test fun anUndecryptableTokenReadsAsAbsent() = runBlocking {
+        val broken = PairedServerRepository(
+            DataStoreFactory.create(OkioStorage(FileSystem.SYSTEM, PreferencesSerializer) { File(tmp.root, "broken.preferences_pb").toOkioPath() }, scope = scope),
+            object : TokenCipher {
+                override fun encrypt(plain: String, associated: String) = plain.toByteArray()
+                override fun decrypt(cipher: ByteArray, associated: String): String = throw GeneralSecurityException("keyset lost")
+            },
+        )
+        val s = broken.add("A", input("http://10.0.0.2", "tok"))
+        assertNull(broken.token(s.id))
     }
 
     @Test fun removeDeletesToken() = runBlocking {

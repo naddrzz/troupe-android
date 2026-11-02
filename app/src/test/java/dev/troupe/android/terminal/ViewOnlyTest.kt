@@ -70,6 +70,18 @@ class ViewOnlyTest {
     /** Gives in-flight requests time to reach the server, so an assertion that nothing was sent means something. */
     private fun settle() = Thread.sleep(300)
 
+    /**
+     * Makes [serverId] writable again and types a marker. Input goes out in order, so once the marker
+     * reached the server every write typed before it has too: the writes up to here, then the marker.
+     */
+    private fun writesThrough(serverId: String): List<String?> {
+        server.allowRemoteWrites = true
+        graph.viewOnly.set(serverId, false)
+        renderer.type(MARKER)
+        eventually { server.terminalRequests("write").any { it.payloadString("data") == MARKER } }
+        return server.terminalRequests("write").map { it.payloadString("data") }.dropLast(1)
+    }
+
     @Test fun pairingWithAServerThatOnlyLetsDevicesWatchMarksItViewOnly() {
         server.allowRemoteWrites = false
         val vm = graph.pairViewModel()
@@ -96,17 +108,20 @@ class ViewOnlyTest {
 
     @Test fun aViewOnlyTerminalShowsOutputButSendsNoWriteOrResize() {
         server.allowRemoteWrites = false
-        val vm = openTerminal(pairedServer())
+        val serverId = pairedServer()
+        val vm = openTerminal(serverId)
         await(vm.viewOnly, true)
 
         renderer.type("ls\r")
         vm.onKey(TerminalKey.Esc)
         vm.paste("rm -rf build")
         renderer.size.value = TermSize(100, 30)
+        // A resize would only go out after the debounce: no request marks it, so wait past it.
         settle()
 
-        assertEquals(emptyList<String>(), sent("write", "resize"))
+        assertEquals(emptyList<String>(), sent("resize"))
         assertEquals(TerminalUi.Live, vm.ui.value)
+        assertEquals(emptyList<String>(), writesThrough(serverId))
     }
 
     @Test fun aForbiddenWriteSwitchesToViewOnlyAtOnceAndStopsWriting() {
@@ -121,9 +136,8 @@ class ViewOnlyTest {
         await(vm.viewOnly, true)
         renderer.type("pwd\r")
         vm.onKey(TerminalKey.Tab)
-        settle()
 
-        assertEquals(listOf("ls\r"), server.terminalRequests("write").map { it.payloadString("data") })
+        assertEquals(listOf("ls\r"), writesThrough(serverId))
     }
 
     @Test fun aWritableTerminalStillWritesAndResizes() {
@@ -143,10 +157,10 @@ class ViewOnlyTest {
         val vm = graph.terminalsViewModel(serverId, projectId = "p1")
         await(vm.viewOnly, true)
 
+        // Each returns before launching anything while View-only, so nothing can be in flight.
         vm.refresh()
         vm.spawn()
         vm.kill("t1")
-        settle()
 
         assertEquals(emptyList<String>(), sent("list_preserved", "spawn", "attach", "kill"))
         assertFalse(vm.ui.value.loading)
@@ -163,5 +177,9 @@ class ViewOnlyTest {
 
         await(vm.viewOnly, true)
         assertTrue(graph.viewOnly.state(serverId).value)
+    }
+
+    private companion object {
+        const val MARKER = "marker"
     }
 }

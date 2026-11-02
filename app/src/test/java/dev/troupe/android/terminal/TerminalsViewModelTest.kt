@@ -1,9 +1,11 @@
 package dev.troupe.android.terminal
 
 import dev.troupe.android.R
+import dev.troupe.android.core.net.ConnectionState
 import dev.troupe.android.testing.FakeTroupeServer
 import dev.troupe.android.testing.MainDispatcherRule
 import dev.troupe.android.testing.TestGraph
+import dev.troupe.android.testing.eventually
 import dev.troupe.android.testing.preservedList
 import dev.troupe.android.testing.preservedTerminal
 import dev.troupe.android.testing.spawnedTerminal
@@ -16,6 +18,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -82,6 +85,30 @@ class TerminalsViewModelTest {
         val ui = spawn(pairedServerId(token = "stale"))
         assertEquals(R.string.pair_error_unauthorized, ui.error?.text)
         assertTrue(server.terminalRequests("spawn").isEmpty())
+    }
+
+    @Test fun forgettingAServerStopsItsTerminalConnection() {
+        val serverId = pairedServerId()
+        val connection = runBlocking { graph.connections.connection(serverId) }
+        eventually { connection.state.value == ConnectionState.Connected }
+
+        runBlocking { graph.repository.remove(serverId) }
+
+        eventually { connection.state.value == ConnectionState.Closed }
+    }
+
+    @Test fun pairingAgainWithANewTokenReplacesALiveConnection() {
+        val serverId = pairedServerId()
+        val old = runBlocking { graph.connections.connection(serverId) }
+        eventually { old.state.value == ConnectionState.Connected }
+
+        server.token = "rotated-token"
+        runBlocking { graph.repository.add("Box", server.pairingInput()) }
+        val new = runBlocking { graph.connections.connection(serverId) }
+
+        assertNotSame(old, new)
+        assertEquals(ConnectionState.Closed, old.state.value)
+        eventually { new.state.value == ConnectionState.Connected }
     }
 
     @Test fun unreachableServerSaysSo() {

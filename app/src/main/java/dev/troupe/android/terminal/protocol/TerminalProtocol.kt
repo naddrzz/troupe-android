@@ -22,14 +22,16 @@ class TerminalRequest(val id: String, val type: String, val payload: JsonObject,
 
 /** Server frames, mirroring termul's `WebTerminalFrame`. Of the `event` frames only `exit` is understood. */
 sealed interface TerminalFrame {
-    /** `{id, success: true, data}` or `{id, success: false, error, code}`. */
+    /** `{id, success: true, data}` or `{id, success: false, error, code}`. [data] may hold a claim, so it is never printed. */
     data class Reply(
         val id: String,
         val success: Boolean,
         val data: JsonElement?,
         val error: String?,
         val code: String?,
-    ) : TerminalFrame
+    ) : TerminalFrame {
+        override fun toString() = "Reply(id=$id, success=$success, error=$error, code=$code, data=<redacted>)"
+    }
 
     /** One live output chunk. [data] is raw terminal output; it is never decoded as text in Kotlin. */
     class Data(val terminalId: String, val seq: Long, val data: ByteArray) : TerminalFrame
