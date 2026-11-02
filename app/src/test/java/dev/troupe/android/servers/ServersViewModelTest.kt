@@ -1,10 +1,23 @@
 package dev.troupe.android.servers
 
+import androidx.datastore.core.DataStoreFactory
+import androidx.datastore.core.okio.OkioStorage
+import androidx.datastore.preferences.core.PreferencesSerializer
 import dev.troupe.android.pairing.PairUiState
 import dev.troupe.android.testing.FakeTroupeServer
 import dev.troupe.android.testing.MainDispatcherRule
 import dev.troupe.android.testing.TestGraph
+import dev.troupe.android.testing.XorTokenCipher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.job
+import okio.FileSystem
+import okio.Path.Companion.toOkioPath
+import java.io.File
+import java.security.GeneralSecurityException
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.jsonPrimitive
@@ -66,6 +79,39 @@ class ServersViewModelTest {
             assertEquals(ServerStatus.Connected, byId[ok.id])
             assertEquals(ServerStatus.TokenRejected, byId[stale.id])
             assertEquals(ServerStatus.Unreachable, byId[gone.id])
+        }
+    }
+
+    @Test fun aProtocolMismatchAsksForAnUpdate() {
+        paired()
+        server.protocolVersion = 8
+
+        assertEquals(ServerStatus.Unsupported, shownRows().single().status)
+    }
+
+    @Test fun aTokenThatNoLongerDecryptsIsRejectedWithoutStoppingTheOtherProbes() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val store = DataStoreFactory.create(
+                OkioStorage(FileSystem.SYSTEM, PreferencesSerializer) { File(tmp.root, "broken.preferences_pb").toOkioPath() },
+                scope = scope,
+            )
+            var broken = ""
+            val brokenKeystore = object : TokenCipher by XorTokenCipher() {
+                override fun decrypt(cipher: ByteArray, associated: String): String =
+                    if (associated == broken) throw GeneralSecurityException("decryption failed") else XorTokenCipher().decrypt(cipher, associated)
+            }
+            val repository = PairedServerRepository(store, brokenKeystore)
+            FakeTroupeServer().use { other ->
+                broken = runBlocking { repository.add("Broken", server.pairingInput(server.token)) }.id
+                val ok = runBlocking { repository.add("Ok", other.pairingInput(other.token)) }
+
+                val byId = shownRows(ServersViewModel(graph().api, graph().sockets, repository)).associate { it.server.id to it.status }
+                assertEquals(ServerStatus.TokenRejected, byId[broken])
+                assertEquals(ServerStatus.Connected, byId[ok.id])
+            }
+        } finally {
+            runBlocking { scope.coroutineContext.job.cancelAndJoin() }
         }
     }
 

@@ -23,6 +23,7 @@
     <string name="servers_status_connected">Connected</string>
     <string name="servers_status_unreachable">Unreachable</string>
     <string name="servers_status_token_rejected">Token rejected</string>
+    <string name="servers_status_unsupported">Update needed</string>
     <string name="servers_row_actions">More actions for %1$s</string>
     <string name="servers_rename">Rename</string>
     <string name="servers_remove">Remove</string>
