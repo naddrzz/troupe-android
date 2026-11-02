@@ -51,7 +51,8 @@ object TroupeColors {
         brand = Color(0xFF0D74CE),
         brandText = Color(0xFF0D74CE),
         success = Color(0xFF22C55E),
-        warning = Color(0xFFEAB308),
+        // Warning is text (Reconnecting, View only, Attention); the dark theme's yellow is ~1.9:1 on white, this is ~4.8:1.
+        warning = Color(0xFFA16207),
         error = Color(0xFFEF4444),
         info = Color(0xFF38BDF8),
     )
