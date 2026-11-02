@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- To reconnect at once when a network comes back. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Only to scan the pairing QR code; Paste and Manual pairing work without a camera. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Android 13+: Attention notifications; asked with a rationale the first time one would show. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- "Stay connected in background": a foreground service holds the opted-in servers' connections. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+
+    <application
+        android:name=".TroupeApp"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Troupe"
+        tools:targetApi="36">
+        <!-- Rotating and resizing keep the activity (Compose relayouts), so an open Terminal's
+             WebView keeps its screen and only sends a resize. -->
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- specialUse, not dataSync: it holds a connection open for notifications rather than syncing
+             data, and Android 15 limits dataSync to 6 hours a day. -->
+        <service
+            android:name=".background.BackgroundConnectionService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the user's opted-in WebSocket connections to their own self-hosted Troupe Servers open while the app is closed, so agent permission requests, questions and finished turns can notify. There is no push service." />
+        </service>
+    </application>
+</manifest>

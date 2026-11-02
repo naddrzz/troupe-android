@@ -1,0 +1,338 @@
+package dev.troupe.android.terminal
+
+import androidx.annotation.StringRes
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.troupe.android.R
+import dev.troupe.android.core.net.ConnectionState
+import dev.troupe.android.terminal.net.TerminalConnectFailed
+import dev.troupe.android.terminal.net.TerminalConnection
+import dev.troupe.android.terminal.net.TerminalConnections
+import dev.troupe.android.terminal.net.TerminalDisconnected
+import dev.troupe.android.terminal.net.TerminalSocket
+import dev.troupe.android.terminal.protocol.TerminalErrorCodes
+import dev.troupe.android.terminal.protocol.TerminalFrame
+import dev.troupe.android.terminal.render.TermSize
+import dev.troupe.android.terminal.render.TerminalKey
+import dev.troupe.android.terminal.render.TerminalRenderer
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import java.io.IOException
+import javax.inject.Inject
+
+sealed interface TerminalUi {
+    data object Connecting : TerminalUi
+    data object Live : TerminalUi
+    data class Failed(@StringRes val message: Int, val arg: String? = null) : TerminalUi
+    /** The process ended; its output stays on screen. [exitCode] is null when a signal ended it. */
+    data class Exited(val exitCode: Int?) : TerminalUi
+}
+
+/**
+ * One open Terminal: attaches with its stored claim, draws its output into the bound
+ * [TerminalRenderer] and sends what the user types as ledgered `write`s (see [sendInput]).
+ *
+ * A new screen starts blank, so its first attach asks for the whole retained log. From then on
+ * the in-memory cursor `(logEpoch, lastSeq)` says what is on screen: live `data` is drawn only
+ * when it is the next seq, and anything else, or a `gap`, re-attaches from the cursor ([reattach]).
+ * The cursor is also persisted with the claim, at most once a second.
+ *
+ * Every new connection of the Paired Server (the first one, and each reconnect) attaches again from
+ * the cursor, so output missed while it was down is replayed once and nothing is drawn twice.
+ */
+@HiltViewModel
+class TerminalViewModel @Inject constructor(
+    savedState: SavedStateHandle,
+    private val connections: TerminalConnections,
+    private val cursors: TerminalCursorStore,
+) : ViewModel() {
+    private val serverId: String = checkNotNull(savedState["serverId"])
+    private val terminalId: String = checkNotNull(savedState["terminalId"])
+    private val _ui = MutableStateFlow<TerminalUi>(TerminalUi.Connecting)
+    val ui: StateFlow<TerminalUi> = _ui.asStateFlow()
+    private val _connection = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
+    /** The Paired Server's connection, for the header. */
+    val connection: StateFlow<ConnectionState> = _connection.asStateFlow()
+    /** The Paired Server is View-only: nothing typed is sent, and the key bar is off. */
+    val viewOnly: StateFlow<Boolean> = connections.viewOnly.state(serverId)
+
+    private val live = CompletableDeferred<Unit>()
+    private val outgoing = Channel<String>(Channel.UNLIMITED)
+
+    // Touched only on the main thread (viewModelScope and the screen).
+    private var renderer: TerminalRenderer? = null
+    /** The renderer what is on screen was drawn into: the cursor describes its contents. */
+    private var drawnInto: TerminalRenderer? = null
+    private var binding: Job? = null
+    private val unrendered = mutableListOf<(TerminalRenderer) -> Unit>()
+    private var link: TerminalConnection? = null
+    private var socket: TerminalSocket? = null
+    private var inputJob: Job? = null
+    private var saveJob: Job? = null
+    private var cursor = TerminalCursor()
+    private var attaching = false
+    /** A new connection came up while an attach was in flight on the old one. */
+    private var attachAgain = false
+    /** Between sending `attach` and its `replay`: live frames are dropped, the replay covers them. */
+    private var awaitingReplay = false
+
+    init {
+        viewModelScope.launch {
+            try {
+                connections.connection(serverId)
+            } catch (e: TerminalConnectFailed) {
+                val message = e.userMessage()
+                return@launch fail(message.text, message.arg)
+            }
+            // A connection replaced after pairing again is followed; its first connect attaches from the cursor.
+            connections.watch(serverId).collectLatest { current ->
+                link = current
+                socket = current.socket
+                // Subscribe before attaching: the server sends the replay ahead of the attach reply.
+                launch(start = CoroutineStart.UNDISPATCHED) { current.socket.frames.collect(::onFrame) }
+                launch { current.state.collect(::onConnection) }
+                current.generation.filter { it > 0 }.collect { onConnected() }
+            }
+        }
+    }
+
+    /** The header's Retry: reconnect or check the server now; a connection that failed for good is replaced. */
+    fun retryConnection() {
+        if (link?.state?.value is ConnectionState.Failed) {
+            viewModelScope.launch {
+                try {
+                    connections.connection(serverId)
+                } catch (e: TerminalConnectFailed) {
+                    val message = e.userMessage()
+                    fail(message.text, message.arg)
+                }
+            }
+        } else {
+            link?.retry()
+        }
+    }
+
+    /**
+     * Attaches again from the cursor of what is on screen, over the Paired Server's current
+     * connection. Does nothing while an attach is in flight.
+     */
+    fun reattach() {
+        if (attaching) return
+        attaching = true
+        awaitingReplay = true
+        viewModelScope.launch {
+            try {
+                attach()
+            } finally {
+                attaching = false
+                if (attachAgain) {
+                    attachAgain = false
+                    reattach()
+                }
+            }
+        }
+    }
+
+    private fun onConnected() {
+        if (attaching) attachAgain = true else reattach()
+    }
+
+    private fun onConnection(state: ConnectionState) {
+        _connection.value = state
+        if (state is ConnectionState.Failed) {
+            val message = state.reason.userMessage(state.message)
+            fail(message.text, message.arg)
+        }
+    }
+
+    /**
+     * Draws into [renderer] from now on and forwards its input and size. The renderer bound before
+     * gets the output that arrived while unbound; a different one (a new screen, a recreated
+     * Activity) starts blank, so the cursor goes back to zero and the whole log is replayed into it.
+     */
+    @OptIn(FlowPreview::class)
+    fun bind(renderer: TerminalRenderer) {
+        binding?.cancel()
+        this.renderer = renderer
+        if (drawnInto != null && drawnInto !== renderer) {
+            unrendered.clear()
+            cursor = TerminalCursor()
+            if (live.isCompleted) onConnected()
+        }
+        drawnInto = renderer
+        unrendered.forEach { it(renderer) }
+        unrendered.clear()
+        binding = viewModelScope.launch {
+            launch { renderer.input.collect(::type) }
+            live.await()
+            // termul gates `resize` like a write. A size held back while View-only goes out once writable.
+            renderer.size.combine(viewOnly) { size, watching -> size.takeUnless { watching } }
+                .distinctUntilChanged().filterNotNull().debounce(RESIZE_DEBOUNCE_MS).collect(::resize)
+        }
+    }
+
+    fun unbind(renderer: TerminalRenderer) {
+        if (this.renderer !== renderer) return
+        binding?.cancel()
+        this.renderer = null
+    }
+
+    fun onKey(key: TerminalKey) = type(key.sequence)
+
+    /** Sends [text] (the clipboard) as typed input in one `write`. */
+    fun paste(text: String) {
+        if (text.isNotEmpty()) type(text)
+    }
+
+    /** Queues typed input for [sendInput]; dropped while View-only. */
+    private fun type(data: String) {
+        if (!viewOnly.value) outgoing.trySend(data)
+    }
+
+    override fun onCleared() {
+        saveJob?.cancel()
+        val last = cursor
+        connections.background.launch { cursors.putCursor(serverId, terminalId, last) }
+        connections.detach(serverId, terminalId)
+    }
+
+    private suspend fun attach() {
+        val claim = cursors.get(serverId, terminalId)?.claim ?: return fail(R.string.terminal_unavailable)
+        val current = socket ?: return
+        val reply = try {
+            current.request("attach", attachPayload(claim))
+        } catch (e: TerminalDisconnected) {
+            return // The next connection attaches again.
+        } catch (e: IOException) {
+            return fail(R.string.pair_error_unreachable)
+        }
+        if (!reply.success) {
+            if (reply.code == TerminalErrorCodes.UNAUTHORIZED) {
+                cursors.remove(serverId, terminalId)
+                return fail(R.string.terminal_unavailable)
+            }
+            return fail(R.string.pair_error_server, reply.error)
+        }
+        if (_ui.value !is TerminalUi.Exited) _ui.value = TerminalUi.Live
+        live.complete(Unit)
+        if (inputJob == null) inputJob = viewModelScope.launch { sendInput() }
+    }
+
+    /** A nonzero cursor goes out with its epoch, or with `""` when none is known (which forces a full replay). */
+    private fun attachPayload(claim: String) = buildJsonObject {
+        put("terminalId", terminalId)
+        put("claim", claim)
+        put("lastSeq", cursor.lastSeq)
+        if (cursor.logEpoch.isNotEmpty() || cursor.lastSeq > 0) put("logEpoch", cursor.logEpoch)
+    }
+
+    private fun fail(@StringRes message: Int, arg: String? = null) {
+        _ui.value = TerminalUi.Failed(message, arg)
+    }
+
+    private fun onFrame(frame: TerminalFrame) {
+        when (frame) {
+            is TerminalFrame.Replay -> if (frame.terminalId == terminalId) onReplay(frame)
+            is TerminalFrame.Data -> if (frame.terminalId == terminalId && !awaitingReplay) {
+                if (frame.seq == cursor.lastSeq + 1) {
+                    render { it.write(frame.data) }
+                    advance(cursor.copy(lastSeq = frame.seq))
+                } else {
+                    reattach()
+                }
+            }
+            is TerminalFrame.Gap -> if (frame.terminalId == terminalId && !awaitingReplay) reattach()
+            is TerminalFrame.Exit -> if (frame.terminalId == terminalId) _ui.value = TerminalUi.Exited(frame.exitCode)
+            else -> Unit
+        }
+    }
+
+    /** Draws what the screen lacks: everything after a `reset`, otherwise only chunks past the cursor. */
+    private fun onReplay(frame: TerminalFrame.Replay) {
+        awaitingReplay = false
+        val after = if (frame.reset) 0 else cursor.lastSeq
+        if (frame.reset) render { it.reset() }
+        frame.chunks.filter { it.seq > after }.forEach { chunk -> render { it.write(chunk.data) } }
+        advance(TerminalCursor(frame.logEpoch, maxOf(frame.latestSeq, after)))
+        frame.exit?.let { _ui.value = TerminalUi.Exited(it.exitCode) }
+    }
+
+    private fun advance(next: TerminalCursor) {
+        cursor = next
+        if (saveJob?.isActive == true) return
+        saveJob = viewModelScope.launch {
+            delay(CURSOR_SAVE_MS)
+            cursors.putCursor(serverId, terminalId, cursor)
+        }
+    }
+
+    private fun render(op: (TerminalRenderer) -> Unit) {
+        renderer?.let(op) ?: unrendered.add(op)
+    }
+
+    /**
+     * Every write to the Terminal goes out here: one ledgered `write` per burst, so input typed
+     * while a write is in flight goes out together in the next one.
+     */
+    private suspend fun sendInput() {
+        for (first in outgoing) {
+            val data = buildString {
+                append(first)
+                while (true) append(outgoing.tryReceive().getOrNull() ?: break)
+            }
+            // Input queued before the server turned out View-only is dropped too.
+            if (viewOnly.value) continue
+            val payload = buildJsonObject {
+                put("terminalId", terminalId)
+                put("data", data)
+            }
+            // A refused or lost write is dropped; retrying it is the reconnect's job.
+            try {
+                socket?.request("write", payload, ledgered = true)?.let(::onReply)
+            } catch (e: IOException) {
+                continue
+            }
+        }
+    }
+
+    /** A `FORBIDDEN` refusal makes the Paired Server View-only at once. */
+    private fun onReply(reply: TerminalFrame.Reply) {
+        if (!reply.success) connections.viewOnly.onRefusal(serverId, reply.code)
+    }
+
+    private suspend fun resize(size: TermSize) {
+        val payload = buildJsonObject {
+            put("terminalId", terminalId)
+            put("cols", size.cols)
+            put("rows", size.rows)
+        }
+        try {
+            socket?.request("resize", payload)?.let(::onReply)
+        } catch (e: IOException) {
+            // The next size change retries.
+        }
+    }
+
+    private companion object {
+        const val RESIZE_DEBOUNCE_MS = 150L
+        const val CURSOR_SAVE_MS = 1_000L
+    }
+}

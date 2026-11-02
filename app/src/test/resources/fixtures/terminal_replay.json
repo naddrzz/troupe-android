@@ -1,0 +1,1 @@
+{"type":"replay","terminalId":"t1","chunks":[{"seq":1,"data":[36,32]},{"seq":2,"data":[195,169]}],"gap":false,"reset":true,"logEpoch":"ep-1","latestSeq":2,"snapshot":{"cwd":"/workspace","gitBranch":null,"gitStatus":null,"exitCode":null,"exited":false},"futureField":1}

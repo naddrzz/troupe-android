@@ -1,0 +1,101 @@
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The version code is the commit count and the version name the tag, so fetch both.
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # The runner image ships the Android SDK (ANDROID_HOME, licenses accepted); Gradle fetches missing platforms.
+      - uses: gradle/actions/setup-gradle@v5
+
+      # The integration test needs a real Troupe Server in Docker, so CI runs only the unit tests.
+      - name: Unit tests and debug build
+        run: ./gradlew testDebugUnitTest assembleDebug
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v5
+
+      # The version code is the commit count, which only grows along main.
+      - name: Require the tag on main
+        run: |
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::Release tags must point at a commit on main."
+            exit 1
+          fi
+
+      - name: Decode keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.TROUPE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::The TROUPE_KEYSTORE_BASE64 secret is not set."
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+
+      - name: Signed release build
+        env:
+          TROUPE_KEYSTORE_FILE: ${{ runner.temp }}/release.jks
+          TROUPE_KEYSTORE_PASSWORD: ${{ secrets.TROUPE_KEYSTORE_PASSWORD }}
+          TROUPE_KEY_ALIAS: ${{ secrets.TROUPE_KEY_ALIAS }}
+          TROUPE_KEY_PASSWORD: ${{ secrets.TROUPE_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Without all four signing values Gradle builds app-release-unsigned.apk instead; never publish that.
+          apk=app/build/outputs/apk/release/app-release.apk
+          if [ ! -f "$apk" ]; then
+            echo "::error::No signed APK was built. Check the signing secrets."
+            exit 1
+          fi
+          version="${TAG#v}"
+          cp "$apk" "troupe-$version.apk"
+          # The R8 mapping turns obfuscated crash stack traces back into readable ones.
+          cp app/build/outputs/mapping/release/mapping.txt "troupe-$version-mapping.txt"
+          gh release create "$TAG" "troupe-$version.apk" "troupe-$version-mapping.txt" \
+            --title "Troupe $version" --generate-notes --verify-tag
+
+      - name: Remove keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"

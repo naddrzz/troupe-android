@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <!-- Zoom is locked on purpose: pinch-zoom would magnify the viewport, not the font, so the
+       terminal's cols/rows (fit to the page) would stop matching what is visible and part of
+       every line would scroll off screen. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <!-- Bundled assets only: nothing may load from the network. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'none'">
+  <link rel="stylesheet" href="xterm.css">
+  <style>
+    @font-face {
+      font-family: "Paper Mono";
+      src: url("PaperMono.woff2") format("woff2");
+      font-weight: 100 900;
+    }
+    html, body { margin: 0; height: 100%; overflow: hidden; }
+    #terminal { position: absolute; inset: 0; padding: 4px 6px; box-sizing: border-box; }
+  </style>
+</head>
+<body>
+  <div id="terminal"></div>
+  <script src="xterm.js"></script>
+  <script src="addon-fit.js"></script>
+  <script src="terminal.js"></script>
+</body>
+</html>
