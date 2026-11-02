@@ -74,9 +74,11 @@ class ViewOnlyTest {
      * Makes [serverId] writable again and types a marker. Input goes out in order, so once the marker
      * reached the server every write typed before it has too: the writes up to here, then the marker.
      */
-    private fun writesThrough(serverId: String): List<String?> {
+    private fun writesThrough(serverId: String, vm: TerminalViewModel): List<String?> {
         server.allowRemoteWrites = true
         graph.viewOnly.set(serverId, false)
+        // The ViewModel sees the registry asynchronously; typing before it does would drop the marker.
+        await(vm.viewOnly, false)
         renderer.type(MARKER)
         eventually { server.terminalRequests("write").any { it.payloadString("data") == MARKER } }
         return server.terminalRequests("write").map { it.payloadString("data") }.dropLast(1)
@@ -121,7 +123,7 @@ class ViewOnlyTest {
 
         assertEquals(emptyList<String>(), sent("resize"))
         assertEquals(TerminalUi.Live, vm.ui.value)
-        assertEquals(emptyList<String>(), writesThrough(serverId))
+        assertEquals(emptyList<String>(), writesThrough(serverId, vm))
     }
 
     @Test fun aForbiddenWriteSwitchesToViewOnlyAtOnceAndStopsWriting() {
@@ -137,7 +139,7 @@ class ViewOnlyTest {
         renderer.type("pwd\r")
         vm.onKey(TerminalKey.Tab)
 
-        assertEquals(listOf("ls\r"), writesThrough(serverId))
+        assertEquals(listOf("ls\r"), writesThrough(serverId, vm))
     }
 
     @Test fun aWritableTerminalStillWritesAndResizes() {
