@@ -82,7 +82,7 @@ class Transcript {
     }
 
     private fun chunk(seq: Long, p: JsonObject) {
-        if (p["parentToolCallId"] != null) return
+        if (p.string("parentToolCallId") != null) return
         val thought = when (p.string("role")) {
             "agent" -> false
             "thought" -> true

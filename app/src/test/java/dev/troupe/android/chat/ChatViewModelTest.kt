@@ -18,6 +18,9 @@ import dev.troupe.android.testing.eventually
 import dev.troupe.android.testing.payloadInt
 import dev.troupe.android.testing.payloadString
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -96,6 +99,15 @@ class ChatViewModelTest {
         assertEquals(true, (vm.ui.value.items[2] as ChatItem.AgentMessage).thought)
         assertEquals(listOf(PlanEntry("Read the code", "completed"), PlanEntry("Fix the bug", "in_progress")), vm.ui.value.plan)
         assertEquals(0, chat.requests("recover_session_snapshot").size)
+    }
+
+    @Test fun subagentTextStaysOutButAnExplicitNullParentIsTheMainAgent() {
+        val vm = open()
+
+        chat.append("s1", "message_chunk", JsonObject(messageChunk("s1", " (subagent)") + ("parentToolCallId" to JsonPrimitive("tc-9"))))
+        chat.append("s1", "message_chunk", JsonObject(messageChunk("s1", ", done.") + ("parentToolCallId" to JsonNull)))
+
+        assertSettles(vm, listOf("Fix the bug", "On it, done."))
     }
 
     @Test fun replayThatFollowsTheSubscribeReplyRendersTheSame() {
