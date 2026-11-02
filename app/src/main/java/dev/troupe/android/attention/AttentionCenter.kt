@@ -5,6 +5,7 @@ import dev.troupe.android.chat.net.ChatConnections
 import dev.troupe.android.core.net.ApiResult
 import dev.troupe.android.core.net.ServerApi
 import dev.troupe.android.servers.PairedServerRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -68,7 +69,18 @@ class AttentionCenter internal constructor(
                     jobs.remove(id)?.cancel()
                     _servers.update { it - id }
                 }
-                (ids - jobs.keys).forEach { id -> jobs[id] = launch { watch(id) } }
+                (ids - jobs.keys).forEach { id ->
+                    jobs[id] = launch {
+                        try {
+                            watch(id)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            // One server's failure (an unreadable token, say) leaves the others watching.
+                            _servers.update { it - id }
+                        }
+                    }
+                }
             }
         }
     }
