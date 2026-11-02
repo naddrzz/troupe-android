@@ -83,7 +83,7 @@ class ChatSocket internal constructor(
         connection = current
         val result = try {
             current.opened.await()
-            authenticate(identity.get())
+            authenticate(current, identity.get())
         } catch (e: IOException) {
             ConnectionState.Failed(ConnectionFailure.Unreachable)
         }
@@ -97,8 +97,8 @@ class ChatSocket internal constructor(
         connection?.webSocket?.cancel()
     }
 
-    private suspend fun authenticate(id: ClientIdentity): ConnectionState {
-        val reply = send("authenticate", buildJsonObject {
+    private suspend fun authenticate(connection: Connection, id: ClientIdentity): ConnectionState {
+        val reply = send(connection, "authenticate", buildJsonObject {
             put("protocolVersion", PROTOCOL_VERSION)
             put("deviceId", id.deviceId)
             put("clientInstanceId", id.clientInstanceId)
@@ -119,12 +119,13 @@ class ChatSocket internal constructor(
      * [ChatRequestTimeout] after 15 s.
      */
     suspend fun request(type: String, payload: JsonObject, commandId: String? = null): ChatFrame.Reply {
-        if (connection?.authenticated != true) throw ChatDisconnected()
-        return send(type, payload, commandId)
+        // The connection that was authenticated is the one the request goes out on.
+        val current = connection?.takeIf { it.authenticated } ?: throw ChatDisconnected()
+        return send(current, type, payload, commandId)
     }
 
-    private suspend fun send(type: String, payload: JsonObject, commandId: String?): ChatFrame.Reply {
-        val socket = connection?.webSocket ?: throw ChatDisconnected()
+    private suspend fun send(connection: Connection, type: String, payload: JsonObject, commandId: String?): ChatFrame.Reply {
+        val socket = connection.webSocket
         val id = UUID.randomUUID().toString()
         val reply = CompletableDeferred<ChatFrame.Reply>()
         pending[id] = reply
