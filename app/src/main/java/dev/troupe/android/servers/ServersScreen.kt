@@ -225,6 +225,7 @@ private fun ConnectionBadge(status: ServerStatus) {
         ServerStatus.Connected -> palette.success to R.string.servers_status_connected
         ServerStatus.Unreachable -> palette.warning to R.string.servers_status_unreachable
         ServerStatus.TokenRejected -> palette.error to R.string.servers_status_token_rejected
+        ServerStatus.Unsupported -> palette.error to R.string.servers_status_unsupported
     }
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Box(Modifier.size(8.dp).clip(CircleShape).background(color))

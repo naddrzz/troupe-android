@@ -8,6 +8,7 @@ import dev.troupe.android.core.net.ServerApi
 import dev.troupe.android.core.net.ConnectionFailure
 import dev.troupe.android.core.net.ConnectionState
 import dev.troupe.android.terminal.net.TerminalSocketFactory
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -19,7 +20,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-enum class ServerStatus { Checking, Connected, Unreachable, TokenRejected }
+/** [Unsupported]: the server speaks another protocol version, so the app or the server needs an update. */
+enum class ServerStatus { Checking, Connected, Unreachable, TokenRejected, Unsupported }
 
 data class ServerRow(val server: PairedServer, val status: ServerStatus)
 
@@ -71,7 +73,14 @@ class ServersViewModel @Inject constructor(
 
     private suspend fun probe(server: PairedServer): ServerStatus {
         if (api.health(server.address) !is ApiResult.Ok) return ServerStatus.Unreachable
-        val token = repository.token(server.id) ?: return ServerStatus.TokenRejected
+        // A token that no longer decrypts (a reset Keystore, a restored backup) is fixed the same way: pair again.
+        val token = try {
+            repository.token(server.id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        } ?: return ServerStatus.TokenRejected
         val socket = sockets.create(server.address, token)
         val handshake = try {
             socket.connect()
@@ -81,6 +90,7 @@ class ServersViewModel @Inject constructor(
         return when {
             handshake == ConnectionState.Connected -> ServerStatus.Connected
             handshake is ConnectionState.Failed && handshake.reason == ConnectionFailure.Unauthorized -> ServerStatus.TokenRejected
+            handshake is ConnectionState.Failed && handshake.reason == ConnectionFailure.ProtocolMismatch -> ServerStatus.Unsupported
             else -> ServerStatus.Unreachable
         }
     }
