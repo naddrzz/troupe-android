@@ -165,8 +165,9 @@ class ChatRequestsTest {
     }
 
     @Test fun onAViewOnlyServerTheCardsShowButSendNoAnswer() {
+        server.allowRemoteWrites = false
         val vm = open()
-        graph.viewOnly.set(serverId, true)
+        eventually { vm.viewOnly.value }
         chat.append("s1", "permission_request", permissionRequest("s1", "req-1", "Edit Login.kt"))
         eventually { ids(vm) == listOf("req-1") }
 

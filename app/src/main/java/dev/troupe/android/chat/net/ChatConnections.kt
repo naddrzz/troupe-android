@@ -8,13 +8,17 @@ import dev.troupe.android.core.net.ConnectionLifecycle
 import dev.troupe.android.core.net.ConnectionState
 import dev.troupe.android.core.net.NetworkMonitor
 import dev.troupe.android.core.net.ServerApi
+import dev.troupe.android.core.net.ViewOnlyRegistry
 import dev.troupe.android.servers.PairedServerRepository
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -35,6 +39,8 @@ class ChatConnection internal constructor(
     val socket: ChatSocket,
     private val lifecycle: ConnectionLifecycle,
     val pending: PendingRequests,
+    /** Reads View-only from `/health` on every connect. */
+    private val healthWatch: Job,
 ) {
     val state: StateFlow<ConnectionState> get() = lifecycle.state
     /** Changes on every new connection; the server has then forgotten every subscription and watch. */
@@ -42,7 +48,10 @@ class ChatConnection internal constructor(
 
     fun retry() = lifecycle.retry()
 
-    internal fun stop() = lifecycle.stop()
+    internal fun stop() {
+        healthWatch.cancel()
+        lifecycle.stop()
+    }
 }
 
 /**
@@ -55,6 +64,7 @@ class ChatConnections internal constructor(
     private val repository: PairedServerRepository,
     private val api: ServerApi,
     network: NetworkMonitor,
+    private val viewOnly: ViewOnlyRegistry,
     dispatcher: CoroutineDispatcher,
     private val newBackoff: () -> Backoff,
 ) {
@@ -63,7 +73,8 @@ class ChatConnections internal constructor(
         repository: PairedServerRepository,
         api: ServerApi,
         network: NetworkMonitor,
-    ) : this(sockets, repository, api, network, Dispatchers.IO, { Backoff() })
+        viewOnly: ViewOnlyRegistry,
+    ) : this(sockets, repository, api, network, viewOnly, Dispatchers.IO, { Backoff() })
 
     private val mutex = Mutex()
     private val open = ConcurrentHashMap<String, ChatConnection>()
@@ -106,7 +117,12 @@ class ChatConnections internal constructor(
             heartbeat = 10.seconds,
             backoff = newBackoff(),
         )
-        ChatConnection(socket, lifecycle, pending(serverId)).also {
+        val healthWatch = lifecycles.launch {
+            lifecycle.generation.filter { it > 0 }.collectLatest {
+                (api.health(server.address) as? ApiResult.Ok)?.let { viewOnly.set(serverId, !it.value.allowRemoteWrites) }
+            }
+        }
+        ChatConnection(socket, lifecycle, pending(serverId), healthWatch).also {
             open[serverId] = it
             lifecycle.start()
         }

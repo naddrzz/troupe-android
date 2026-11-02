@@ -61,7 +61,7 @@ class TestGraph(dir: File, lifecycleDispatcher: CoroutineDispatcher = Dispatcher
     val viewOnly = ViewOnlyRegistry()
     val connections = TerminalConnections(sockets, repository, api, network, viewOnly, lifecycleDispatcher) { Backoff(jitter = 0.0) }
     val cursors = TerminalCursorStore(dataStore, cipher)
-    val chatConnections = ChatConnections(ChatSocketFactory(client, identity), repository, api, network, lifecycleDispatcher) { Backoff(jitter = 0.0) }
+    val chatConnections = ChatConnections(ChatSocketFactory(client, identity), repository, api, network, viewOnly, lifecycleDispatcher) { Backoff(jitter = 0.0) }
     /** Reads [now] for the time a request was first seen. */
     @Volatile var now = 1_000_000L
     val attention = AttentionCenter(chatConnections, repository, api, Dispatchers.IO) { now }

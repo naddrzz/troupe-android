@@ -136,7 +136,8 @@ class ViewOnlyTest {
         server.allowRemoteWrites = false
         renderer.type("ls\r")
         await(vm.viewOnly, true)
-        renderer.type("pwd\r")
+        // Synchronous input, so it has met the View-only check before writesThrough allows writes again.
+        vm.paste("pwd\r")
         vm.onKey(TerminalKey.Tab)
 
         assertEquals(listOf("ls\r"), writesThrough(serverId, vm))

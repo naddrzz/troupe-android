@@ -160,13 +160,23 @@ class ChatComposerTest {
     }
 
     @Test fun aViewOnlyServerGetsNoPrompt() {
+        server.allowRemoteWrites = false
         val vm = open()
-        graph.viewOnly.set(serverId, true)
+        eventually { vm.viewOnly.value }
 
         send(vm, "Hello")
         Thread.sleep(200)
 
         assertTrue(vm.viewOnly.value)
+        assertEquals(0, chat.requests("send_prompt").size)
+    }
+
+    @Test fun openingAChatReadsViewOnlyFromHealthWithoutATerminal() {
+        server.allowRemoteWrites = false
+
+        val vm = open()
+
+        eventually { vm.viewOnly.value }
         assertEquals(0, chat.requests("send_prompt").size)
     }
 
