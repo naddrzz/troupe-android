@@ -14,6 +14,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import dev.troupe.android.MainActivity
 import dev.troupe.android.R
 import dev.troupe.android.core.nav.Screens
+import dev.troupe.android.lock.LockSettingsStore
 import dev.troupe.android.servers.PairedServer
 import dev.troupe.android.servers.PairedServerRepository
 import kotlinx.coroutines.CoroutineScope
@@ -27,7 +28,7 @@ import javax.inject.Inject
 /**
  * Keeps the process, and so the Paired Servers' `/ws` connections, alive while the app is in the
  * background and a server stays connected: the Attention and finished-turn notifications come from
- * here. Its ongoing notification names those servers and offers Disconnect, which turns every
+ * here. Its ongoing notification names those servers (unless the app lock is on) and offers Disconnect, which turns every
  * "Stay connected in background" off. It stops when the app is back in the foreground, when every
  * toggle is off or every server is removed.
  *
@@ -38,9 +39,11 @@ import javax.inject.Inject
 class BackgroundConnectionService : Service() {
     @Inject lateinit var repository: PairedServerRepository
     @Inject lateinit var screens: Screens
+    @Inject lateinit var lock: LockSettingsStore
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var servers: List<PairedServer> = emptyList()
+    private var locked = true
 
     override fun onCreate() {
         super.onCreate()
@@ -53,8 +56,11 @@ class BackgroundConnectionService : Service() {
         // startForegroundService() needs startForeground() soon: before the server list is read.
         goForeground()
         scope.launch {
-            combine(repository.servers, screens.foreground) { list, foreground -> list to foreground }.collect { (list, foreground) ->
+            combine(repository.servers, screens.foreground, lock.settings) { list, foreground, settings ->
+                Triple(list, foreground, settings.enabled)
+            }.collect { (list, foreground, lockOn) ->
                 servers = list
+                locked = lockOn
                 if (holdInBackground(foreground, list)) goForeground() else stopSelf()
             }
         }
@@ -82,10 +88,7 @@ class BackgroundConnectionService : Service() {
 
     private fun notification() = NotificationCompat.Builder(this, CHANNEL)
         .setSmallIcon(R.drawable.ic_notification)
-        .setContentTitle(
-            if (servers.none { it.stayConnected }) getString(R.string.background_connected_public)
-            else connectedContent(servers).let { getString(it.res, *it.args.toTypedArray()) },
-        )
+        .setContentTitle(connectedContent(servers, locked).let { getString(it.res, *it.args.toTypedArray()) })
         .setOngoing(true)
         .setSilent(true)
         .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
