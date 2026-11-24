@@ -1,0 +1,3 @@
+{
+  "install": "set -euo pipefail; sed -i '/case \\$- in/,/esac/d' ~/.bashrc 2>/dev/null || true; SDK_ROOT=\"${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/opt/android-sdk}}\"; if command -v sdkmanager >/dev/null 2>&1 && { [ ! -d \"$SDK_ROOT/platforms/android-37.0\" ] || [ ! -d \"$SDK_ROOT/build-tools/37.0.0\" ] || [ ! -d \"$SDK_ROOT/build-tools/36.0.0\" ]; }; then yes | sdkmanager --licenses >/dev/null || true; sdkmanager --install \"platforms;android-37.0\" \"build-tools;36.0.0\" \"build-tools;37.0.0\"; fi; ./gradlew :app:checkDebugAarMetadata --no-daemon"
+}
