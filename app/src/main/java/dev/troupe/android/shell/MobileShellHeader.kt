@@ -50,7 +50,7 @@ fun MobileShellHeader(
     connectionState: ConnectionState,
     viewOnly: Boolean,
     onOpenDrawer: () -> Unit,
-    onOpenAttention: () -> Unit = onOpenDrawer,
+    onOpenAttention: () -> Unit,
     onOpenProjectSheet: () -> Unit,
     onNewChat: () -> Unit,
     onNewTerminal: () -> Unit,
