@@ -163,7 +163,9 @@ class ServersViewModelTest {
         val rows = runBlocking { withTimeout(10_000) { vm.rows.first { it?.size == 1 } } }!!
         assertEquals(keep.id, rows.single().server.id)
         assertNull(runBlocking { graph().repository.token(s.id) })
-        assertFalse("token gone from disk", graph().prefsFile.readText(Charsets.ISO_8859_1).contains("token_${s.id}"))
+        dev.troupe.android.testing.eventually(message = { "token gone from disk" }) {
+            !graph().prefsFile.readText(Charsets.ISO_8859_1).contains("token_${s.id}")
+        }
         assertTrue("other token kept", graph().prefsFile.readText(Charsets.ISO_8859_1).contains("token_${keep.id}"))
     }
 

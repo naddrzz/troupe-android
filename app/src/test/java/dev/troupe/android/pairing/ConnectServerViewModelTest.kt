@@ -95,4 +95,60 @@ class ConnectServerViewModelTest {
             }
         }
     }
+
+    @Test
+    fun publicCleartextLinkAndManualEntryAreRefusedBeforeAnyRequest() = runBlocking {
+        FakeTroupeServer().use { server ->
+            TestGraph(temp.newFolder()).use { graph ->
+                val vm = graph.connectServerViewModel()
+                vm.connectLink("http://8.8.8.8:8080/#token=secret")
+                assertEquals(
+                    ConnectUiState.Error(dev.troupe.android.R.string.pair_error_cleartext, "8.8.8.8"),
+                    vm.ui.value,
+                )
+
+                vm.reset()
+                vm.connectManual("http://example.com:8080", "secret", "Public")
+                assertEquals(
+                    ConnectUiState.Error(dev.troupe.android.R.string.pair_error_cleartext, "example.com"),
+                    vm.ui.value,
+                )
+                assertTrue(server.httpRequests.isEmpty())
+            }
+        }
+    }
+
+    @Test
+    fun protocolMismatchAndUnreachableSurfaceExplicitErrors() = runBlocking {
+        FakeTroupeServer().use { server ->
+            server.protocolVersion = 8
+            TestGraph(temp.newFolder()).use { graph ->
+                val vm = graph.connectServerViewModel()
+                vm.connectLink("${server.address.baseUrl}#token=${server.token}")
+                val protoErr = vm.ui.first { it is ConnectUiState.Error } as ConnectUiState.Error
+                assertEquals(dev.troupe.android.R.string.pair_error_protocol, protoErr.message)
+
+                val addr = "${server.address.baseUrl}#token=${server.token}"
+                server.goOffline()
+                vm.reset()
+                vm.connectLink(addr)
+                val offlineErr = vm.ui.first { it is ConnectUiState.Error } as ConnectUiState.Error
+                assertEquals(dev.troupe.android.R.string.pair_error_unreachable, offlineErr.message)
+            }
+        }
+    }
+
+    @Test
+    fun manualConnectWithCustomNameAndNoisyScannedLinkSucceed() = runBlocking {
+        FakeTroupeServer().use { server ->
+            TestGraph(temp.newFolder()).use { graph ->
+                val vm = graph.connectServerViewModel()
+                vm.connectManual(server.typedAddress, server.token, "Studio Mac")
+                val connected = vm.ui.first { it is ConnectUiState.Connected } as ConnectUiState.Connected
+                val saved = graph.repository.server(connected.serverId)!!
+                assertEquals("Studio Mac", saved.name)
+                assertEquals(server.token, graph.repository.token(saved.id))
+            }
+        }
+    }
 }

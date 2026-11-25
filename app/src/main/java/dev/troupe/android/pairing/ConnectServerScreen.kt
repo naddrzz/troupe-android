@@ -37,6 +37,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -258,7 +261,10 @@ fun ConnectServerScreen(
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(palette.destructive.copy(alpha = 0.12f))
                                 .border(1.dp, palette.destructive.copy(alpha = 0.3f), RoundedCornerShape(10.dp))
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                                .semantics {
+                                    liveRegion = LiveRegionMode.Polite
+                                },
                         ) {
                             Text(
                                 text = message,
@@ -407,6 +413,9 @@ private fun ManualConnectSheet(
                 singleLine = true,
                 textStyle = typo.bodyLarge,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(
+                    onDone = { if (address.isNotBlank() && !checking) onSubmit(address, token, name) },
+                ),
                 modifier = Modifier.fillMaxWidth(),
                 colors = connectFieldColors(),
             )
