@@ -48,7 +48,7 @@ class FakeTroupeServer : Closeable {
     var projectsBody: String = fixture("projects.json")
     /**
      * Answers authenticated `/terminal/ws` requests other than `authenticate`: return the reply's
-     * `data` object, or throw [Refused] for an error reply. Frames pushed with [sendTerminalFrame]
+     * `data` value, or throw [Refused] for an error reply. Frames pushed with [sendTerminalFrame]
      * from here go out before the reply, as termul sends `replay` before the `attach` reply.
      */
     var onTerminalRequest: (type: String, payload: JsonObject) -> JsonElement = { type, _ ->

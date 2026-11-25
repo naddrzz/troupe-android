@@ -214,16 +214,31 @@ class WebStoreClient(
             all.forEach { it.job.cancel() }
             all
         }
-        for (item in queued) {
-            var outcome: StoreWriteResult? = null
-            try {
-                outcome = sendWriteAndRecordRetry(item.logicalKey, item.data, wrap(item.data), item.epoch)
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                outcome = StoreWriteResult.Error("CANCELLED", e.message ?: "Flush interrupted")
-                throw e
-            } finally {
-                val finalOutcome = outcome ?: StoreWriteResult.Error("WRITE_FAILED", "Flush aborted")
-                item.waiters.forEach { it.complete(finalOutcome) }
+        var nextIndex = 0
+        var abortResult: StoreWriteResult? = null
+        try {
+            while (nextIndex < queued.size) {
+                val item = queued[nextIndex]
+                var outcome: StoreWriteResult? = null
+                try {
+                    outcome = sendWriteAndRecordRetry(item.logicalKey, item.data, wrap(item.data), item.epoch)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    val cancelled = StoreWriteResult.Error("CANCELLED", e.message ?: "Flush interrupted")
+                    outcome = cancelled
+                    abortResult = cancelled
+                    throw e
+                } finally {
+                    val finalOutcome = outcome ?: StoreWriteResult.Error("WRITE_FAILED", "Flush aborted")
+                    item.waiters.forEach { it.complete(finalOutcome) }
+                    nextIndex++
+                }
+            }
+        } finally {
+            if (nextIndex < queued.size) {
+                val fallback = abortResult ?: StoreWriteResult.Error("WRITE_FAILED", "Flush aborted")
+                for (i in nextIndex until queued.size) {
+                    queued[i].waiters.forEach { it.complete(fallback) }
+                }
             }
         }
         retryFailedWrites()
