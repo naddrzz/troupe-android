@@ -214,30 +214,43 @@ class WebStoreClient(
             all.forEach { it.job.cancel() }
             all
         }
-        var nextIndex = 0
+        var completedCount = 0
         var abortResult: StoreWriteResult? = null
         try {
-            while (nextIndex < queued.size) {
-                val item = queued[nextIndex]
+            for (item in queued) {
                 var outcome: StoreWriteResult? = null
                 try {
                     outcome = sendWriteAndRecordRetry(item.logicalKey, item.data, wrap(item.data), item.epoch)
+                    completedCount++
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     val cancelled = StoreWriteResult.Error("CANCELLED", e.message ?: "Flush interrupted")
                     outcome = cancelled
                     abortResult = cancelled
                     throw e
                 } finally {
-                    val finalOutcome = outcome ?: StoreWriteResult.Error("WRITE_FAILED", "Flush aborted")
-                    item.waiters.forEach { it.complete(finalOutcome) }
-                    nextIndex++
+                    if (outcome != null && abortResult == null) {
+                        item.waiters.forEach { it.complete(outcome) }
+                    }
                 }
             }
         } finally {
-            if (nextIndex < queued.size) {
+            if (completedCount < queued.size) {
+                val remaining = queued.subList(completedCount, queued.size)
                 val fallback = abortResult ?: StoreWriteResult.Error("WRITE_FAILED", "Flush aborted")
-                for (i in nextIndex until queued.size) {
-                    queued[i].waiters.forEach { it.complete(fallback) }
+                try {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                        pendingMutex.withLock {
+                            for (item in remaining) {
+                                if (keyEpochs[item.logicalKey] == item.epoch && item.logicalKey !in pendingWrites) {
+                                    failedWrites[item.logicalKey] = FailedWrite(item.data, item.epoch)
+                                }
+                            }
+                        }
+                    }
+                } finally {
+                    for (item in remaining) {
+                        item.waiters.forEach { it.complete(fallback) }
+                    }
                 }
             }
         }
