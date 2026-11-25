@@ -164,6 +164,19 @@ class ChatRequestsTest {
         eventually { chat.requests("subscribe").size == 2 && ids(vm) == listOf("req-2") }
     }
 
+    @Test fun aReconnectRestoresPendingQuestionsAndDropsOnesAnsweredMeanwhile() {
+        chat.sendPendingQuestions = true
+        val vm = open()
+        chat.append("s1", "question_request", questionRequest("s1", "q-1", "Which branch?"))
+        chat.append("s1", "question_request", questionRequest("s1", "q-2", "Run lint?"))
+        eventually { ids(vm) == listOf("q-1", "q-2") }
+
+        chat.closeAll(1011)
+        chat.answerElsewhere("q-1")
+
+        eventually { chat.requests("subscribe").size == 2 && ids(vm) == listOf("q-2") }
+    }
+
     @Test fun onAViewOnlyServerTheCardsShowButSendNoAnswer() {
         server.allowRemoteWrites = false
         val vm = open()

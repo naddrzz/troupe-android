@@ -1,12 +1,15 @@
 package dev.troupe.android.core.store
 
 import dev.troupe.android.chat.net.ChatConnection
+import dev.troupe.android.chat.net.ChatSocket
 import dev.troupe.android.chat.protocol.ChatFrame
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
@@ -37,9 +40,13 @@ data class WatchUpdate(
  * - Enforces `(hostEpoch, n)` continuity; any gap triggers an automatic `unwatch` + `watch` resync.
  */
 class WatchHub(
-    private val connection: ChatConnection,
+    private val socket: ChatSocket,
+    private val generation: StateFlow<Int>,
     private val scope: CoroutineScope,
 ) {
+    constructor(connection: ChatConnection, scope: CoroutineScope) :
+        this(connection.socket, connection.generation, scope)
+
     private data class Key(val watch: String, val scope: String)
 
     private class ChannelEntry(
@@ -59,18 +66,23 @@ class WatchHub(
     private val channels = LinkedHashMap<Key, ChannelEntry>()
 
     init {
-        scope.launch {
-            connection.socket.frames.collect { frame ->
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            socket.frames.collect { frame ->
                 if (frame is ChatFrame.Watch) {
                     handleWatchFrame(frame)
                 }
             }
         }
         scope.launch {
-            connection.generation.collect { gen ->
+            generation.collect { gen ->
                 if (gen > 0) resubscribeAll()
             }
         }
+    }
+
+    /** Forces an `unwatch` + `watch` resync for an active channel (e.g. on a `{resync: true}` delta). */
+    fun resync(watch: String, watchScope: String = "") {
+        scope.launch { triggerResync(Key(watch, watchScope)) }
     }
 
     /** Subscribes to `(watch, watchScope)` and emits the initial reset state plus every delta. */
@@ -209,7 +221,7 @@ class WatchHub(
 
     private suspend fun sendWatch(key: Key) {
         try {
-            connection.socket.request(
+            socket.request(
                 type = "watch",
                 payload = buildJsonObject {
                     put("watch", key.watch)
@@ -223,7 +235,7 @@ class WatchHub(
 
     private suspend fun sendUnwatch(key: Key) {
         try {
-            connection.socket.request(
+            socket.request(
                 type = "unwatch",
                 payload = buildJsonObject {
                     put("watch", key.watch)

@@ -294,6 +294,7 @@ class ChatViewModel @Inject constructor(
             logEpoch = subscribed.logEpoch
             headSeq = subscribed.headSeq
             parsePendingPermissions(sessionId, reply.payload)?.let { transcript.installPermissions(it, headSeq) }
+            parsePendingQuestions(sessionId, reply.payload)?.let { transcript.installQuestions(it, headSeq) }
             publish()
         } else when (reply.code) {
             ChatErrorCodes.STALE -> recover(connection)
@@ -310,6 +311,7 @@ class ChatViewModel @Inject constructor(
             ?: transcript.pending().filterIsInstance<PendingRequest.Permission>()
         transcript = Transcript().apply { snapshot.events.filter { it.sid == null || it.sid == sessionId }.forEach(::apply) }
         transcript.installPermissions(permissions, snapshot.watermark)
+        parsePendingQuestions(sessionId, reply.payload)?.let { transcript.installQuestions(it, snapshot.watermark) }
         logEpoch = snapshot.logEpoch
         lastSeq = snapshot.watermark
         headSeq = snapshot.watermark

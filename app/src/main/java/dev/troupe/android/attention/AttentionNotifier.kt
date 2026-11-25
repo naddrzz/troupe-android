@@ -22,6 +22,7 @@ import dev.troupe.android.core.nav.Screens
 import dev.troupe.android.core.nav.openChatIntent
 import dev.troupe.android.lock.LockSettingsStore
 import dev.troupe.android.servers.PairedServerRepository
+import dev.troupe.android.workspace.AppSettingsStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -56,6 +57,7 @@ class AttentionNotifier @Inject constructor(
     private val lock: LockSettingsStore,
     private val repository: PairedServerRepository,
     private val store: DataStore<Preferences>,
+    private val appSettings: AppSettingsStore,
 ) {
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
@@ -99,12 +101,16 @@ class AttentionNotifier @Inject constructor(
                     posted.remove(tag(serverId, key))
                     manager.cancel(tag(serverId, key), 0)
                 }
-                changes.added.filter { mayAlert(it, screens.foreground.value, screens.current.value, stayConnected) }.forEach { notify(it) }
+                val notifyNeedsYou = appSettings.settings.value.notifyOnAgentChatNeedsYou
+                changes.added
+                    .filter { mayAlert(it, screens.foreground.value, screens.current.value, stayConnected, notifyNeedsYou) }
+                    .forEach { notify(it) }
             }
         }
         scope.launch {
             center.finished.collect { turn ->
-                if (mayNotifyFinished(turn, screens.foreground.value, stayConnected)) notifyFinished(turn)
+                val notifyTurnFinished = appSettings.settings.value.notifyOnAgentChatTurnFinished
+                if (mayNotifyFinished(turn, screens.foreground.value, stayConnected, notifyTurnFinished)) notifyFinished(turn)
             }
         }
         scope.launch {
@@ -165,6 +171,7 @@ class AttentionNotifier @Inject constructor(
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(content.title.resolve())
             .setContentText(content.text?.resolve())
+            .apply { if (!locked) setSubText(repository.server(turn.serverId)?.name) }
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setPublicVersion(publicVersion(TURNS_CHANNEL, R.string.turn_finished_locked))
             .setAutoCancel(true)

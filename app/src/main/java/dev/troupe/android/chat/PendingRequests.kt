@@ -87,6 +87,8 @@ class PendingFold {
     private val pending = LinkedHashMap<String, PendingRequest>()
     /** `permission_request`s at or below this seq are settled by the last `pendingPermissions` list. */
     private var permissionsSettledAt = -1L
+    /** `question_request`s at or below this seq are settled by the last `pendingQuestions` list. */
+    private var questionsSettledAt = -1L
 
     /** Oldest first. */
     fun pending(): List<PendingRequest> = pending.values.toList()
@@ -98,23 +100,40 @@ class PendingFold {
         permissionsSettledAt = headSeq
     }
 
+    /** Installs a reply's `pendingQuestions`, taken at [headSeq]. */
+    fun installQuestions(questions: List<PendingRequest.Question>, headSeq: Long) {
+        pending.values.removeAll { it is PendingRequest.Question }
+        questions.forEach { pending[it.id] = it }
+        questionsSettledAt = headSeq
+    }
+
     fun apply(event: ChatFrame.Event) {
         val p = event.payload
-        val settled = event.seq <= permissionsSettledAt
+        val permSettled = event.seq <= permissionsSettledAt
+        val questSettled = event.seq <= questionsSettledAt
         when (event.type) {
-            "permission_request" -> if (!settled) {
+            "permission_request" -> if (!permSettled) {
                 parsePermissionRequest(event.sid.orEmpty(), p)?.let { pending[it.id] = it }
             }
-            "question_request" -> parseQuestionRequest(event.sid.orEmpty(), p)?.let { pending[it.id] = it }
-            "question_cancelled" -> p.string("questionId")?.let { pending.remove(it) }
+            "question_request" -> if (!questSettled) {
+                parseQuestionRequest(event.sid.orEmpty(), p)?.let { pending[it.id] = it }
+            }
+            "question_cancelled" -> if (!questSettled) {
+                p.string("questionId")?.let { pending.remove(it) }
+            }
             "tool_call_update" -> (p["update"] as? JsonObject)?.let { update ->
                 val toolCallId = update.string("toolCallId") ?: return@let
                 val status = update.string("status") ?: return@let
-                if (status != "pending" && !settled) {
+                if (status != "pending" && !permSettled) {
                     pending.values.removeAll { it is PendingRequest.Permission && it.toolCallId == toolCallId }
                 }
             }
-            "prompt_complete", "session_closed" -> pending.values.removeAll { !settled || it !is PendingRequest.Permission }
+            "prompt_complete", "session_closed" -> pending.values.removeAll { req ->
+                when (req) {
+                    is PendingRequest.Permission -> !permSettled
+                    is PendingRequest.Question -> !questSettled
+                }
+            }
         }
     }
 }
@@ -163,4 +182,13 @@ private fun JsonObject.string(key: String): String? = (this[key] as? JsonPrimiti
 internal fun parsePendingPermissions(sessionId: String, reply: JsonElement?): List<PendingRequest.Permission>? {
     val list = ((reply as? JsonObject)?.get("pendingPermissions") as? JsonArray) ?: return null
     return list.mapNotNull { entry -> (entry as? JsonObject)?.let { parsePermissionRequest(sessionId, it) } }
+}
+
+/**
+ * A `subscribe` or `recover_session_snapshot` reply's `pendingQuestions`, or null when the host
+ * sent no list (older hosts without question rendezvous). Malformed entries are skipped.
+ */
+internal fun parsePendingQuestions(sessionId: String, reply: JsonElement?): List<PendingRequest.Question>? {
+    val list = ((reply as? JsonObject)?.get("pendingQuestions") as? JsonArray) ?: return null
+    return list.mapNotNull { entry -> (entry as? JsonObject)?.let { parseQuestionRequest(sessionId, it) } }
 }

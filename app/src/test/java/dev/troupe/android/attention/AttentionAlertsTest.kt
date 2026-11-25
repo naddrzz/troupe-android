@@ -86,4 +86,13 @@ class AttentionAlertsTest {
         assertEquals(Text(R.string.attention_chat, listOf("Fix login")), chatName(null, "Fix login"))
         assertEquals(Text(R.string.attention_untitled_chat), chatName(null, null))
     }
+
+    @Test fun settingsTogglesMuteNeedsYouAndTurnFinishedNotifications() {
+        val attention = item("a", server = "srv", session = "s1")
+        val turn = FinishedTurn("srv", "s1", "troupe", "Fix login")
+
+        assertFalse(mayAlert(attention, foreground = true, screen = Screen.Other, stayConnected = emptySet(), notifyNeedsYou = false))
+        assertFalse(mayAlert(attention, foreground = false, screen = Screen.Other, stayConnected = setOf("srv"), notifyNeedsYou = false))
+        assertFalse(mayNotifyFinished(turn, foreground = false, stayConnected = setOf("srv"), notifyTurnFinished = false))
+    }
 }

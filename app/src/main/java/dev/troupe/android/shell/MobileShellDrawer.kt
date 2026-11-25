@@ -232,11 +232,16 @@ fun MobileShellDrawer(
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (section) {
                     MobileSection.Chats -> {
+                        val filteredAttention = state.attentionItems.filter { item ->
+                            query.isBlank() ||
+                                item.sessionTitle.orEmpty().contains(query, ignoreCase = true) ||
+                                item.projectName.orEmpty().contains(query, ignoreCase = true)
+                        }
                         val projectSessions = state.sessions.filter { s ->
                             (activeProject == null || s.projectId == activeProject.id || s.projectId == null) &&
                                 (query.isBlank() || (s.title ?: "Untitled chat").contains(query, ignoreCase = true))
                         }
-                        if (projectSessions.isEmpty()) {
+                        if (filteredAttention.isEmpty() && projectSessions.isEmpty()) {
                             DrawerEmptyState(
                                 text = if (query.isBlank()) {
                                     stringResource(R.string.shell_empty_chats)
@@ -253,6 +258,21 @@ fun MobileShellDrawer(
                                     vertical = 6.dp,
                                 ),
                             ) {
+                                if (filteredAttention.isNotEmpty()) {
+                                    item(key = "attention_section") {
+                                        dev.troupe.android.attention.AttentionSection(
+                                            items = filteredAttention,
+                                            onOpen = { item ->
+                                                onDismiss()
+                                                onOpenChat(item.sessionId, item.sessionTitle)
+                                            },
+                                            modifier = Modifier
+                                                .padding(bottom = 8.dp)
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .border(0.5.dp, palette.warning.copy(alpha = 0.35f), RoundedCornerShape(12.dp)),
+                                        )
+                                    }
+                                }
                                 items(projectSessions, key = { it.sessionId }) { session ->
                                     ChatRecentsRow(
                                         session = session,

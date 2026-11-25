@@ -290,4 +290,39 @@ class AttentionTest {
 
         eventually { vm.attention.value.map { it.key } == listOf("stopped:s9") }
     }
+
+    @Test fun aQuestionAnsweredElsewhereLeavesOnReconnectWhenHostSendsPendingQuestions() {
+        chat.sendPendingQuestions = true
+        liveSession()
+        start()
+        chat.append("s1", "question_request", questionRequest("s1", "q-1", "Which branch?"))
+        chat.append("s1", "question_request", questionRequest("s1", "q-2", "Deploy now?"))
+        eventually { keys().toSet() == setOf("q-1", "q-2") }
+
+        chat.answerElsewhere("q-1")
+        chat.closeAll(1011)
+
+        eventually { chat.requests("subscribe").size == 2 && keys() == listOf("q-2") }
+    }
+
+    @Test fun aSecondWatchHubSubscriberCancellingDoesNotUnwatchAttentionMonitor() {
+        start()
+        val conn = runBlocking { graph.chatConnections.connection(serverId) }
+        val received = java.util.concurrent.CopyOnWriteArrayList<dev.troupe.android.core.store.WatchUpdate>()
+        val extraWatcher = CoroutineScope(Dispatchers.IO).launch {
+            conn.watchHub.watch(dev.troupe.android.core.store.WatchHub.CHAT_HISTORY).collect { received += it }
+        }
+        eventually { received.isNotEmpty() }
+
+        // Simulates WorkspaceSessionManager detaching from this server when the user switches servers.
+        extraWatcher.cancel()
+        Thread.sleep(100)
+        assertTrue("chat_history stays watched while AttentionMonitor runs", chat.requests("unwatch").isEmpty())
+
+        liveSession()
+        chat.historyChanged("s1")
+        eventually { chat.requests("subscribe").size == 1 }
+        chat.append("s1", "permission_request", permissionRequest("s1", "req-1", "Edit Login.kt"))
+        eventually { keys() == listOf("req-1") }
+    }
 }

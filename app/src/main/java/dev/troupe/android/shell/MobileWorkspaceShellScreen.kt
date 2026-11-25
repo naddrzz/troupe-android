@@ -53,6 +53,7 @@ import dev.troupe.android.workspace.mobileSection
 fun MobileWorkspaceShellScreen(
     onOpenConnect: () -> Unit,
     onOpenSettings: () -> Unit,
+    onAttentionSurfaceVisible: (Boolean) -> Unit = {},
     viewModel: WorkspaceShellViewModel = hiltViewModel(),
 ) {
     val state by viewModel.session.state.collectAsStateWithLifecycle()
@@ -62,12 +63,20 @@ fun MobileWorkspaceShellScreen(
 
     val backStack = rememberOverlayBackStack()
     var drawerOpen by remember { mutableStateOf(false) }
+    var drawerSectionOverride by remember { mutableStateOf<dev.troupe.android.workspace.MobileSection?>(null) }
     var projectSheetOpen by remember { mutableStateOf(false) }
     var moreSheetOpen by remember { mutableStateOf(false) }
     var gitSheetOpen by remember { mutableStateOf(false) }
     var filesSheetOpen by remember { mutableStateOf(false) }
     var snapshotsSheetOpen by remember { mutableStateOf(false) }
     var paletteSheetOpen by remember { mutableStateOf(false) }
+
+    androidx.compose.runtime.LaunchedEffect(drawerOpen, projectSheetOpen) {
+        onAttentionSurfaceVisible(drawerOpen || projectSheetOpen)
+    }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose { onAttentionSurfaceVisible(false) }
+    }
 
     backStack.Register("drawer", drawerOpen) { drawerOpen = false }
     backStack.Register("projects", projectSheetOpen) { projectSheetOpen = false }
@@ -138,7 +147,14 @@ fun MobileWorkspaceShellScreen(
                 canNewChat = activeProject != null && !state.viewOnly,
                 connectionState = state.connectionState,
                 viewOnly = state.viewOnly,
-                onOpenDrawer = { drawerOpen = true },
+                onOpenDrawer = {
+                    drawerSectionOverride = null
+                    drawerOpen = true
+                },
+                onOpenAttention = {
+                    drawerSectionOverride = dev.troupe.android.workspace.MobileSection.Chats
+                    drawerOpen = true
+                },
                 onOpenProjectSheet = { projectSheetOpen = true },
                 onNewChat = { viewModel.session.startNewChat() },
                 onNewTerminal = { viewModel.session.spawnTerminal() },
@@ -244,7 +260,7 @@ fun MobileWorkspaceShellScreen(
         if (drawerOpen) {
             MobileShellDrawer(
                 state = state,
-                initialSection = activeTab.mobileSection(),
+                initialSection = drawerSectionOverride ?: activeTab.mobileSection(),
                 githubContent = { closeDrawer ->
                     MobileGithubDrawerSection(
                         server = server,
@@ -316,6 +332,7 @@ fun MobileWorkspaceShellScreen(
             onCreateProject = viewModel.session::createProject,
             onSelectServer = viewModel.session::selectServer,
             onAddServer = onOpenConnect,
+            onOpenChat = { sid, title -> viewModel.session.openChat(sid, title) },
         )
     }
 
