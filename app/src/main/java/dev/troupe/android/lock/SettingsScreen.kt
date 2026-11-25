@@ -491,16 +491,23 @@ private fun ServersSettingsDetail(
             }
 
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .toggleable(
+                        value = server.stayConnected,
+                        role = Role.Switch,
+                        onValueChange = { checked ->
+                            scope.launch { shellViewModel.repository.setStayConnected(server.id, checked) }
+                        },
+                    ),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(stringResource(R.string.servers_stay_connected), style = typo.bodySmall, color = palette.secondary)
                 Switch(
                     checked = server.stayConnected,
-                    onCheckedChange = { checked ->
-                        scope.launch { shellViewModel.repository.setStayConnected(server.id, checked) }
-                    },
+                    onCheckedChange = null,
                 )
             }
 

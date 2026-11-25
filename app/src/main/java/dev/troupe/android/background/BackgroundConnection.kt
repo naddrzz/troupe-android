@@ -8,6 +8,7 @@ import dev.troupe.android.R
 import dev.troupe.android.attention.FinishedTurn
 import dev.troupe.android.attention.NotificationContent
 import dev.troupe.android.attention.Text
+import dev.troupe.android.core.nav.Screens
 import dev.troupe.android.servers.PairedServer
 import dev.troupe.android.servers.PairedServerRepository
 import kotlinx.coroutines.CoroutineScope
@@ -49,6 +50,7 @@ internal fun finishedContent(turn: FinishedTurn, locked: Boolean): NotificationC
 class BackgroundConnection @Inject constructor(
     @ApplicationContext private val context: Context,
     repository: PairedServerRepository,
+    private val screens: Screens,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     /** Null until the paired list is first read. */
@@ -63,8 +65,10 @@ class BackgroundConnection @Inject constructor(
         when (stayConnected.value) {
             true -> start()
             false -> Unit
-            // Hidden before the list was read: decide once it is.
-            null -> scope.launch { if (stayConnected.filterNotNull().first()) start() }
+            // Hidden before the list was read: decide once it is, unless the app already came back.
+            null -> scope.launch {
+                if (stayConnected.filterNotNull().first() && !screens.foreground.value) start()
+            }
         }
     }
 

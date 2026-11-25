@@ -99,7 +99,12 @@ class BackgroundConnectionService : Service() {
                 .build(),
         )
         .setContentIntent(
-            PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE),
+            PendingIntent.getActivity(
+                this,
+                0,
+                Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            ),
         )
         .addAction(
             0,
@@ -108,7 +113,7 @@ class BackgroundConnectionService : Service() {
                 this,
                 0,
                 Intent(this, BackgroundConnectionService::class.java).setAction(ACTION_DISCONNECT),
-                PendingIntent.FLAG_IMMUTABLE,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             ),
         )
         .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
