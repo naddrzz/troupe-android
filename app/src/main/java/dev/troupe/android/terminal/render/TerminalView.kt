@@ -20,8 +20,14 @@ fun TerminalView(renderer: XtermWebViewRenderer, modifier: Modifier = Modifier) 
                 // content: the page's 100% height collapses and xterm fits a single row.
                 layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                 // A tap focuses the WebView but not Compose's focus target for it, so Compose would
-                // keep Enter and Space for whatever it had focused. Move Compose focus along.
-                setOnFocusChangeListener { _, hasFocus -> if (hasFocus) focus.requestFocus() }
+                // keep Enter and Space for whatever it had focused. Move Compose focus along and
+                // ensure xterm's hidden textarea also holds DOM focus.
+                setOnFocusChangeListener { _, hasFocus ->
+                    if (hasFocus) {
+                        focus.requestFocus()
+                        renderer.focusDom()
+                    }
+                }
             }
         },
         modifier = modifier.focusRequester(focus),

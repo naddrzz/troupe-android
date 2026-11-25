@@ -1,7 +1,10 @@
 package dev.troupe.android.terminal.render
 
+import android.view.KeyEvent
 import android.view.View
-import android.webkit.WebView
+import android.view.inputmethod.BaseInputConnection
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.flow.first
@@ -15,15 +18,19 @@ import org.junit.runner.RunWith
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 
-/** The real xterm.js renderer in a WebView on the device: raw UTF-8 split across writes, and typed input. */
+/**
+ * The real xterm.js renderer in [TroupeTerminalWebView] on the device: raw UTF-8 split across
+ * writes, typed input, and soft-keyboard / hardware Enter delivery (#16).
+ */
 @RunWith(AndroidJUnit4::class)
 class XtermWebViewRendererTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
+    private lateinit var webView: TroupeTerminalWebView
     private lateinit var renderer: XtermWebViewRenderer
 
     @Before fun setUp() {
         instrumentation.runOnMainSync {
-            val webView = WebView(instrumentation.targetContext)
+            webView = TroupeTerminalWebView(instrumentation.targetContext)
             val width = View.MeasureSpec.makeMeasureSpec(1080, View.MeasureSpec.EXACTLY)
             val height = View.MeasureSpec.makeMeasureSpec(1200, View.MeasureSpec.EXACTLY)
             webView.measure(width, height)
@@ -54,6 +61,55 @@ class XtermWebViewRendererTest {
 
         assertEquals("ls", typed)
     }
+
+    @Test fun enterFromDispatchKeyEventReachesTheInputStream() {
+        instrumentation.runOnMainSync {
+            webView.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
+            webView.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+        }
+
+        val entered = runBlocking { withTimeout(5_000) { renderer.input.first() } }
+
+        assertEquals("\r", entered)
+    }
+
+    @Test fun enterFromSoftKeyboardEditorActionReachesTheInputStream() {
+        instrumentation.runOnMainSync {
+            val ic = inputConnection()
+            ic.performEditorAction(EditorInfo.IME_ACTION_SEND)
+        }
+
+        val entered = runBlocking { withTimeout(5_000) { renderer.input.first() } }
+
+        assertEquals("\r", entered)
+    }
+
+    @Test fun enterFromSoftKeyboardKeyEventReachesTheInputStream() {
+        instrumentation.runOnMainSync {
+            val ic = inputConnection()
+            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
+            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+        }
+
+        val entered = runBlocking { withTimeout(5_000) { renderer.input.first() } }
+
+        assertEquals("\r", entered)
+    }
+
+    @Test fun enterFromSoftKeyboardCommitTextReachesTheInputStream() {
+        instrumentation.runOnMainSync {
+            val ic = inputConnection()
+            ic.commitText("\n", 1)
+        }
+
+        val entered = runBlocking { withTimeout(5_000) { renderer.input.first() } }
+
+        assertEquals("\r", entered)
+    }
+
+    private fun inputConnection(): InputConnection =
+        webView.onCreateInputConnection(EditorInfo())
+            ?: webView.wrapInputConnection(BaseInputConnection(webView, false))
 
     private fun js(script: String): String {
         val result = CompletableFuture<String>()
