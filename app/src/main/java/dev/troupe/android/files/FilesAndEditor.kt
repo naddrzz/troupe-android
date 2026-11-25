@@ -61,6 +61,7 @@ import dev.troupe.android.core.ui.TroupeSpinner
 import dev.troupe.android.pairing.ServerAddress
 import dev.troupe.android.servers.PairedServer
 import dev.troupe.android.workspace.DirectoryEntry
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
@@ -200,8 +201,16 @@ fun MobileFileExplorerSheet(
         if (actionBusy) return
         actionBusy = true
         scope.launch {
-            val res = call(tokenProvider())
-            actionBusy = false
+            // Whatever happens, the buttons come back.
+            val res = try {
+                call(tokenProvider())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                ApiResult.Unreachable(e.javaClass.simpleName)
+            } finally {
+                actionBusy = false
+            }
             when (res) {
                 is ApiResult.Ok -> {
                     actionEntry = null
@@ -358,7 +367,7 @@ fun MobileFileExplorerSheet(
                     busy = actionBusy,
                     onRenameText = { renameText = it },
                     onMode = { actionMode = it },
-                    onCancel = { actionEntry = null },
+                    onCancel = { if (!actionBusy) actionEntry = null },
                     onRename = {
                         val newName = renameText.trim()
                         if (entries.any { it.name == newName }) {
@@ -424,6 +433,8 @@ fun MobileFileExplorerSheet(
                                                     icon = TroupeIcons.MoreHorizontal,
                                                     contentDescription = stringResource(R.string.files_actions_for, entry.name),
                                                     onClick = {
+                                                        // One action at a time: its answer belongs to the card that asked.
+                                                        if (actionBusy) return@TroupeIconButton
                                                         actionEntry = entry
                                                         actionMode = FileAction.Menu
                                                         renameText = entry.name

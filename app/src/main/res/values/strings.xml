@@ -463,5 +463,5 @@
         <item quantity="one">Restore \"%1$s\"? This will close all current terminals and recreate %2$d terminal from the snapshot. Tap Restore again to confirm.</item>
         <item quantity="other">Restore \"%1$s\"? This will close all current terminals and recreate %2$d terminals from the snapshot. Tap Restore again to confirm.</item>
     </plurals>
-    <string name="shell_browse_more_folders">Showing the first %1$d folders; %2$d more are here. Type the path above to reach one.</string>
+    <string name="shell_browse_more_folders">Showing the first %1$d of %2$d folders. To open another, type its path above and press Go.</string>
 </resources>

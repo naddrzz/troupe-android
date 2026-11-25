@@ -42,6 +42,7 @@ class ChatProtocolTest {
         assertTrue(summary.isQuick)
         // An older host sends neither `kind` nor `createdAt`: a Project chat, dated by its activity.
         val old = TroupeJson.decodeFromString(SessionSummary.serializer(), """{"sessionId":"s2","projectId":"p1","lastActivityAt":5}""")
+        assertEquals(null, old.kind)
         assertTrue(!old.isQuick)
         assertEquals(0L, old.createdAt)
     }

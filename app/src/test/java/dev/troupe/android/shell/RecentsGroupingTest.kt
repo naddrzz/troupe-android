@@ -48,6 +48,13 @@ class RecentsGroupingTest {
         assertEquals(RecentsTime.Date("Nov 3"), recentsTime(revived.recentsAt, now, zone, Locale.US))
     }
 
+    @Test fun aGroupRunsFromTheNewestTimeShownToTheOldest() {
+        // The server lists by last activity; the rows show when each chat was made.
+        val early = SessionSummary(sessionId = "early", projectId = "p1", createdAt = at(25, 8), lastActivityAt = at(25, 20))
+        val late = SessionSummary(sessionId = "late", projectId = "p1", createdAt = at(25, 9), lastActivityAt = at(25, 9))
+        assertEquals(listOf("late", "early"), groupRecents(listOf(early, late), now, zone).single().second.map { it.sessionId })
+    }
+
     @Test fun emptyGroupsAreLeftOut() {
         assertEquals(emptyList<Any>(), groupRecents(emptyList(), now, zone))
         assertEquals(listOf(RecentsGroup.Earlier), groupRecents(listOf(chat("old", at(3, 8))), now, zone).map { it.first })

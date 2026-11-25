@@ -214,12 +214,16 @@ class AppSettingsStore @Inject constructor() {
                 }
                 val merged = JsonObject(baseRaw + pending)
                 if (serverId != null) {
-                    perServer[serverId] = CachedServerSettings(next, merged)
+                    // The server's copy stays what the server last had until the write is confirmed.
+                    perServer[serverId] = CachedServerSettings(next, baseRaw)
                     loadedServers.update { it + serverId }
                 }
                 val result = client.write(PersistenceKeys.APP_SETTINGS, merged)
                 if (result is StoreWriteResult.Ok) {
-                    if (serverId != null) serverRevisions.merge(serverId, result.revision, ::maxOf)
+                    if (serverId != null) {
+                        serverRevisions.merge(serverId, result.revision, ::maxOf)
+                        perServer.computeIfPresent(serverId) { _, cached -> cached.copy(rawJson = merged) }
+                    }
                     // Written: forget these, unless a newer edit changed a field again meanwhile.
                     unsentChanges.computeIfPresent(key) { _, now ->
                         now.filterNot { (field, value) -> pending[field] == value }.ifEmpty { null }
@@ -288,8 +292,14 @@ class AppSettingsStore @Inject constructor() {
 
     private fun applyJson(serverId: String, element: JsonElement) {
         val obj = element as? JsonObject ?: return
+        // A field the server changed since its last known copy is the server's now: an edit of it
+        // still waiting here must not undo that. The other waiting edits stay on screen until sent.
+        val known = perServer[serverId]?.rawJson
+        val waiting = unsentChanges.computeIfPresent(serverId) { _, pending ->
+            pending.filterNot { (field, _) -> known != null && obj[field] != known[field] }.ifEmpty { null }
+        }.orEmpty()
         val decoded = runCatching {
-            TroupeJson.decodeFromJsonElement(AppSettings.serializer(), obj)
+            TroupeJson.decodeFromJsonElement(AppSettings.serializer(), JsonObject(obj + waiting))
         }.getOrNull() ?: return
         perServer[serverId] = CachedServerSettings(decoded, obj)
         if (attachedServerId == serverId) {

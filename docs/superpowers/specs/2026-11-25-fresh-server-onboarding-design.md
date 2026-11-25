@@ -86,7 +86,7 @@ Config for a catalog agent: the `installed` block when present (`command`, `args
   (`codex-acp`, `claude-acp`, `gemini`, `cursor`, `opencode`, `pi-acp`) and `pickDefault`.
 - `AgentSetup.kt`: a singleton over the active connection and store. Holds `AgentSetupState`
   (catalog, saved configs, last selected, installing ids, error) and offers `refresh()`,
-  `install(agentId)`, `select(configId)`. Installing saves the resulting config to `acp/agents`.
+  `install(agent: CatalogAgent)`, `select(configId)`. Installing saves the resulting config to `acp/agents`.
 - `ChatLauncher.kt`: `launch(connection, config, project, cwd, prompt)` runs save-if-needed ->
   `spawn_agent` -> `create_session` (with the one auth retry) -> `send_prompt`, and returns the
   session id or a message for the user.

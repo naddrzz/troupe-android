@@ -32,17 +32,21 @@ fun TerminalView(renderer: XtermWebViewRenderer, modifier: Modifier = Modifier) 
                 val slop = ViewConfiguration.get(context).scaledTouchSlop
                 var downX = 0f
                 var downY = 0f
+                var moved = false
                 @Suppress("ClickableViewAccessibility")
                 setOnTouchListener { view, event ->
                     when (event.actionMasked) {
                         MotionEvent.ACTION_DOWN -> {
                             downX = event.x
                             downY = event.y
+                            moved = false
                         }
+                        // Once past the slop it is a scroll, even if the finger comes back.
+                        MotionEvent.ACTION_MOVE ->
+                            if (abs(event.x - downX) > slop || abs(event.y - downY) > slop) moved = true
                         MotionEvent.ACTION_UP -> {
                             if (!view.hasFocus()) view.requestFocus()
                             // A tap only: not the end of a scroll, nor of a long press that selects.
-                            val moved = abs(event.x - downX) > slop || abs(event.y - downY) > slop
                             val held = event.eventTime - event.downTime >= ViewConfiguration.getLongPressTimeout()
                             if (!moved && !held) {
                                 view.context.getSystemService(InputMethodManager::class.java)?.showSoftInput(view, 0)

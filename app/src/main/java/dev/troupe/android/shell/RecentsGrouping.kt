@@ -21,9 +21,9 @@ sealed interface RecentsTime {
 }
 
 /**
- * Splits [sessions] (newest first) into the drawer's groups. Quick chats get their own group
- * whatever their age; the rest go by the day of [recentsAt], the time their row shows. Empty
- * groups are left out.
+ * Splits [sessions] into the drawer's groups. Quick chats get their own group whatever their
+ * age; the rest go by the day of [recentsAt], the time their row shows, and every group runs
+ * from the newest of those times to the oldest. Empty groups are left out.
  */
 fun groupRecents(
     sessions: List<SessionSummary>,
@@ -31,7 +31,7 @@ fun groupRecents(
     zone: ZoneId = ZoneId.systemDefault(),
 ): List<Pair<RecentsGroup, List<SessionSummary>>> {
     val today = dayOf(now, zone)
-    return sessions.groupBy { session ->
+    return sessions.sortedByDescending { it.recentsAt }.groupBy { session ->
         when {
             session.isQuick -> RecentsGroup.Quick
             else -> when (dayOf(session.recentsAt, zone)) {

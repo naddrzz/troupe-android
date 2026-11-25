@@ -30,6 +30,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.troupe.android.R
@@ -413,6 +416,9 @@ internal fun AddProjectContent(
             onValueChange = { selectedPath = it },
             label = { Text(stringResource(R.string.shell_project_path_label)) },
             singleLine = true,
+            // Go opens the typed folder: the way to one the list below does not show.
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+            keyboardActions = KeyboardActions(onGo = { loadDir(selectedPath.trim()) }),
             textStyle = typo.bodyLarge,
             modifier = Modifier.fillMaxWidth(),
             colors = OutlinedTextFieldDefaults.colors(
@@ -498,10 +504,10 @@ internal fun AddProjectContent(
             }
         }
 
-        val hiddenFolders = currentBrowse?.entries.orEmpty().count { it.isDirectory } - MAX_BROWSE_FOLDERS
-        if (!loadingDir && browseError == null && hiddenFolders > 0) {
+        val folderCount = currentBrowse?.entries.orEmpty().count { it.isDirectory }
+        if (!loadingDir && browseError == null && folderCount > MAX_BROWSE_FOLDERS) {
             Text(
-                text = stringResource(R.string.shell_browse_more_folders, MAX_BROWSE_FOLDERS, hiddenFolders),
+                text = stringResource(R.string.shell_browse_more_folders, MAX_BROWSE_FOLDERS, folderCount),
                 style = typo.bodySmall,
                 color = palette.mutedForeground,
             )
