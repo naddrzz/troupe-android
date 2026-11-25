@@ -526,9 +526,11 @@ class WorkspaceSessionManager @Inject constructor(
     private suspend fun detachActiveSession() = sessionMutex.withLock {
         pendingTransferWrites?.second?.abandon("Session detached")
         pendingTransferWrites = null
-        activeStoreClient?.flushAll()
+        val oldStore = activeStoreClient
+        oldStore?.flushAll()
         sessionJob?.cancelAndJoin()
         sessionJob = null
+        oldStore?.drainUnsentWrites()?.abandon("Session detached")
         terminalsWatchJob?.cancel()
         terminalsWatchJob = null
         appSettingsStore.detach()
@@ -587,6 +589,7 @@ class WorkspaceSessionManager @Inject constructor(
             oldStore?.flushAll()
             sessionJob?.cancelAndJoin()
             sessionJob = null
+            oldStore?.drainUnsentWrites()?.abandon("Switched server")
             terminalsWatchJob?.cancel()
             terminalsWatchJob = null
             carriedWrites = pendingTransferWrites?.takeIf { it.first == server.id }?.second
