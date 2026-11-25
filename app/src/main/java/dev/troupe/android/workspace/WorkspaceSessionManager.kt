@@ -28,6 +28,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -141,6 +142,7 @@ class WorkspaceSessionManager @Inject constructor(
     @Volatile private var activeStoreClient: WebStoreClient? = null
     @Volatile private var explicitProjectSelection: Boolean = false
     private val sessionMutex = Mutex()
+    private var pendingTransferWrites: Pair<String, WebStoreClient.UnsentWrites>? = null
     private var sessionJob: Job? = null
     private var terminalsWatchJob: Job? = null
     private var started = false
@@ -222,7 +224,7 @@ class WorkspaceSessionManager @Inject constructor(
         scope.launch {
             repository.updateToken(server.id, clean)
             chatConnections.resetConnection(server.id)
-            attachToServer(server.copy(hasToken = true))
+            attachToServer(server.copy(hasToken = true), rebindingSameServer = true)
         }
     }
 
@@ -522,8 +524,10 @@ class WorkspaceSessionManager @Inject constructor(
     }
 
     private suspend fun detachActiveSession() = sessionMutex.withLock {
+        pendingTransferWrites?.second?.abandon("Session detached")
+        pendingTransferWrites = null
         activeStoreClient?.flushAll()
-        sessionJob?.cancel()
+        sessionJob?.cancelAndJoin()
         sessionJob = null
         terminalsWatchJob?.cancel()
         terminalsWatchJob = null
@@ -544,28 +548,57 @@ class WorkspaceSessionManager @Inject constructor(
         }
     }
 
-    private suspend fun attachToServer(server: PairedServer) = sessionMutex.withLock {
-        attachToServerLocked(server)
+    private suspend fun attachToServer(server: PairedServer, rebindingSameServer: Boolean = false) = sessionMutex.withLock {
+        attachToServerLocked(server, rebindingSameServer)
     }
 
     private suspend fun reattachIfClosed(serverId: String, closedConn: ChatConnection) = sessionMutex.withLock {
         val currentActive = _state.value.activeServer ?: return@withLock
         if (currentActive.id != serverId || activeConnection !== closedConn) return@withLock
-        attachToServerLocked(currentActive)
+        attachToServerLocked(currentActive, rebindingSameServer = true)
     }
 
-    private suspend fun attachToServerLocked(server: PairedServer) {
-        activeStoreClient?.flushAll()
-        sessionJob?.cancel()
-        sessionJob = null
-        terminalsWatchJob?.cancel()
-        terminalsWatchJob = null
+    private suspend fun attachToServerLocked(server: PairedServer, rebindingSameServer: Boolean) {
+        val oldStore = activeStoreClient
+        val carriedWrites: WebStoreClient.UnsentWrites?
+        if (rebindingSameServer) {
+            // The previous connection was already invalidated/stopped; cancel its session scope first
+            // and drain unsent writes without attempting I/O on the dead socket.
+            sessionJob?.cancelAndJoin()
+            sessionJob = null
+            terminalsWatchJob?.cancel()
+            terminalsWatchJob = null
+            val drained = oldStore?.drainUnsentWrites()
+            val previous = pendingTransferWrites?.takeIf { it.first == server.id }?.second
+            if (pendingTransferWrites != null && pendingTransferWrites?.first != server.id) {
+                pendingTransferWrites?.second?.abandon("Switched server")
+            }
+            carriedWrites = when {
+                previous != null && drained != null -> previous.mergeWith(drained)
+                drained != null && !drained.isEmpty() -> drained
+                else -> previous
+            }
+            pendingTransferWrites = carriedWrites?.takeUnless { it.isEmpty() }?.let { server.id to it }
+        } else {
+            if (pendingTransferWrites != null && pendingTransferWrites?.first != server.id) {
+                pendingTransferWrites?.second?.abandon("Switched server")
+                pendingTransferWrites = null
+            }
+            oldStore?.flushAll()
+            sessionJob?.cancelAndJoin()
+            sessionJob = null
+            terminalsWatchJob?.cancel()
+            terminalsWatchJob = null
+            carriedWrites = pendingTransferWrites?.takeIf { it.first == server.id }?.second
+        }
         activeConnection = null
         activeWatchHub = null
         activeStoreClient = null
-        explicitProjectSelection = false
+        if (!rebindingSameServer) {
+            explicitProjectSelection = false
+            parkedWorkspaces.clear()
+        }
         hydratedServerId.value = null
-        parkedWorkspaces.clear()
         hydratedProjects.clear()
         appSettingsStore.detach()
 
@@ -584,14 +617,24 @@ class WorkspaceSessionManager @Inject constructor(
             return
         }
 
+        val writesToAdopt = carriedWrites?.takeUnless { it.isEmpty() }
+
         activeConnection = conn
         val deviceId = identityStore.get().deviceId
+        val adopted = kotlinx.coroutines.CompletableDeferred<Unit>()
 
         sessionJob = scope.launch {
             val hub = conn.watchHub
             val store = WebStoreClient(conn, hub, deviceId, this)
-            activeWatchHub = hub
-            activeStoreClient = store
+            try {
+                if (writesToAdopt != null) {
+                    store.adoptUnsentWrites(writesToAdopt, retryImmediately = false)
+                }
+                activeWatchHub = hub
+                activeStoreClient = store
+            } finally {
+                adopted.complete(Unit)
+            }
             appSettingsStore.attach(server.id, store, this)
 
             // Rebind automatically if ChatConnections invalidates this connection (e.g. token update / re-pair).
@@ -681,13 +724,18 @@ class WorkspaceSessionManager @Inject constructor(
                 }
             }
 
-            // Hydrate device-scoped active project + shell layout once connected
+            // Flush any carried writes before hydrating device-scoped active project + shell layout
             launch {
                 conn.generation.collect { gen ->
                     if (gen <= 0) return@collect
+                    store.flushPendingRetries()
                     hydrateDeviceState(server.id, store, conn)
                 }
             }
+        }
+        adopted.await()
+        if (pendingTransferWrites?.first == server.id) {
+            pendingTransferWrites = null
         }
     }
 
