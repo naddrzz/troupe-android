@@ -198,7 +198,7 @@ fun MobileTerminalActionsSheet(
                         },
                         dismissButton = {
                             androidx.compose.material3.TextButton(onClick = { confirmKill = false }) {
-                                Text(stringResource(R.string.action_cancel), color = palette.foreground)
+                                Text(stringResource(R.string.terminals_cancel), color = palette.foreground)
                             }
                         },
                     )

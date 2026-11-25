@@ -457,7 +457,7 @@ private fun ServersSettingsDetail(
             },
             dismissButton = {
                 TextButton(onClick = { pendingRemoveServer = null }) {
-                    Text(stringResource(R.string.action_cancel), color = palette.foreground)
+                    Text(stringResource(R.string.servers_cancel), color = palette.foreground)
                 }
             },
         )

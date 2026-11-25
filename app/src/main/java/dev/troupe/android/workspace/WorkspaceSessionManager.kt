@@ -400,18 +400,19 @@ class WorkspaceSessionManager @Inject constructor(
     ) {
         _state.update { st ->
             val updatedTerminals = st.terminals.map { term ->
-                if (term.id == terminalId) {
-                    term.copy(cwd = cwd ?: term.cwd)
+                if (term.id == terminalId && cwd != null) {
+                    PreservedTerminal(
+                        id = term.id,
+                        shell = term.shell,
+                        cwd = cwd,
+                        claim = term.claim,
+                        hasLiveAttachment = term.hasLiveAttachment,
+                    )
                 } else {
                     term
                 }
             }
-            val nextSubtitleName = if (!gitBranch.isNullOrBlank() && terminalId !in st.terminalNames) {
-                st.terminalNames
-            } else {
-                st.terminalNames
-            }
-            st.copy(terminals = updatedTerminals, terminalNames = nextSubtitleName)
+            st.copy(terminals = updatedTerminals)
         }
     }
 
@@ -675,7 +676,7 @@ class WorkspaceSessionManager @Inject constructor(
             if (loaded != null) {
                 val localParked = parkedWorkspaces[projectId]
                 val merged = if (localParked != null && localParked.tabs.isNotEmpty()) {
-                    var acc = loaded
+                    var acc: PersistedWorkspace = loaded
                     for (t in localParked.tabs) {
                         acc = acc.openOrFocus(t)
                     }
