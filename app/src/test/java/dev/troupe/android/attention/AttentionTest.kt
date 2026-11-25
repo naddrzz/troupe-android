@@ -325,4 +325,21 @@ class AttentionTest {
         chat.append("s1", "permission_request", permissionRequest("s1", "req-1", "Edit Login.kt"))
         eventually { keys() == listOf("req-1") }
     }
+
+    @Test fun updatingTheTokenRebindsAttentionToTheReplacementConnection() {
+        liveSession()
+        start()
+        chat.append("s1", "permission_request", permissionRequest("s1", "req-1", "Edit Login.kt"))
+        eventually { keys() == listOf("req-1") }
+
+        // Rotate the server's token and drop the old socket -> auth fails for good.
+        server.token = "rotated-token-1111111111111111"
+        chat.closeAll(1011)
+        eventually { graph.attention.servers.value[serverId] == ServerAttention(ready = false, items = emptyList()) }
+
+        // Updating the token invalidates the failed connection and AttentionCenter rebinds to the replacement.
+        runBlocking { graph.repository.updateToken(serverId, server.token) }
+
+        eventually { graph.attention.servers.value[serverId]?.ready == true && keys() == listOf("req-1") }
+    }
 }

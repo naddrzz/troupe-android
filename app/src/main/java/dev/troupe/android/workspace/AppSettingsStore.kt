@@ -138,9 +138,12 @@ class AppSettingsStore @Inject constructor() {
             val revBefore = serverRevisions[serverId]
             val initialRead = client.read(PersistenceKeys.APP_SETTINGS)
             writeMutex.withLock {
+                val currentRev = serverRevisions[serverId]
                 val shouldApply = serverId !in loadedServers.value || (
-                    initialRead is StoreReadResult.Found &&
-                        serverRevisions[serverId]?.let { initialRead.revision > it } == true
+                    initialRead is StoreReadResult.Found && (
+                        (currentRev == null && perServer[serverId] == null) ||
+                            (currentRev != null && initialRead.revision > currentRev)
+                        )
                     )
                 if (shouldApply) {
                     applyReadResult(serverId, initialRead, revBefore)

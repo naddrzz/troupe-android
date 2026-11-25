@@ -36,6 +36,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -138,6 +140,7 @@ class WorkspaceSessionManager @Inject constructor(
     @Volatile private var activeWatchHub: WatchHub? = null
     @Volatile private var activeStoreClient: WebStoreClient? = null
     @Volatile private var explicitProjectSelection: Boolean = false
+    private val sessionMutex = Mutex()
     private var sessionJob: Job? = null
     private var terminalsWatchJob: Job? = null
     private var started = false
@@ -518,7 +521,7 @@ class WorkspaceSessionManager @Inject constructor(
         }
     }
 
-    private suspend fun detachActiveSession() {
+    private suspend fun detachActiveSession() = sessionMutex.withLock {
         activeStoreClient?.flushAll()
         sessionJob?.cancel()
         sessionJob = null
@@ -541,10 +544,25 @@ class WorkspaceSessionManager @Inject constructor(
         }
     }
 
-    private suspend fun attachToServer(server: PairedServer) {
+    private suspend fun attachToServer(server: PairedServer) = sessionMutex.withLock {
+        attachToServerLocked(server)
+    }
+
+    private suspend fun reattachIfClosed(serverId: String, closedConn: ChatConnection) = sessionMutex.withLock {
+        val currentActive = _state.value.activeServer ?: return@withLock
+        if (currentActive.id != serverId || activeConnection !== closedConn) return@withLock
+        attachToServerLocked(currentActive)
+    }
+
+    private suspend fun attachToServerLocked(server: PairedServer) {
         activeStoreClient?.flushAll()
         sessionJob?.cancel()
+        sessionJob = null
         terminalsWatchJob?.cancel()
+        terminalsWatchJob = null
+        activeConnection = null
+        activeWatchHub = null
+        activeStoreClient = null
         explicitProjectSelection = false
         hydratedServerId.value = null
         parkedWorkspaces.clear()
@@ -575,6 +593,14 @@ class WorkspaceSessionManager @Inject constructor(
             activeWatchHub = hub
             activeStoreClient = store
             appSettingsStore.attach(server.id, store, this)
+
+            // Rebind automatically if ChatConnections invalidates this connection (e.g. token update / re-pair).
+            launch {
+                conn.awaitClosed()
+                if (activeConnection === conn && _state.value.activeServer?.id == server.id) {
+                    scope.launch { reattachIfClosed(server.id, conn) }
+                }
+            }
 
             // Track connection state & mid-session 401 -> TokenGateScreen
             launch {
