@@ -38,6 +38,12 @@ import kotlinx.serialization.json.put
 import java.io.IOException
 import javax.inject.Inject
 
+data class TerminalMetadata(
+    val cwd: String? = null,
+    val gitBranch: String? = null,
+    val lastExitCode: Int? = null,
+)
+
 sealed interface TerminalUi {
     data object Connecting : TerminalUi
     data object Live : TerminalUi
@@ -68,6 +74,8 @@ class TerminalViewModel @Inject constructor(
     private val terminalId: String = checkNotNull(savedState["terminalId"])
     private val _ui = MutableStateFlow<TerminalUi>(TerminalUi.Connecting)
     val ui: StateFlow<TerminalUi> = _ui.asStateFlow()
+    private val _metadata = MutableStateFlow(TerminalMetadata())
+    val metadata: StateFlow<TerminalMetadata> = _metadata.asStateFlow()
     private val _connection = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     /** The Paired Server's connection, for the header. */
     val connection: StateFlow<ConnectionState> = _connection.asStateFlow()
@@ -261,6 +269,15 @@ class TerminalViewModel @Inject constructor(
             }
             is TerminalFrame.Gap -> if (frame.terminalId == terminalId && !awaitingReplay) reattach()
             is TerminalFrame.Exit -> if (frame.terminalId == terminalId) _ui.value = TerminalUi.Exited(frame.exitCode)
+            is TerminalFrame.CwdChanged -> if (frame.terminalId == terminalId) {
+                _metadata.value = _metadata.value.copy(cwd = frame.cwd)
+            }
+            is TerminalFrame.GitBranchChanged -> if (frame.terminalId == terminalId) {
+                _metadata.value = _metadata.value.copy(gitBranch = frame.branch)
+            }
+            is TerminalFrame.ExitCodeChanged -> if (frame.terminalId == terminalId) {
+                _metadata.value = _metadata.value.copy(lastExitCode = frame.exitCode)
+            }
             else -> Unit
         }
     }

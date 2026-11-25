@@ -25,12 +25,14 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -433,6 +435,33 @@ private fun ServersSettingsDetail(
     val typo = TroupeTheme.typography
     val scope = rememberCoroutineScope()
     val state by shellViewModel.session.state.collectAsStateWithLifecycle()
+    var pendingRemoveServer by remember { mutableStateOf<dev.troupe.android.servers.PairedServer?>(null) }
+
+    pendingRemoveServer?.let { target ->
+        AlertDialog(
+            onDismissRequest = { pendingRemoveServer = null },
+            containerColor = palette.popover,
+            titleContentColor = palette.foreground,
+            textContentColor = palette.secondary,
+            title = { Text(stringResource(R.string.servers_remove_title, target.name)) },
+            text = { Text(stringResource(R.string.servers_remove_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingRemoveServer = null
+                        scope.launch { shellViewModel.repository.remove(target.id) }
+                    },
+                ) {
+                    Text(stringResource(R.string.servers_remove), color = palette.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingRemoveServer = null }) {
+                    Text(stringResource(R.string.action_cancel), color = palette.foreground)
+                }
+            },
+        )
+    }
 
     state.servers.forEach { server ->
         val isActive = server.id == state.activeServer?.id
@@ -487,7 +516,7 @@ private fun ServersSettingsDetail(
                     text = stringResource(R.string.servers_remove),
                     variant = TroupeButtonVariant.Destructive,
                     minHeight = 36.dp,
-                    onClick = { scope.launch { shellViewModel.repository.remove(server.id) } },
+                    onClick = { pendingRemoveServer = server },
                 )
             }
         }

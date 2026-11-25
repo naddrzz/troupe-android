@@ -327,14 +327,16 @@ fun GithubItemPane(
     val typo = TroupeTheme.typography
     val scope = rememberCoroutineScope()
 
-    var detail by remember(number) { mutableStateOf<GithubItemDetailDto?>(null) }
-    var loading by remember(number) { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var commentText by remember { mutableStateOf("") }
-    var sending by remember { mutableStateOf(false) }
+    var detail by remember(server.id, cwd, kind, number) { mutableStateOf<GithubItemDetailDto?>(null) }
+    var loading by remember(server.id, cwd, kind, number) { mutableStateOf(true) }
+    var error by remember(server.id, cwd, kind, number) { mutableStateOf<String?>(null) }
+    var actionError by remember(server.id, cwd, kind, number) { mutableStateOf<String?>(null) }
+    var commentText by remember(server.id, cwd, kind, number) { mutableStateOf("") }
+    var sending by remember(server.id, cwd, kind, number) { mutableStateOf(false) }
 
     fun load() {
         loading = true
+        error = null
         scope.launch {
             when (val res = githubApi.getItem(server.address, tokenProvider(), cwd, repo, kind, number)) {
                 is ApiResult.Ok -> {
@@ -353,7 +355,7 @@ fun GithubItemPane(
         }
     }
 
-    LaunchedEffect(server.id, cwd, number) { load() }
+    LaunchedEffect(server.id, cwd, kind, number) { load() }
 
     Column(
         modifier = modifier
@@ -389,14 +391,25 @@ fun GithubItemPane(
                         )
                         Text(text = item.author, style = typo.bodySmall, color = palette.mutedForeground)
                     }
+                    if (actionError != null) {
+                        Text(
+                            text = actionError!!,
+                            style = typo.bodySmall,
+                            color = palette.destructive,
+                        )
+                    }
                     if (item.kind == "pr" && item.state == "open" && !viewOnly) {
                         TroupeButton(
                             text = stringResource(R.string.github_merge_pr),
                             variant = TroupeButtonVariant.Secondary,
                             onClick = {
+                                actionError = null
                                 scope.launch {
-                                    githubApi.mergePr(server.address, tokenProvider(), cwd, repo, number)
-                                    load()
+                                    when (val res = githubApi.mergePr(server.address, tokenProvider(), cwd, repo, number)) {
+                                        is ApiResult.Ok -> load()
+                                        is ApiResult.ServerError -> actionError = res.message
+                                        else -> actionError = "Could not merge pull request."
+                                    }
                                 }
                             },
                         )
@@ -456,12 +469,25 @@ fun GithubItemPane(
                             enabled = commentText.isNotBlank(),
                             loading = sending,
                             onClick = {
+                                val textToSend = commentText.trim()
                                 sending = true
+                                actionError = null
                                 scope.launch {
-                                    githubApi.comment(server.address, tokenProvider(), cwd, repo, kind, number, commentText.trim())
-                                    commentText = ""
-                                    sending = false
-                                    load()
+                                    when (val res = githubApi.comment(server.address, tokenProvider(), cwd, repo, kind, number, textToSend)) {
+                                        is ApiResult.Ok -> {
+                                            commentText = ""
+                                            sending = false
+                                            load()
+                                        }
+                                        is ApiResult.ServerError -> {
+                                            actionError = res.message
+                                            sending = false
+                                        }
+                                        else -> {
+                                            actionError = "Could not post comment."
+                                            sending = false
+                                        }
+                                    }
                                 }
                             },
                         )

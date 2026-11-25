@@ -248,7 +248,12 @@ fun MobileFileExplorerSheet(
                         text = stringResource(R.string.files_create),
                         enabled = newName.isNotBlank(),
                         onClick = {
-                            val target = "${currentPath.trimEnd('/')}/${newName.trim()}"
+                            val cleanName = newName.trim()
+                            if (entries.any { it.name == cleanName }) {
+                                error = "An entry named '$cleanName' already exists in this folder."
+                                return@TroupeButton
+                            }
+                            val target = "${currentPath.trimEnd('/')}/$cleanName"
                             val kind = creatingKind
                             scope.launch {
                                 val token = tokenProvider()
@@ -260,6 +265,7 @@ fun MobileFileExplorerSheet(
                                 if (res is ApiResult.Ok) {
                                     creatingKind = null
                                     newName = ""
+                                    error = null
                                     if (kind == "file") {
                                         onDismiss()
                                         onOpenFile(target)
@@ -268,6 +274,8 @@ fun MobileFileExplorerSheet(
                                     }
                                 } else if (res is ApiResult.ServerError) {
                                     error = res.message
+                                } else {
+                                    error = "Could not create $cleanName."
                                 }
                             }
                         },
@@ -354,21 +362,24 @@ fun CodeEditorPane(
     var original by remember(filePath) { mutableStateOf("") }
     var content by remember(filePath) { mutableStateOf("") }
     var loading by remember(filePath) { mutableStateOf(true) }
+    var readSucceeded by remember(filePath) { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var error by remember(filePath) { mutableStateOf<String?>(null) }
     var previewMarkdown by remember(filePath) { mutableStateOf(false) }
 
     val isMarkdown = filePath.endsWith(".md", ignoreCase = true) || filePath.endsWith(".mdx", ignoreCase = true)
-    val dirty = content != original
+    val dirty = readSucceeded && content != original
 
     LaunchedEffect(server.id, filePath) {
         loading = true
+        readSucceeded = false
         error = null
         val token = tokenProvider()
         when (val res = filesApi.read(server.address, token, filePath)) {
             is ApiResult.Ok -> {
                 original = res.value.content
                 content = res.value.content
+                readSucceeded = true
                 loading = false
             }
             is ApiResult.ServerError -> {
@@ -405,7 +416,7 @@ fun CodeEditorPane(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            if (isMarkdown) {
+            if (isMarkdown && readSucceeded) {
                 Text(
                     text = stringResource(if (previewMarkdown) R.string.editor_source else R.string.editor_preview),
                     style = typo.labelMedium,
@@ -417,19 +428,20 @@ fun CodeEditorPane(
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                 )
             }
-            if (dirty && !viewOnly) {
+            if (dirty && !viewOnly && readSucceeded) {
                 TroupeButton(
                     text = stringResource(R.string.servers_save),
                     loading = saving,
                     minHeight = 34.dp,
                     onClick = {
+                        val savedContent = content
                         saving = true
                         error = null
                         scope.launch {
                             val token = tokenProvider()
-                            when (val res = filesApi.write(server.address, token, filePath, content)) {
+                            when (val res = filesApi.write(server.address, token, filePath, savedContent)) {
                                 is ApiResult.Ok -> {
-                                    original = content
+                                    original = savedContent
                                     saving = false
                                 }
                                 is ApiResult.ServerError -> {
@@ -461,6 +473,7 @@ fun CodeEditorPane(
             loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 TroupeSpinner(size = 22.dp)
             }
+            !readSucceeded -> Box(Modifier.fillMaxSize())
             isMarkdown && previewMarkdown -> Box(
                 modifier = Modifier
                     .weight(1f)

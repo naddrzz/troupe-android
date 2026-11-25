@@ -119,7 +119,7 @@ data class PersistedWorkspace(
     val activeTabId: String? = null,
 ) {
     val activeTab: WorkspaceTab?
-        get() = tabs.firstOrNull { it.id == activeTabId } ?: tabs.lastOrNull()
+        get() = activeTabId?.let { id -> tabs.firstOrNull { it.id == id } }
 
     fun openOrFocus(tab: WorkspaceTab): PersistedWorkspace {
         val existing = tabs.firstOrNull { it.id == tab.id }

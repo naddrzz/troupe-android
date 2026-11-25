@@ -165,6 +165,7 @@ fun MobileTerminalActionsSheet(
             }
 
             if (!viewOnly) {
+                var confirmKill by remember { mutableStateOf(false) }
                 HorizontalDivider(color = palette.hairline, thickness = 0.5.dp)
                 SheetGroup {
                     SheetRow(
@@ -173,9 +174,32 @@ fun MobileTerminalActionsSheet(
                         leading = {
                             Icon(TroupeIcons.Trash, contentDescription = null, tint = palette.destructive, modifier = Modifier.size(18.dp))
                         },
-                        onClick = {
-                            onDismiss()
-                            onKill()
+                        onClick = { confirmKill = true },
+                    )
+                }
+                if (confirmKill) {
+                    androidx.compose.material3.AlertDialog(
+                        onDismissRequest = { confirmKill = false },
+                        containerColor = palette.popover,
+                        titleContentColor = palette.foreground,
+                        textContentColor = palette.secondary,
+                        title = { Text(stringResource(R.string.terminals_kill)) },
+                        text = { Text(stringResource(R.string.terminals_kill_confirm)) },
+                        confirmButton = {
+                            androidx.compose.material3.TextButton(
+                                onClick = {
+                                    confirmKill = false
+                                    onDismiss()
+                                    onKill()
+                                },
+                            ) {
+                                Text(stringResource(R.string.terminals_kill), color = palette.error)
+                            }
+                        },
+                        dismissButton = {
+                            androidx.compose.material3.TextButton(onClick = { confirmKill = false }) {
+                                Text(stringResource(R.string.action_cancel), color = palette.foreground)
+                            }
                         },
                     )
                 }

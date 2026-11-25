@@ -71,13 +71,31 @@ fun EmbeddedChatPane(
     onOpenFiles: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
-    val viewModel = remember(serverId, sessionId) {
-        ChatViewModel(
-            savedState = SavedStateHandle(mapOf("serverId" to serverId, "sessionId" to sessionId)),
-            connections = connections,
-            viewOnlyRegistry = viewOnlyRegistry,
-        )
+    val storeOwner = remember(serverId, sessionId) {
+        object : androidx.lifecycle.ViewModelStoreOwner {
+            override val viewModelStore = androidx.lifecycle.ViewModelStore()
+        }
     }
+    androidx.compose.runtime.DisposableEffect(storeOwner) {
+        onDispose { storeOwner.viewModelStore.clear() }
+    }
+    val factory = remember(serverId, sessionId, connections, viewOnlyRegistry) {
+        object : androidx.lifecycle.ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+                return ChatViewModel(
+                    savedState = SavedStateHandle(mapOf("serverId" to serverId, "sessionId" to sessionId)),
+                    connections = connections,
+                    viewOnlyRegistry = viewOnlyRegistry,
+                ) as T
+            }
+        }
+    }
+    val viewModel: ChatViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
+        viewModelStoreOwner = storeOwner,
+        key = "chat:$serverId:$sessionId",
+        factory = factory,
+    )
     ChatPaneV2Content(
         viewModel = viewModel,
         agents = agents,
@@ -260,7 +278,7 @@ fun ChatPaneV2Content(
             enabled = !viewOnly && connection == ConnectionState.Connected,
             agents = agents,
             selectedAgentId = agents.firstOrNull()?.id,
-            onSelectAgent = {},
+            onSelectAgent = null,
             onSend = viewModel::send,
             onCancel = viewModel::cancel,
             onOpenFiles = onOpenFiles,

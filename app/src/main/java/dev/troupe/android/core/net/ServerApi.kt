@@ -63,8 +63,8 @@ private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
  */
 class ServerApi @Inject constructor(private val client: OkHttpClient) {
 
-    suspend fun health(address: ServerAddress): ApiResult<Health> =
-        getRaw(address, "health", token = null, Health.serializer())
+    suspend fun health(address: ServerAddress, token: String? = null): ApiResult<Health> =
+        getRaw(address, "health", token = token, Health.serializer())
 
     suspend fun projects(address: ServerAddress, token: String?): ApiResult<ProjectsState> =
         getEnveloped(address, "projects", token, ProjectsState.serializer())

@@ -135,7 +135,7 @@ fun MobileWorkspaceShellScreen(
                 subtitle = headerSubtitle,
                 attentionCount = state.otherAttentionCount(),
                 isTerminal = isTerminal,
-                canNewChat = activeProject != null,
+                canNewChat = activeProject != null && !state.viewOnly,
                 connectionState = state.connectionState,
                 viewOnly = state.viewOnly,
                 onOpenDrawer = { drawerOpen = true },
@@ -178,6 +178,9 @@ fun MobileWorkspaceShellScreen(
                             fontSizePx = settings.terminalFontSize,
                             connections = viewModel.terminalConnections,
                             cursors = viewModel.terminalCursors,
+                            onMetadataChanged = { cwd, branch, _ ->
+                                viewModel.session.updateTerminalMetadata(activeTab.terminalId, cwd, branch)
+                            },
                         )
                     }
                     activeTab is WorkspaceTab.Editor -> {
@@ -325,10 +328,7 @@ fun MobileWorkspaceShellScreen(
                 hasProjectPath = activeCwd != null,
                 onDismiss = { moreSheetOpen = false },
                 onRename = { newName -> viewModel.session.renameTerminal(activeTab.terminalId, newName) },
-                onRestart = {
-                    viewModel.session.killTerminal(activeTab.terminalId)
-                    viewModel.session.spawnTerminal()
-                },
+                onRestart = { viewModel.session.restartTerminal(activeTab.terminalId) },
                 onOpenGitChanges = { gitSheetOpen = true },
                 onOpenFiles = { filesSheetOpen = true },
                 onOpenCommandPalette = { paletteSheetOpen = true },
@@ -417,6 +417,9 @@ fun MobileWorkspaceShellScreen(
             onOpenChat = { sid, title -> viewModel.session.openChat(sid, title) },
             onOpenTerminal = { tid, label ->
                 viewModel.session.openTab(WorkspaceTab.Terminal(WorkspaceTabIds.terminal(tid), tid, label))
+            },
+            onOpenEditor = { path ->
+                viewModel.session.openTab(WorkspaceTab.Editor(WorkspaceTabIds.editor(path), path))
             },
         )
     }

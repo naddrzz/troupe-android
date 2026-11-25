@@ -332,13 +332,39 @@ fun MobileShellDrawer(
                                             )
                                         }
                                         if (!state.viewOnly) {
+                                            var confirmKill by remember(terminal.id) { mutableStateOf(false) }
                                             TroupeIconButton(
                                                 icon = TroupeIcons.Trash,
                                                 contentDescription = stringResource(R.string.terminals_kill),
-                                                onClick = { onKillTerminal(terminal.id) },
+                                                onClick = { confirmKill = true },
                                                 iconSize = 16.dp,
                                                 contentColor = palette.mutedForeground,
                                             )
+                                            if (confirmKill) {
+                                                androidx.compose.material3.AlertDialog(
+                                                    onDismissRequest = { confirmKill = false },
+                                                    containerColor = palette.popover,
+                                                    titleContentColor = palette.foreground,
+                                                    textContentColor = palette.secondary,
+                                                    title = { Text(stringResource(R.string.terminals_kill)) },
+                                                    text = { Text(stringResource(R.string.terminals_kill_confirm)) },
+                                                    confirmButton = {
+                                                        androidx.compose.material3.TextButton(
+                                                            onClick = {
+                                                                confirmKill = false
+                                                                onKillTerminal(terminal.id)
+                                                            },
+                                                        ) {
+                                                            Text(stringResource(R.string.terminals_kill), color = palette.error)
+                                                        }
+                                                    },
+                                                    dismissButton = {
+                                                        androidx.compose.material3.TextButton(onClick = { confirmKill = false }) {
+                                                            Text(stringResource(R.string.action_cancel), color = palette.foreground)
+                                                        }
+                                                    },
+                                                )
+                                            }
                                         }
                                     }
                                 }

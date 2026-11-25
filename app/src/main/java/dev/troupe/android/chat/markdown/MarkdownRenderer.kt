@@ -24,10 +24,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -42,13 +46,14 @@ private sealed interface MarkdownBlock {
     data class Heading(val level: Int, val text: String) : MarkdownBlock
     data class Paragraph(val text: String) : MarkdownBlock
     data class Bullet(val text: String) : MarkdownBlock
+    data class NumberedItem(val number: String, val text: String) : MarkdownBlock
     data class Quote(val text: String) : MarkdownBlock
     data class CodeFence(val language: String, val code: String) : MarkdownBlock
 }
 
 /**
  * Lightweight native Jetpack Compose Markdown renderer for Agent Chat messages.
- * Supports headings, paragraphs, inline bold/italic/code, bullet/numbered lists, quotes,
+ * Supports headings, paragraphs, inline bold/italic/code/links, bullet/numbered lists, quotes,
  * and theme-aware syntax-highlighted code fences (`SyntaxPalette`) with 1-tap copy.
  */
 @Composable
@@ -86,6 +91,19 @@ fun MarkdownText(
                         modifier = Modifier.padding(start = 4.dp),
                     ) {
                         Text("•", style = typo.bodyMedium, color = palette.mutedForeground)
+                        Text(
+                            text = renderInline(block.text, palette.syntax, palette.mutedSurface, palette.brandText),
+                            style = typo.bodyMedium,
+                            color = textColor,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+
+                    is MarkdownBlock.NumberedItem -> Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(start = 4.dp),
+                    ) {
+                        Text("${block.number}.", style = typo.bodyMedium, color = palette.mutedForeground)
                         Text(
                             text = renderInline(block.text, palette.syntax, palette.mutedSurface, palette.brandText),
                             style = typo.bodyMedium,
@@ -175,6 +193,8 @@ private fun CodeBlockCard(
     }
 }
 
+private val ORDERED_LIST_REGEX = Regex("^(\\d+)\\.\\s+(.*)$")
+
 private fun parseBlocks(markdown: String): List<MarkdownBlock> {
     val blocks = mutableListOf<MarkdownBlock>()
     val lines = markdown.lines()
@@ -190,6 +210,7 @@ private fun parseBlocks(markdown: String): List<MarkdownBlock> {
     while (i < lines.size) {
         val line = lines[i]
         val trimmed = line.trimStart()
+        val ordered = ORDERED_LIST_REGEX.matchEntire(trimmed)
         when {
             trimmed.startsWith("```") -> {
                 flushPara()
@@ -217,6 +238,10 @@ private fun parseBlocks(markdown: String): List<MarkdownBlock> {
             trimmed.startsWith("- ") || trimmed.startsWith("* ") -> {
                 flushPara()
                 blocks += MarkdownBlock.Bullet(trimmed.drop(2).trim())
+            }
+            ordered != null -> {
+                flushPara()
+                blocks += MarkdownBlock.NumberedItem(ordered.groupValues[1], ordered.groupValues[2].trim())
             }
             trimmed.startsWith("> ") -> {
                 flushPara()
@@ -276,8 +301,30 @@ private fun renderInline(
                 val mid = text.indexOf("](", i + 1)
                 val end = if (mid > 0) text.indexOf(')', mid + 2) else -1
                 if (mid > i + 1 && end > mid + 2) {
-                    withStyle(SpanStyle(color = linkColor, fontWeight = FontWeight.Medium)) {
-                        append(text.substring(i + 1, mid))
+                    val label = text.substring(i + 1, mid)
+                    val destination = text.substring(mid + 2, end).trim()
+                    val isSafeWebUrl = destination.startsWith("https://", ignoreCase = true) ||
+                        destination.startsWith("http://", ignoreCase = true) ||
+                        destination.startsWith("mailto:", ignoreCase = true)
+                    if (isSafeWebUrl) {
+                        withLink(
+                            LinkAnnotation.Url(
+                                url = destination,
+                                styles = TextLinkStyles(
+                                    style = SpanStyle(
+                                        color = linkColor,
+                                        fontWeight = FontWeight.Medium,
+                                        textDecoration = TextDecoration.Underline,
+                                    ),
+                                ),
+                            ),
+                        ) {
+                            append(label)
+                        }
+                    } else {
+                        withStyle(SpanStyle(color = linkColor, fontWeight = FontWeight.Medium)) {
+                            append("$label ($destination)")
+                        }
                     }
                     i = end + 1
                 } else {

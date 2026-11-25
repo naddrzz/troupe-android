@@ -1,5 +1,6 @@
 package dev.troupe.android.core.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
@@ -134,6 +135,9 @@ fun TroupeMobileSheet(
         },
         modifier = modifier,
     ) {
+        BackHandler(enabled = canPop && onPop != null) {
+            onPop?.invoke()
+        }
         Column(Modifier.fillMaxWidth().navigationBarsPadding()) {
             // Header row: back button (sub-sheets only), centered title, balanced right spacer.
             Row(

@@ -90,6 +90,7 @@ fun ChatStartView(
     var selectedAgentId by remember(agents) { mutableStateOf(agents.firstOrNull()?.id) }
     var worktrees by remember(project?.id) { mutableStateOf<List<WorktreeInfo>>(emptyList()) }
     var creating by remember { mutableStateOf(false) }
+    var launchJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var showNewWorktreeSheet by remember { mutableStateOf(false) }
 
@@ -112,7 +113,8 @@ fun ChatStartView(
         val cwd = activeWorktreePath ?: proj.path.orEmpty()
         creating = true
         error = null
-        scope.launch {
+        launchJob?.cancel()
+        launchJob = scope.launch {
             try {
                 val createReply = conn.socket.request(
                     type = "create_session",
@@ -123,6 +125,7 @@ fun ChatStartView(
                     },
                     commandId = UUID.randomUUID().toString(),
                 )
+                if (!kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]!!.isActive) return@launch
                 if (!createReply.ok) {
                     error = createReply.message ?: "Failed to start chat."
                     creating = false
@@ -135,35 +138,39 @@ fun ChatStartView(
                     creating = false
                     return@launch
                 }
-                // Fire first prompt asynchronously and immediately open the live chat pane
                 val turnId = UUID.randomUUID().toString()
-                launch {
-                    try {
-                        conn.socket.request(
-                            type = "send_prompt",
-                            payload = buildJsonObject {
-                                put("agentId", agentId)
-                                put("sessionId", sessionId)
-                                put("turnId", turnId)
-                                putJsonArray("content") {
-                                    addJsonObject {
-                                        put("type", "text")
-                                        put("text", prompt)
-                                    }
-                                }
-                            },
-                            commandId = turnId,
-                        )
-                    } catch (_: IOException) {
-                        // ChatPane will surface connection state.
-                    }
+                val sendReply = conn.socket.request(
+                    type = "send_prompt",
+                    payload = buildJsonObject {
+                        put("agentId", agentId)
+                        put("sessionId", sessionId)
+                        put("turnId", turnId)
+                        putJsonArray("content") {
+                            addJsonObject {
+                                put("type", "text")
+                                put("text", prompt)
+                            }
+                        }
+                    },
+                    commandId = turnId,
+                )
+                if (!kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]!!.isActive) return@launch
+                if (!sendReply.ok) {
+                    error = sendReply.message ?: "Server refused the prompt."
+                    creating = false
+                    return@launch
                 }
                 draft = ""
                 creating = false
+                launchJob = null
                 onSessionCreated(sessionId, prompt.take(48))
+            } catch (_: kotlinx.coroutines.CancellationException) {
+                creating = false
+                launchJob = null
             } catch (e: IOException) {
                 error = e.message ?: "Could not reach server."
                 creating = false
+                launchJob = null
             }
         }
     }
@@ -262,7 +269,11 @@ fun ChatStartView(
             selectedAgentId = selectedAgentId,
             onSelectAgent = { selectedAgentId = it },
             onSend = { launchNewChat() },
-            onCancel = { creating = false },
+            onCancel = {
+                launchJob?.cancel()
+                launchJob = null
+                creating = false
+            },
             onOpenFiles = onOpenFiles,
         )
     }

@@ -99,27 +99,67 @@ fun SnapshotsSheet(
 
     var snapshots by remember(projectId) { mutableStateOf<List<PersistedSnapshotDto>>(emptyList()) }
     var loading by remember(projectId) { mutableStateOf(true) }
-    var nameInput by remember { mutableStateOf("") }
+    var loadSucceeded by remember(projectId) { mutableStateOf(false) }
+    var error by remember(projectId) { mutableStateOf<String?>(null) }
+    var saving by remember(projectId) { mutableStateOf(false) }
+    var nameInput by remember(projectId) { mutableStateOf("") }
 
-    fun persist(next: List<PersistedSnapshotDto>) {
-        snapshots = next
-        val client = storeClient ?: return
+    fun persist(next: List<PersistedSnapshotDto>, clearNameOnSuccess: Boolean = false) {
+        if (!loadSucceeded || saving) return
+        val client = storeClient
+        if (client == null) {
+            error = "Not connected to server."
+            return
+        }
+        saving = true
+        error = null
         scope.launch {
             val encoded = TroupeJson.encodeToJsonElement(
                 PersistedSnapshotListDto.serializer(),
                 PersistedSnapshotListDto(snapshots = next, updatedAt = Instant.now().toString()),
             )
-            client.write(PersistenceKeys.snapshots(projectId), encoded, immediate = true)
+            when (val res = client.write(PersistenceKeys.snapshots(projectId), encoded, immediate = true)) {
+                is dev.troupe.android.core.store.StoreWriteResult.Ok -> {
+                    snapshots = next
+                    if (clearNameOnSuccess) nameInput = ""
+                }
+                is dev.troupe.android.core.store.StoreWriteResult.Error -> {
+                    error = res.message ?: "Failed to save snapshots."
+                }
+            }
+            saving = false
         }
     }
 
     LaunchedEffect(projectId, storeClient) {
         loading = true
-        val res = storeClient?.read(PersistenceKeys.snapshots(projectId))
-        if (res is StoreReadResult.Found) {
-            runCatching { TroupeJson.decodeFromJsonElement(PersistedSnapshotListDto.serializer(), res.data) }
-                .getOrNull()
-                ?.let { snapshots = it.snapshots }
+        loadSucceeded = false
+        error = null
+        val client = storeClient
+        if (client == null) {
+            error = "Not connected to server."
+            loading = false
+            return@LaunchedEffect
+        }
+        when (val res = client.read(PersistenceKeys.snapshots(projectId))) {
+            is StoreReadResult.Found -> {
+                val decoded = runCatching {
+                    TroupeJson.decodeFromJsonElement(PersistedSnapshotListDto.serializer(), res.data)
+                }.getOrNull()
+                if (decoded != null) {
+                    snapshots = decoded.snapshots
+                    loadSucceeded = true
+                } else {
+                    error = "Could not decode saved snapshots."
+                }
+            }
+            StoreReadResult.NotFound -> {
+                snapshots = emptyList()
+                loadSucceeded = true
+            }
+            is StoreReadResult.Error -> {
+                error = res.message ?: "Could not load snapshots."
+            }
         }
         loading = false
     }
@@ -132,6 +172,9 @@ fun SnapshotsSheet(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            if (error != null) {
+                Text(text = error!!, style = typo.bodySmall, color = palette.destructive)
+            }
             if (!viewOnly) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -154,7 +197,8 @@ fun SnapshotsSheet(
                     )
                     TroupeButton(
                         text = stringResource(R.string.snapshots_save),
-                        enabled = nameInput.isNotBlank(),
+                        enabled = loadSucceeded && !saving && nameInput.isNotBlank(),
+                        loading = saving,
                         onClick = {
                             val snap = PersistedSnapshotDto(
                                 id = UUID.randomUUID().toString(),
@@ -171,8 +215,7 @@ fun SnapshotsSheet(
                                 },
                                 activeTerminalId = terminals.firstOrNull()?.id,
                             )
-                            nameInput = ""
-                            persist(listOf(snap) + snapshots)
+                            persist(listOf(snap) + snapshots, clearNameOnSuccess = true)
                         },
                     )
                 }
@@ -182,6 +225,7 @@ fun SnapshotsSheet(
                 loading -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
                     TroupeSpinner(size = 20.dp)
                 }
+                !loadSucceeded -> Unit
                 snapshots.isEmpty() -> Text(
                     text = stringResource(R.string.snapshots_empty),
                     style = typo.bodyMedium,
@@ -221,6 +265,7 @@ fun SnapshotsSheet(
                                 icon = TroupeIcons.Trash,
                                 contentDescription = stringResource(R.string.servers_remove),
                                 onClick = { persist(snapshots.filterNot { it.id == snap.id }) },
+                                enabled = loadSucceeded && !saving,
                                 iconSize = 16.dp,
                                 contentColor = palette.mutedForeground,
                             )
@@ -278,10 +323,11 @@ fun AutomationsPane(
 
     var items by remember(projectId) { mutableStateOf<List<AutomationSummaryDto>>(emptyList()) }
     var loading by remember(projectId) { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var error by remember(projectId) { mutableStateOf<String?>(null) }
 
     fun load() {
         loading = true
+        error = null
         scope.launch {
             when (val res = automationsApi.list(server.address, tokenProvider(), projectId)) {
                 is ApiResult.Ok -> {

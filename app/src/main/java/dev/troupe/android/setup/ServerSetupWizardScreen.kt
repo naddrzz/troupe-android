@@ -270,17 +270,23 @@ private fun SetupFormContent(
         }
 
         // Port
+        val parsedPort = portText.toIntOrNull()
+        val portValid = parsedPort != null && parsedPort in 1..65535
+        val portErrorText = ui.fieldErrors.port ?: if (!portValid) "Enter a port between 1 and 65535" else null
         OutlinedTextField(
             value = portText,
             onValueChange = { next ->
                 val digits = next.filter(Char::isDigit).take(5)
                 portText = digits
-                digits.toIntOrNull()?.let { p -> onUpdate { it.copy(port = p) } }
+                val parsed = digits.toIntOrNull()
+                if (parsed != null && parsed in 1..65535) {
+                    onUpdate { it.copy(port = parsed) }
+                }
             },
             label = { Text(stringResource(R.string.setup_port_label)) },
             singleLine = true,
-            isError = ui.fieldErrors.port != null,
-            supportingText = ui.fieldErrors.port?.let { err -> { Text(err) } },
+            isError = portErrorText != null,
+            supportingText = portErrorText?.let { err -> { Text(err) } },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             textStyle = typo.bodyLarge,
             modifier = Modifier.fillMaxWidth(),
@@ -379,6 +385,7 @@ private fun SetupFormContent(
                 if (ui.mode == SetupWizardMode.Setup) R.string.setup_apply_action else R.string.setup_save_and_restart,
             ),
             onClick = onApply,
+            enabled = portValid && !ui.submitting,
             loading = ui.submitting,
             modifier = Modifier.fillMaxWidth(),
         )

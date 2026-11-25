@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
@@ -94,7 +95,10 @@ data class WorkspaceShellState(
         val visibleChatId = (workspace.activeTab as? WorkspaceTab.AgentChat)?.sessionId
         val projectId = activeProject?.id
         val attentionFromCenter = attentionItems
-            .filter { it.sessionId != visibleChatId }
+            .filter { item ->
+                item.sessionId != visibleChatId &&
+                    (projectId == null || sessions.firstOrNull { it.sessionId == item.sessionId }?.projectId == projectId)
+            }
             .map { it.sessionId }
             .toSet()
         val attentionFromActivity = sessionStates
@@ -129,6 +133,9 @@ class WorkspaceSessionManager @Inject constructor(
 
     /** Parked workspaces for non-active projects so switching preserves tab state & PTYs. */
     private val parkedWorkspaces = HashMap<String, PersistedWorkspace>()
+    /** Projects whose persisted workspace has been loaded from WebStore during this server session. */
+    private val hydratedProjects = HashSet<String>()
+    private val hydratedServerId = MutableStateFlow<String?>(null)
 
     @Volatile private var activeConnection: ChatConnection? = null
     @Volatile private var activeWatchHub: WatchHub? = null
@@ -213,7 +220,7 @@ class WorkspaceSessionManager @Inject constructor(
 
         scope.launch {
             activeStoreClient?.write(PersistenceKeys.ACTIVE_PROJECT, JsonPrimitive(projectId), immediate = true)
-            if (projectId !in parkedWorkspaces) {
+            if (projectId !in hydratedProjects) {
                 loadProjectWorkspace(projectId)
             }
             refreshProjectTerminals(projectId)
@@ -256,7 +263,7 @@ class WorkspaceSessionManager @Inject constructor(
     fun startNewChat() {
         val current = _state.value.workspace
         if (current.activeTabId != null) {
-            _state.update { it.copy(workspace = current.copy(activeTabId = null)) }
+            updateWorkspace(current.copy(activeTabId = null))
         }
     }
 
@@ -275,13 +282,14 @@ class WorkspaceSessionManager @Inject constructor(
         )
     }
 
-    fun openChatOnServer(serverId: String, sessionId: String, title: String?) {
-        scope.launch {
-            if (_state.value.activeServer?.id != serverId) {
-                repository.setActiveServer(serverId)
-            }
-            openChat(sessionId, title)
+    suspend fun openChatOnServer(serverId: String, sessionId: String, title: String?) {
+        if (_state.value.activeServer?.id != serverId) {
+            repository.setActiveServer(serverId)
         }
+        kotlinx.coroutines.withTimeoutOrNull(5_000L) {
+            hydratedServerId.first { it == serverId }
+        }
+        openChat(sessionId, title)
     }
 
     fun spawnTerminal(cwdOverride: String? = null) {
@@ -292,33 +300,41 @@ class WorkspaceSessionManager @Inject constructor(
             return
         }
         scope.launch {
-            try {
-                val socket = terminalConnections.socket(server.id)
-                val reply = socket.request(
-                    "spawn",
-                    buildJsonObject {
-                        put("projectId", project.id)
-                        put("cwd", cwdOverride ?: _state.value.activeWorktreePath ?: project.path.orEmpty())
-                        put("cols", 80)
-                        put("rows", 24)
-                    },
-                    ledgered = true,
-                )
-                if (!reply.success || reply.data == null) {
-                    _state.update { it.copy(bannerMessage = reply.error ?: "Failed to start terminal.") }
-                    return@launch
-                }
-                val spawned = TroupeJson.decodeFromJsonElement(SpawnedTerminal.serializer(), reply.data)
-                val tab = WorkspaceTab.Terminal(
-                    id = WorkspaceTabIds.terminal(spawned.id),
-                    terminalId = spawned.id,
-                    title = spawned.shell.substringAfterLast('/'),
-                )
-                openTab(tab)
-                refreshProjectTerminals(project.id)
-            } catch (e: IOException) {
-                _state.update { it.copy(bannerMessage = e.message ?: "Could not start terminal.") }
+            spawnTerminalSuspend(server, project, cwdOverride)
+        }
+    }
+
+    private suspend fun spawnTerminalSuspend(
+        server: PairedServer,
+        project: Project,
+        cwdOverride: String?,
+    ) {
+        try {
+            val socket = terminalConnections.socket(server.id)
+            val reply = socket.request(
+                "spawn",
+                buildJsonObject {
+                    put("projectId", project.id)
+                    put("cwd", cwdOverride ?: _state.value.activeWorktreePath ?: project.path.orEmpty())
+                    put("cols", 80)
+                    put("rows", 24)
+                },
+                ledgered = true,
+            )
+            if (!reply.success || reply.data == null) {
+                _state.update { it.copy(bannerMessage = reply.error ?: "Failed to start terminal.") }
+                return
             }
+            val spawned = TroupeJson.decodeFromJsonElement(SpawnedTerminal.serializer(), reply.data)
+            val tab = WorkspaceTab.Terminal(
+                id = WorkspaceTabIds.terminal(spawned.id),
+                terminalId = spawned.id,
+                title = spawned.shell.substringAfterLast('/'),
+            )
+            openTab(tab)
+            refreshProjectTerminals(project.id)
+        } catch (e: IOException) {
+            _state.update { it.copy(bannerMessage = e.message ?: "Could not start terminal.") }
         }
     }
 
@@ -326,28 +342,76 @@ class WorkspaceSessionManager @Inject constructor(
         val server = _state.value.activeServer ?: return
         val projectId = _state.value.activeProject?.id
         scope.launch {
-            try {
-                val socket = terminalConnections.socket(server.id)
-                socket.request("kill", buildJsonObject { put("terminalId", terminalId) }, ledgered = true)
-                closeTab(WorkspaceTabIds.terminal(terminalId))
-                if (projectId != null) refreshProjectTerminals(projectId)
-            } catch (e: IOException) {
-                _state.update { it.copy(bannerMessage = e.message ?: "Failed to kill terminal.") }
+            killTerminalSuspend(server, projectId, terminalId)
+        }
+    }
+
+    fun restartTerminal(terminalId: String, cwdOverride: String? = null) {
+        val server = _state.value.activeServer ?: return
+        val project = _state.value.activeProject ?: return
+        if (_state.value.viewOnly) {
+            _state.update { it.copy(bannerMessage = "Server is in View-only mode.") }
+            return
+        }
+        scope.launch {
+            if (killTerminalSuspend(server, project.id, terminalId)) {
+                spawnTerminalSuspend(server, project, cwdOverride)
             }
+        }
+    }
+
+    private suspend fun killTerminalSuspend(
+        server: PairedServer,
+        projectId: String?,
+        terminalId: String,
+    ): Boolean {
+        return try {
+            val socket = terminalConnections.socket(server.id)
+            val reply = socket.request("kill", buildJsonObject { put("terminalId", terminalId) }, ledgered = true)
+            if (!reply.success) {
+                _state.update { it.copy(bannerMessage = reply.error ?: "Failed to kill terminal.") }
+                return false
+            }
+            closeTab(WorkspaceTabIds.terminal(terminalId))
+            if (projectId != null) refreshProjectTerminals(projectId)
+            true
+        } catch (e: IOException) {
+            _state.update { it.copy(bannerMessage = e.message ?: "Failed to kill terminal.") }
+            false
         }
     }
 
     fun renameTerminal(terminalId: String, newName: String) {
         val clean = newName.trim()
         if (clean.isEmpty()) return
+        val updatedTabs = _state.value.workspace.tabs.map { tab ->
+            if (tab is WorkspaceTab.Terminal && tab.terminalId == terminalId) tab.copy(title = clean) else tab
+        }
+        updateWorkspace(_state.value.workspace.copy(tabs = updatedTabs))
         _state.update { st ->
-            val updatedTabs = st.workspace.tabs.map { tab ->
-                if (tab is WorkspaceTab.Terminal && tab.terminalId == terminalId) tab.copy(title = clean) else tab
+            st.copy(terminalNames = st.terminalNames + (terminalId to clean))
+        }
+    }
+
+    fun updateTerminalMetadata(
+        terminalId: String,
+        cwd: String? = null,
+        gitBranch: String? = null,
+    ) {
+        _state.update { st ->
+            val updatedTerminals = st.terminals.map { term ->
+                if (term.id == terminalId) {
+                    term.copy(cwd = cwd ?: term.cwd)
+                } else {
+                    term
+                }
             }
-            st.copy(
-                terminalNames = st.terminalNames + (terminalId to clean),
-                workspace = st.workspace.copy(tabs = updatedTabs),
-            )
+            val nextSubtitleName = if (!gitBranch.isNullOrBlank() && terminalId !in st.terminalNames) {
+                st.terminalNames
+            } else {
+                st.terminalNames
+            }
+            st.copy(terminals = updatedTerminals, terminalNames = nextSubtitleName)
         }
     }
 
@@ -397,6 +461,7 @@ class WorkspaceSessionManager @Inject constructor(
             val token = repository.token(server.id)
             if (projectApi.removeProject(server.address, token, projectId, cascade) is ApiResult.Ok) {
                 parkedWorkspaces.remove(projectId)
+                hydratedProjects.remove(projectId)
                 refreshProjectsHttp(server)
             }
         }
@@ -414,7 +479,8 @@ class WorkspaceSessionManager @Inject constructor(
         }
     }
 
-    private fun detachActiveSession() {
+    private suspend fun detachActiveSession() {
+        activeStoreClient?.flushAll()
         sessionJob?.cancel()
         sessionJob = null
         terminalsWatchJob?.cancel()
@@ -423,7 +489,9 @@ class WorkspaceSessionManager @Inject constructor(
         activeConnection = null
         activeWatchHub = null
         activeStoreClient = null
+        hydratedServerId.value = null
         parkedWorkspaces.clear()
+        hydratedProjects.clear()
         _state.update {
             WorkspaceShellState(
                 loading = false,
@@ -433,9 +501,12 @@ class WorkspaceSessionManager @Inject constructor(
     }
 
     private suspend fun attachToServer(server: PairedServer) {
+        activeStoreClient?.flushAll()
         sessionJob?.cancel()
         terminalsWatchJob?.cancel()
+        hydratedServerId.value = null
         parkedWorkspaces.clear()
+        hydratedProjects.clear()
         appSettingsStore.detach()
 
         val conn = try {
@@ -539,17 +610,27 @@ class WorkspaceSessionManager @Inject constructor(
                 }
             }
 
+            // Watch 5: terminals (live sync when terminals are spawned or killed on desktop/other clients)
+            terminalsWatchJob = launch {
+                hub.watch(WatchHub.TERMINALS).collect {
+                    val pid = _state.value.activeProjectId
+                    if (pid != null) {
+                        refreshProjectTerminals(pid)
+                    }
+                }
+            }
+
             // Hydrate device-scoped active project + shell layout once connected
             launch {
                 conn.generation.collect { gen ->
                     if (gen <= 0) return@collect
-                    hydrateDeviceState(store, conn)
+                    hydrateDeviceState(server.id, store, conn)
                 }
             }
         }
     }
 
-    private suspend fun hydrateDeviceState(store: WebStoreClient, conn: ChatConnection) {
+    private suspend fun hydrateDeviceState(serverId: String, store: WebStoreClient, conn: ChatConnection) {
         // Hydrate shell layout (worktree picks)
         val layoutRes = store.read(PersistenceKeys.SHELL_LAYOUT)
         if (layoutRes is StoreReadResult.Found) {
@@ -578,19 +659,33 @@ class WorkspaceSessionManager @Inject constructor(
             _state.update { it.copy(loading = false) }
         }
         fetchPersistedSessions(conn)
+        hydratedServerId.value = serverId
     }
 
     private suspend fun loadProjectWorkspace(projectId: String) {
         val store = activeStoreClient ?: return
         val res = store.read(PersistenceKeys.workspace(projectId))
+        if (res is StoreReadResult.Found || res is StoreReadResult.NotFound) {
+            hydratedProjects.add(projectId)
+        }
         if (res is StoreReadResult.Found) {
             val loaded = runCatching {
                 TroupeJson.decodeFromJsonElement(PersistedWorkspace.serializer(), res.data)
             }.getOrNull()
             if (loaded != null) {
-                parkedWorkspaces[projectId] = loaded
+                val localParked = parkedWorkspaces[projectId]
+                val merged = if (localParked != null && localParked.tabs.isNotEmpty()) {
+                    var acc = loaded
+                    for (t in localParked.tabs) {
+                        acc = acc.openOrFocus(t)
+                    }
+                    acc.copy(activeTabId = localParked.activeTabId ?: acc.activeTabId)
+                } else {
+                    loaded
+                }
+                parkedWorkspaces[projectId] = merged
                 if (_state.value.activeProjectId == projectId) {
-                    _state.update { it.copy(workspace = loaded) }
+                    _state.update { it.copy(workspace = merged) }
                 }
             }
         }
@@ -606,6 +701,8 @@ class WorkspaceSessionManager @Inject constructor(
     }
 
     private fun applyProjectsState(data: ProjectsState) {
+        val previousActiveId = _state.value.activeProjectId
+        var nextActiveId: String? = null
         _state.update { cur ->
             val nonArchived = data.projects.filterNot { it.isArchived }
             val nextActive = when {
@@ -613,15 +710,31 @@ class WorkspaceSessionManager @Inject constructor(
                 data.defaultProjectId != null && nonArchived.any { it.id == data.defaultProjectId } -> data.defaultProjectId
                 else -> nonArchived.firstOrNull()?.id
             }
+            nextActiveId = nextActive
+            val nextWorkspace = if (nextActive != previousActiveId) {
+                if (previousActiveId != null) {
+                    parkedWorkspaces[previousActiveId] = cur.workspace
+                }
+                if (nextActive != null) parkedWorkspaces[nextActive] ?: PersistedWorkspace() else PersistedWorkspace()
+            } else {
+                cur.workspace
+            }
             cur.copy(
                 loading = false,
                 projects = data.projects,
                 defaultProjectId = data.defaultProjectId,
                 activeProjectId = nextActive,
+                workspace = nextWorkspace,
             )
         }
-        _state.value.activeProjectId?.let { pid ->
-            scope.launch { refreshProjectTerminals(pid) }
+        val pid = nextActiveId
+        if (pid != null) {
+            scope.launch {
+                if (pid != previousActiveId && pid !in hydratedProjects) {
+                    loadProjectWorkspace(pid)
+                }
+                refreshProjectTerminals(pid)
+            }
         }
     }
 

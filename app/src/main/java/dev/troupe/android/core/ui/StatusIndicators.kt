@@ -37,9 +37,13 @@ fun CountBadge(
     modifier: Modifier = Modifier,
     max: Int = 99,
     tone: Color = LocalTroupePalette.current.brand,
+    contentColor: Color = if (tone == LocalTroupePalette.current.warning) {
+        LocalTroupePalette.current.warningForeground
+    } else {
+        LocalTroupePalette.current.brandForeground
+    },
 ) {
     if (count <= 0) return
-    val palette = LocalTroupePalette.current
     val label = if (count > max) "$max+" else count.toString()
     Box(
         modifier = modifier
@@ -51,7 +55,7 @@ fun CountBadge(
     ) {
         Text(
             text = label,
-            color = palette.brandForeground,
+            color = contentColor,
             style = MaterialTheme.typography.labelSmall.tabularNums().copy(fontWeight = FontWeight.SemiBold),
             maxLines = 1,
         )

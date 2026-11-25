@@ -63,7 +63,7 @@ fun ComposerV2(
     enabled: Boolean,
     agents: List<AgentDescriptor>,
     selectedAgentId: String?,
-    onSelectAgent: (String) -> Unit,
+    onSelectAgent: ((String) -> Unit)? = null,
     onSend: () -> Unit,
     onCancel: () -> Unit,
     onOpenFiles: (() -> Unit)? = null,
@@ -146,15 +146,20 @@ fun ComposerV2(
                     contentColor = palette.secondary,
                 )
 
-                // Model / Agent selector pill
+                // Model / Agent selector pill (interactive only when caller provides onSelectAgent)
+                val agentSelectable = onSelectAgent != null && enabled && agents.isNotEmpty()
                 Row(
                     modifier = Modifier
                         .heightIn(min = 36.dp)
                         .clip(CircleShape)
                         .background(palette.mutedSurface)
-                        .clickable(enabled = enabled && agents.isNotEmpty(), role = Role.Button) {
-                            showModelSheet = true
-                        }
+                        .then(
+                            if (agentSelectable) {
+                                Modifier.clickable(role = Role.Button) { showModelSheet = true }
+                            } else {
+                                Modifier
+                            },
+                        )
                         .padding(horizontal = 12.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
@@ -172,7 +177,7 @@ fun ComposerV2(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    if (agents.size > 1) {
+                    if (agentSelectable && agents.size > 1) {
                         Icon(
                             imageVector = TroupeIcons.ChevronDown,
                             contentDescription = null,
@@ -235,7 +240,7 @@ fun ComposerV2(
         )
     }
 
-    if (showModelSheet) {
+    if (showModelSheet && onSelectAgent != null) {
         MobileModelSheet(
             agents = agents,
             selectedAgentId = selectedAgent?.id,

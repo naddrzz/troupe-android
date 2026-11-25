@@ -3,14 +3,15 @@ package dev.troupe.android.core.store
 import dev.troupe.android.chat.net.ChatConnection
 import dev.troupe.android.chat.protocol.ChatFrame
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.onCompletion
-import kotlinx.coroutines.flow.onSubscription
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -43,7 +44,7 @@ class WatchHub(
     private class ChannelEntry(
         val key: Key,
         val flow: MutableSharedFlow<WatchUpdate> = MutableSharedFlow(
-            replay = 1,
+            replay = 0,
             extraBufferCapacity = 64,
             onBufferOverflow = BufferOverflow.DROP_OLDEST,
         ),
@@ -74,35 +75,37 @@ class WatchHub(
     /** Subscribes to `(watch, watchScope)` and emits the initial reset state plus every delta. */
     fun watch(watch: String, watchScope: String = ""): Flow<WatchUpdate> {
         val key = Key(watch, watchScope)
-        val entry = getOrCreate(key)
-        return entry.flow
-            .onSubscription {
-                val shouldSubscribe = mutex.withLock {
-                    entry.refCount++
-                    entry.refCount == 1
+        return flow {
+            val (entry, shouldSubscribe, initialReset) = mutex.withLock {
+                val e = channels.getOrPut(key) { ChannelEntry(key) }
+                e.refCount++
+                Triple(e, e.refCount == 1, e.lastReset)
+            }
+            try {
+                if (initialReset != null) {
+                    emit(initialReset)
                 }
                 if (shouldSubscribe) {
                     scope.launch { sendWatch(key) }
                 }
-            }
-            .onCompletion {
-                val shouldUnsubscribe = mutex.withLock {
-                    entry.refCount = (entry.refCount - 1).coerceAtLeast(0)
-                    if (entry.refCount == 0) {
-                        channels.remove(key)
-                        true
-                    } else {
-                        false
+                entry.flow.collect { update -> emit(update) }
+            } finally {
+                val shouldUnsubscribe = withContext(NonCancellable) {
+                    mutex.withLock {
+                        entry.refCount = (entry.refCount - 1).coerceAtLeast(0)
+                        if (entry.refCount == 0 && channels[key] === entry) {
+                            channels.remove(key)
+                            true
+                        } else {
+                            false
+                        }
                     }
                 }
                 if (shouldUnsubscribe) {
                     scope.launch { sendUnwatch(key) }
                 }
             }
-    }
-
-    private fun getOrCreate(key: Key): ChannelEntry = synchronized(channels) {
-        channels.getOrPut(key) { ChannelEntry(key) }
+        }
     }
 
     private suspend fun handleWatchFrame(frame: ChatFrame.Watch) {
@@ -118,7 +121,7 @@ class WatchHub(
             delta = frame.delta,
         )
         mutex.withLock {
-            val entry = synchronized(channels) { channels[key] } ?: return
+            val entry = channels[key] ?: return
             if (frame.reset) {
                 entry.hostEpoch = frame.hostEpoch
                 entry.lastN = frame.n
@@ -133,6 +136,7 @@ class WatchHub(
                     // Gap or host epoch mismatch: trigger clean resync.
                     entry.hostEpoch = null
                     entry.lastN = 0
+                    entry.lastReset = null
                     needsResync = true
                 }
             }
@@ -145,13 +149,12 @@ class WatchHub(
 
     private suspend fun resubscribeAll() {
         val keys = mutex.withLock {
-            synchronized(channels) {
-                channels.values.forEach {
-                    it.hostEpoch = null
-                    it.lastN = 0
-                }
-                channels.keys.toList()
+            channels.values.forEach {
+                it.hostEpoch = null
+                it.lastN = 0
+                it.lastReset = null
             }
+            channels.keys.toList()
         }
         for (key in keys) {
             sendWatch(key)

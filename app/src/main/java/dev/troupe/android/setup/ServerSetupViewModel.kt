@@ -140,6 +140,23 @@ class ServerSetupViewModel @Inject constructor(
         val target = address ?: return
         val current = _ui.value
         if (current.submitting || current.restarting) return
+        if (current.answers.port !in 1..65535) {
+            _ui.update {
+                it.copy(fieldErrors = SetupFieldErrors(port = "Enter a valid port between 1 and 65535."))
+            }
+            return
+        }
+        val targetIsLoopback = isLoopbackHost(target.host)
+        if (isLoopbackHost(current.answers.host) && !targetIsLoopback) {
+            _ui.update {
+                it.copy(
+                    fieldErrors = SetupFieldErrors(
+                        host = "Local-only (127.0.0.1) cannot be reached from Android over the network. Choose All interfaces (0.0.0.0).",
+                    ),
+                )
+            }
+            return
+        }
         _ui.update { it.copy(submitting = true, error = null, fieldErrors = SetupFieldErrors()) }
 
         viewModelScope.launch {
@@ -161,7 +178,9 @@ class ServerSetupViewModel @Inject constructor(
                         return@launch
                     }
                     _ui.update { it.copy(submitting = false, restarting = true) }
-                    waitForRestartAndFinish(target, reply, current.answers)
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                        waitForRestartAndFinish(target, reply, current.answers)
+                    }
                 }
                 ApiResult.Unauthorized -> _ui.update {
                     it.copy(
@@ -185,7 +204,13 @@ class ServerSetupViewModel @Inject constructor(
         reply: SetupApplyReply,
         answers: ServerSetupAnswers,
     ) {
-        val nextHost = reply.host?.takeIf { !TroupeServerLink.isWildcard(it) } ?: previousAddress.host
+        val replyHost = reply.host?.trim()?.takeIf { it.isNotEmpty() }
+        val nextHost = when {
+            replyHost == null -> previousAddress.host
+            TroupeServerLink.isWildcard(replyHost) -> previousAddress.host
+            isLoopbackHost(replyHost) && !isLoopbackHost(previousAddress.host) -> previousAddress.host
+            else -> replyHost
+        }
         val nextPort = reply.port ?: previousAddress.baseUrl.port
         val nextAddress = ServerAddress(
             previousAddress.baseUrl.newBuilder()
@@ -194,12 +219,14 @@ class ServerSetupViewModel @Inject constructor(
                 .build(),
         )
 
+        val finalToken = reply.webAuthToken ?: if (_ui.value.mode == SetupWizardMode.Reconfigure) token else null
+
         // Server restarts ~400ms after answering /setup/apply or /server/config.
         delay(600)
         var ready = false
         var allowRemoteWrites = answers.allowRemoteWrites
         repeat(16) {
-            when (val health = serverApi.health(nextAddress)) {
+            when (val health = serverApi.health(nextAddress, finalToken)) {
                 is ApiResult.Ok -> {
                     if (!health.value.setupRequired) {
                         allowRemoteWrites = health.value.allowRemoteWrites
@@ -212,13 +239,16 @@ class ServerSetupViewModel @Inject constructor(
             delay(500)
         }
 
-        val finalToken = reply.webAuthToken ?: if (_ui.value.mode == SetupWizardMode.Reconfigure) token else null
         val saved = repository.upsert(
             name = serverName.ifBlank { nextAddress.host },
             address = nextAddress,
             token = finalToken,
             makeActive = true,
         )
+        val priorId = existingServerId
+        if (priorId != null && priorId != saved.id) {
+            repository.remove(priorId)
+        }
         viewOnly.set(saved.id, !allowRemoteWrites)
         if (ready) {
             _ui.update { it.copy(restarting = false, completedServerId = saved.id) }
@@ -231,5 +261,10 @@ class ServerSetupViewModel @Inject constructor(
                 )
             }
         }
+    }
+
+    private fun isLoopbackHost(host: String): Boolean {
+        val clean = host.trim().lowercase().removePrefix("[").removeSuffix("]")
+        return clean == "127.0.0.1" || clean == "localhost" || clean == "::1"
     }
 }

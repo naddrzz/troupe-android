@@ -188,7 +188,7 @@ private fun KeyCapButton(
     val typo = TroupeTheme.typography
     Box(
         modifier = Modifier
-            .height(38.dp)
+            .heightIn(min = 44.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(palette.keycapFill)
             .border(0.5.dp, palette.popoverEdge, RoundedCornerShape(8.dp))

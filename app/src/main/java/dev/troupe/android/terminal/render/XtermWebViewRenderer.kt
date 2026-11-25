@@ -38,6 +38,7 @@ import java.io.ByteArrayOutputStream
 class XtermWebViewRenderer(
     val webView: WebView,
     initialPalette: AnsiPalette = AnsiPalette.Termul,
+    initialFontSizePx: Int = 14,
     private val onGone: () -> Unit = {},
 ) : TerminalRenderer {
     private val typed = Channel<String>(Channel.UNLIMITED)
@@ -52,6 +53,7 @@ class XtermWebViewRenderer(
     private var flushScheduled = false // guarded by lock
     private var ready = false // guarded by lock
     @Volatile private var palette: AnsiPalette = initialPalette
+    @Volatile private var currentFontSizePx: Int = initialFontSizePx
     private val flush = Runnable { flush() }
 
     init {
@@ -103,6 +105,7 @@ class XtermWebViewRenderer(
 
     /** Dynamically updates xterm's font size from `settings/app` (`terminalFontSize`). */
     fun updateFontSize(fontSizePx: Int) {
+        currentFontSizePx = fontSizePx
         main.post {
             if (isReady()) webView.evaluateJavascript("troupe.setFontSize($fontSizePx)", null)
         }
@@ -176,7 +179,13 @@ class XtermWebViewRenderer(
         @JavascriptInterface
         fun onReady() {
             synchronized(lock) { ready = true }
-            main.post(flush)
+            main.post {
+                val size = currentFontSizePx
+                if (size != 14) {
+                    webView.evaluateJavascript("troupe.setFontSize($size)", null)
+                }
+                flush()
+            }
         }
     }
 

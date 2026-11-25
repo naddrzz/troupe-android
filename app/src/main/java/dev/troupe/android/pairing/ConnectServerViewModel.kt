@@ -26,7 +26,12 @@ sealed interface ConnectUiState {
      * Pasted URL used a wildcard bind (`0.0.0.0` or `::`). Ask for the server's reachable
      * LAN / Tailscale IP or hostname while preserving port, path, `?setup=`, and `#token=`.
      */
-    data class NeedsHost(val rawInput: String, val parsed: ParsedServerLink) : ConnectUiState
+    data class NeedsHost(
+        val rawInput: String,
+        val parsed: ParsedServerLink,
+        val manualToken: String? = null,
+        val customName: String = "",
+    ) : ConnectUiState
 
     /**
      * Server answered `/health` OK, but rejected an empty or stale token. Present the
@@ -74,7 +79,12 @@ class ConnectServerViewModel @Inject constructor(
         _ui.value = ConnectUiState.Idle
     }
 
-    fun connectLink(raw: String, replacementHost: String? = null, customName: String = "") {
+    fun connectLink(
+        raw: String,
+        replacementHost: String? = null,
+        customName: String = "",
+        overrideToken: String? = null,
+    ) {
         if (_ui.value is ConnectUiState.Checking) return
         val parsed = TroupeServerLink.parse(raw, replacementHost).getOrElse { error ->
             _ui.value = (error as? PairingError)?.toUi()
@@ -82,16 +92,28 @@ class ConnectServerViewModel @Inject constructor(
             return
         }
         if (parsed.isWildcardHost) {
-            _ui.value = ConnectUiState.NeedsHost(rawInput = raw, parsed = parsed)
+            _ui.value = ConnectUiState.NeedsHost(
+                rawInput = raw,
+                parsed = parsed,
+                manualToken = overrideToken,
+                customName = customName,
+            )
             return
         }
-        val name = customName.trim().ifEmpty { parsed.address.host }
-        probeAndConnect(parsed, name)
+        val cleanToken = overrideToken?.trim()?.takeIf { it.isNotEmpty() } ?: parsed.token
+        val resolved = parsed.copy(token = cleanToken)
+        val name = customName.trim().ifEmpty { resolved.address.host }
+        probeAndConnect(resolved, name)
     }
 
     fun submitReplacementHost(host: String) {
         val current = _ui.value as? ConnectUiState.NeedsHost ?: return
-        connectLink(current.rawInput, replacementHost = host)
+        connectLink(
+            raw = current.rawInput,
+            replacementHost = host,
+            customName = current.customName,
+            overrideToken = current.manualToken,
+        )
     }
 
     fun connectManual(url: String, token: String, name: String) {
@@ -101,11 +123,16 @@ class ConnectServerViewModel @Inject constructor(
                 ?: ConnectUiState.Error(R.string.pair_error_invalid_url)
             return
         }
+        val cleanToken = token.trim().ifEmpty { parsed.token }
         if (parsed.isWildcardHost) {
-            _ui.value = ConnectUiState.NeedsHost(rawInput = url, parsed = parsed)
+            _ui.value = ConnectUiState.NeedsHost(
+                rawInput = url,
+                parsed = parsed,
+                manualToken = cleanToken,
+                customName = name,
+            )
             return
         }
-        val cleanToken = token.trim().ifEmpty { parsed.token }
         val resolved = parsed.copy(token = cleanToken)
         probeAndConnect(resolved, name.trim().ifEmpty { resolved.address.host })
     }
@@ -131,7 +158,7 @@ class ConnectServerViewModel @Inject constructor(
     private fun probeAndConnect(parsed: ParsedServerLink, name: String) {
         _ui.value = ConnectUiState.Checking
         viewModelScope.launch {
-            val health = when (val res = api.health(parsed.address)) {
+            val health = when (val res = api.health(parsed.address, parsed.token)) {
                 is ApiResult.Ok -> res.value
                 ApiResult.Unauthorized -> {
                     _ui.value = ConnectUiState.NeedsToken(
@@ -177,7 +204,7 @@ class ConnectServerViewModel @Inject constructor(
         chatSessionId: String?,
         allowRemoteWrites: Boolean?,
     ): ConnectUiState {
-        val remoteWrites = allowRemoteWrites ?: when (val h = api.health(address)) {
+        val remoteWrites = allowRemoteWrites ?: when (val h = api.health(address, token)) {
             is ApiResult.Ok -> h.value.allowRemoteWrites
             is ApiResult.Unreachable -> return ConnectUiState.Error(R.string.pair_error_unreachable)
             ApiResult.Unauthorized -> return ConnectUiState.NeedsToken(address, name, chatSessionId, rejected = true)

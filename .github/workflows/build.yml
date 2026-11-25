@@ -33,7 +33,7 @@ jobs:
       # All build, test, lint, and debug APK verification runs in GitHub Actions CI.
       # Live integration tests need a real Troupe Server in Docker, so CI runs unit tests + androidTest compilation + lint + debug APK.
       - name: Unit tests, androidTest compile, lint, and debug APK
-        run: ./gradlew testDebugUnitTest compileDebugAndroidTestKotlin lintDebug assembleDebug
+        run: ./gradlew --continue testDebugUnitTest compileDebugAndroidTestKotlin lintDebug assembleDebug
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4

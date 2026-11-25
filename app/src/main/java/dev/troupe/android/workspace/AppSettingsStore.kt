@@ -77,6 +77,8 @@ class AppSettingsStore @Inject constructor() {
         watchJob?.cancel()
         watchJob = null
         storeClient = null
+        rawServerJson = emptyMap()
+        _settings.value = AppSettings()
     }
 
     fun update(scope: CoroutineScope, transform: (AppSettings) -> AppSettings) {

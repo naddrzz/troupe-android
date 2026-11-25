@@ -52,13 +52,14 @@ fun CommandPaletteSheet(
     onOpenSettings: () -> Unit,
     onOpenChat: (sessionId: String, title: String?) -> Unit,
     onOpenTerminal: (terminalId: String, title: String?) -> Unit,
+    onOpenEditor: (filePath: String) -> Unit,
 ) {
     val palette = TroupeTheme.palette
     var query by remember { mutableStateOf("") }
 
     val actions = buildList {
-        add(PaletteAction("new-chat", stringResource(R.string.shell_new_chat), null, TroupeIcons.MessageSquarePlus, onNewChat))
-        if (!state.viewOnly) {
+        if (!state.viewOnly && state.activeProject != null) {
+            add(PaletteAction("new-chat", stringResource(R.string.shell_new_chat), null, TroupeIcons.MessageSquarePlus, onNewChat))
             add(PaletteAction("new-term", stringResource(R.string.terminals_new), null, TroupeIcons.Terminal, onNewTerminal))
         }
         if (state.activeProject?.path != null) {
@@ -66,8 +67,10 @@ fun CommandPaletteSheet(
             add(PaletteAction("git-history", stringResource(R.string.shell_git_history), null, TroupeIcons.History, onOpenGitHistory))
             add(PaletteAction("files", stringResource(R.string.shell_files), null, TroupeIcons.Folder, onOpenFiles))
         }
-        add(PaletteAction("snapshots", stringResource(R.string.shell_snapshots), null, TroupeIcons.Camera, onOpenSnapshots))
-        add(PaletteAction("automations", stringResource(R.string.shell_automations), null, TroupeIcons.CalendarClock, onOpenAutomations))
+        if (state.activeProject != null) {
+            add(PaletteAction("snapshots", stringResource(R.string.shell_snapshots), null, TroupeIcons.Camera, onOpenSnapshots))
+            add(PaletteAction("automations", stringResource(R.string.shell_automations), null, TroupeIcons.CalendarClock, onOpenAutomations))
+        }
         add(PaletteAction("projects", stringResource(R.string.projects_title), state.activeProject?.name, TroupeIcons.Server, onOpenProjects))
         add(PaletteAction("settings", stringResource(R.string.settings_title), null, TroupeIcons.Settings, onOpenSettings))
 
@@ -79,6 +82,12 @@ fun CommandPaletteSheet(
             val name = state.terminalNames[t.id] ?: t.shell.substringAfterLast('/')
             add(PaletteAction("term-${t.id}", name, t.cwd, TroupeIcons.Terminal) { onOpenTerminal(t.id, name) })
         }
+        state.workspace.tabs
+            .filterIsInstance<dev.troupe.android.workspace.WorkspaceTab.Editor>()
+            .forEach { ed ->
+                val name = ed.filePath.substringAfterLast('/')
+                add(PaletteAction("ed-${ed.id}", name, ed.filePath, TroupeIcons.FileCode) { onOpenEditor(ed.filePath) })
+            }
     }.filter {
         query.isBlank() ||
             it.title.contains(query, ignoreCase = true) ||

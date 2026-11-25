@@ -4,6 +4,8 @@ import dev.troupe.android.core.net.ApiResult
 import dev.troupe.android.core.net.ServerApi
 import dev.troupe.android.core.protocol.TroupeJson
 import dev.troupe.android.pairing.ServerAddress
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.json.Json
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -12,6 +14,12 @@ import javax.inject.Singleton
  * the one-time `?setup=<token>` bearer token) and post-setup server reconfigure (`/server/config`,
  * authenticated with the normal web auth bearer token).
  */
+@OptIn(ExperimentalSerializationApi::class)
+private val SetupRequestJson = Json(TroupeJson) {
+    explicitNulls = true
+    encodeDefaults = true
+}
+
 @Singleton
 class ServerSetupApi @Inject constructor(
     private val api: ServerApi,
@@ -27,7 +35,7 @@ class ServerSetupApi @Inject constructor(
         address = address,
         path = "setup/validate",
         token = setupToken,
-        bodyJson = TroupeJson.encodeToString(ServerSetupAnswers.serializer(), answers),
+        bodyJson = SetupRequestJson.encodeToString(ServerSetupAnswers.serializer(), answers),
         serializer = SetupValidateResponse.serializer(),
     )
 
@@ -39,7 +47,7 @@ class ServerSetupApi @Inject constructor(
         address = address,
         path = "setup/apply",
         token = setupToken,
-        bodyJson = TroupeJson.encodeToString(ServerSetupAnswers.serializer(), answers),
+        bodyJson = SetupRequestJson.encodeToString(ServerSetupAnswers.serializer(), answers),
         serializer = SetupApplyReply.serializer(),
     )
 
@@ -54,7 +62,7 @@ class ServerSetupApi @Inject constructor(
         address = address,
         path = "server/config",
         token = authToken,
-        bodyJson = TroupeJson.encodeToString(ServerSetupAnswers.serializer(), answers),
+        bodyJson = SetupRequestJson.encodeToString(ServerSetupAnswers.serializer(), answers),
         serializer = SetupApplyReply.serializer(),
     )
 }

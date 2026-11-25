@@ -82,13 +82,19 @@ fun MobileShellHeader(
                         onClick = onOpenDrawer,
                     )
                     if (foldedIntoMenu) {
+                        val attentionDesc = if (attentionCount == 1) {
+                            stringResource(R.string.needs_you_one)
+                        } else {
+                            stringResource(R.string.needs_you_many, attentionCount)
+                        }
                         Box(
                             modifier = Modifier
                                 .align(Alignment.TopEnd)
                                 .padding(top = 8.dp, end = 8.dp)
                                 .size(8.dp)
                                 .clip(CircleShape)
-                                .background(palette.warning),
+                                .background(palette.warning)
+                                .semantics { contentDescription = attentionDesc },
                         )
                     }
                 }
@@ -160,30 +166,34 @@ fun MobileShellHeader(
         }
 
         // Subtle inline connection banner only when disconnected/reconnecting or view-only
-        val statusBanner: Pair<String, Boolean>? = when (connectionState) {
-            is ConnectionState.Connecting -> stringResource(R.string.connection_connecting) to false
-            is ConnectionState.Reconnecting -> stringResource(R.string.connection_reconnecting, connectionState.attempt) to true
-            is ConnectionState.ServerOffline -> stringResource(R.string.connection_offline) to true
-            is ConnectionState.Failed -> (connectionState.message ?: stringResource(R.string.connection_disconnected)) to true
-            else -> if (viewOnly) stringResource(R.string.view_only_badge) to false else null
+        val statusBanner: Triple<String, Boolean, Boolean>? = when (connectionState) {
+            is ConnectionState.Connecting -> Triple(stringResource(R.string.connection_connecting), false, false)
+            is ConnectionState.Reconnecting -> Triple(stringResource(R.string.connection_reconnecting, connectionState.attempt), true, true)
+            is ConnectionState.ServerOffline -> Triple(stringResource(R.string.connection_offline), true, true)
+            is ConnectionState.Failed -> {
+                val recoverable = connectionState.reason == dev.troupe.android.core.net.ConnectionFailure.Unreachable
+                Triple(connectionState.message ?: stringResource(R.string.connection_disconnected), true, recoverable)
+            }
+            else -> if (viewOnly) Triple(stringResource(R.string.view_only_badge), false, false) else null
         }
 
         if (statusBanner != null) {
+            val (bannerText, isWarning, canRetry) = statusBanner
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(if (statusBanner.second) palette.warningTint else palette.mutedSurface)
+                    .background(if (isWarning) palette.warningTint else palette.mutedSurface)
                     .padding(horizontal = 14.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    text = statusBanner.first,
+                    text = bannerText,
                     style = typo.labelSmall,
-                    color = if (statusBanner.second) palette.warning else palette.mutedForeground,
+                    color = if (isWarning) palette.warning else palette.mutedForeground,
                     modifier = Modifier.weight(1f),
                 )
-                if (statusBanner.second) {
+                if (canRetry) {
                     Text(
                         text = stringResource(R.string.connection_retry),
                         style = typo.labelMedium,

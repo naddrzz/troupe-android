@@ -29,6 +29,7 @@ import dev.troupe.android.shell.MobileWorkspaceShellScreen
 import dev.troupe.android.shell.WorkspaceShellViewModel
 import dev.troupe.android.terminal.TerminalScreen
 import dev.troupe.android.workspace.WorkspaceTab
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 
 @Serializable data object WorkspaceShellRoute
@@ -101,8 +102,13 @@ fun TroupeNavHost(
         }
     }
 
+    val navScope = androidx.compose.runtime.rememberCoroutineScope()
+
     // Also update Screen.Chat immediately whenever active tab changes inside WorkspaceShellRoute.
     LaunchedEffect(shellState.activeServer?.id, shellState.workspace.activeTab) {
+        if (nav.currentBackStackEntry?.destination?.hasRoute<WorkspaceShellRoute>() != true) {
+            return@LaunchedEffect
+        }
         val srvId = shellState.activeServer?.id ?: return@LaunchedEffect
         val tab = shellState.workspace.activeTab
         if (tab is WorkspaceTab.AgentChat) {
@@ -112,14 +118,14 @@ fun TroupeNavHost(
         }
     }
 
-    // Notification deep-link -> switch server & open chat tab directly in MobileWorkspaceShellScreen.
+    // Notification deep-link -> switch server, await hydration, & open chat tab directly in MobileWorkspaceShellScreen.
     LaunchedEffect(link) {
         if (link == null) return@LaunchedEffect
-        shellViewModel.session.openChatOnServer(link.serverId, link.sessionId, link.title)
         nav.navigate(WorkspaceShellRoute) {
             popUpTo(0) { inclusive = true }
             launchSingleTop = true
         }
+        shellViewModel.session.openChatOnServer(link.serverId, link.sessionId, link.title)
         onLinkHandled()
     }
 
@@ -140,9 +146,12 @@ fun TroupeNavHost(
                 canNavigateBack = route.canNavigateBack,
                 onBack = { nav.popBackStack() },
                 onConnected = { serverId, chatSessionId ->
-                    shellViewModel.session.selectServer(serverId)
                     if (!chatSessionId.isNullOrBlank()) {
-                        shellViewModel.session.openChat(chatSessionId)
+                        navScope.launch {
+                            shellViewModel.session.openChatOnServer(serverId, chatSessionId, null)
+                        }
+                    } else {
+                        shellViewModel.session.selectServer(serverId)
                     }
                     nav.navigate(WorkspaceShellRoute) {
                         popUpTo(0) { inclusive = true }

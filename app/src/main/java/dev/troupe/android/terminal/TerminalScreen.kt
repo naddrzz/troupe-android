@@ -75,19 +75,40 @@ fun EmbeddedTerminalPane(
     fontSizePx: Int,
     connections: TerminalConnections,
     cursors: TerminalCursorStore,
+    onMetadataChanged: ((cwd: String?, branch: String?, exitCode: Int?) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
-    val viewModel = remember(serverId, terminalId) {
-        TerminalViewModel(
-            savedState = SavedStateHandle(mapOf("serverId" to serverId, "terminalId" to terminalId)),
-            connections = connections,
-            cursors = cursors,
-        )
+    val storeOwner = remember(serverId, terminalId) {
+        object : androidx.lifecycle.ViewModelStoreOwner {
+            override val viewModelStore = androidx.lifecycle.ViewModelStore()
+        }
     }
-    DisposableEffect(viewModel) {
+    DisposableEffect(storeOwner) {
         onDispose {
-            // ViewModel detaches cleanly when this tab is closed/unmounted.
-            connections.detach(serverId, terminalId)
+            storeOwner.viewModelStore.clear()
+        }
+    }
+    val factory = remember(serverId, terminalId, connections, cursors) {
+        object : androidx.lifecycle.ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+                return TerminalViewModel(
+                    savedState = SavedStateHandle(mapOf("serverId" to serverId, "terminalId" to terminalId)),
+                    connections = connections,
+                    cursors = cursors,
+                ) as T
+            }
+        }
+    }
+    val viewModel: TerminalViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
+        viewModelStoreOwner = storeOwner,
+        key = "term:$serverId:$terminalId",
+        factory = factory,
+    )
+    val metadata by viewModel.metadata.collectAsStateWithLifecycle()
+    LaunchedEffect(metadata, onMetadataChanged) {
+        if (metadata.cwd != null || metadata.gitBranch != null || metadata.lastExitCode != null) {
+            onMetadataChanged?.invoke(metadata.cwd, metadata.gitBranch, metadata.lastExitCode)
         }
     }
     TerminalPaneContent(
@@ -110,11 +131,13 @@ private fun TerminalPaneContent(
     val palette = LocalTroupePalette.current
 
     // A WebView whose renderer process died is replaced by a fresh one, which the log is replayed into.
-    var webViews by remember { mutableIntStateOf(0) }
-    val renderer = remember(webViews) {
+    // Key on viewModel too so switching Terminal tabs gives each terminal its own WebView.
+    var webViews by remember(viewModel) { mutableIntStateOf(0) }
+    val renderer = remember(viewModel, webViews) {
         XtermWebViewRenderer(
             webView = TroupeTerminalWebView(context),
             initialPalette = palette.terminal,
+            initialFontSizePx = fontSizePx,
             onGone = { webViews++ },
         )
     }

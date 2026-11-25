@@ -331,10 +331,20 @@ fun GitChangesSheet(
                                 onClick = {
                                     scope.launch {
                                         val token = tokenProvider()
-                                        if (staged) gitApi.unstage(server.address, token, cwd, path)
-                                        else gitApi.stage(server.address, token, cwd, path)
-                                        activeDiff = null
-                                        refresh()
+                                        val res = if (staged) {
+                                            gitApi.unstage(server.address, token, cwd, path)
+                                        } else {
+                                            gitApi.stage(server.address, token, cwd, path)
+                                        }
+                                        when (res) {
+                                            is ApiResult.Ok -> {
+                                                error = null
+                                                activeDiff = null
+                                                refresh()
+                                            }
+                                            is ApiResult.ServerError -> error = res.message
+                                            else -> error = "Could not update staging state."
+                                        }
                                     }
                                 },
                                 modifier = Modifier.weight(1f),
@@ -346,9 +356,15 @@ fun GitChangesSheet(
                                     onClick = {
                                         scope.launch {
                                             val token = tokenProvider()
-                                            gitApi.discard(server.address, token, cwd, path)
-                                            activeDiff = null
-                                            refresh()
+                                            when (val res = gitApi.discard(server.address, token, cwd, path)) {
+                                                is ApiResult.Ok -> {
+                                                    error = null
+                                                    activeDiff = null
+                                                    refresh()
+                                                }
+                                                is ApiResult.ServerError -> error = res.message
+                                                else -> error = "Could not discard changes."
+                                            }
                                         }
                                     },
                                     modifier = Modifier.weight(1f),
@@ -372,9 +388,15 @@ fun GitChangesSheet(
                                 onClick = {
                                     if (!viewOnly && !branch.current) {
                                         scope.launch {
-                                            gitApi.switchBranch(server.address, tokenProvider(), cwd, branch.name)
-                                            showBranches = false
-                                            refresh()
+                                            when (val res = gitApi.switchBranch(server.address, tokenProvider(), cwd, branch.name)) {
+                                                is ApiResult.Ok -> {
+                                                    error = null
+                                                    showBranches = false
+                                                    refresh()
+                                                }
+                                                is ApiResult.ServerError -> error = res.message
+                                                else -> error = "Could not switch to ${branch.name}."
+                                            }
                                         }
                                     }
                                 },

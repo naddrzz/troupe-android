@@ -38,6 +38,14 @@ fun TroupeTheme(
     } else {
         BundledThemes.resolve(themeId, appearanceMode, darkTheme)
     }
+    val errorHex = String.format(
+        java.util.Locale.US,
+        "#%02x%02x%02x",
+        (palette.error.red * 255f).toInt().coerceIn(0, 255),
+        (palette.error.green * 255f).toInt().coerceIn(0, 255),
+        (palette.error.blue * 255f).toInt().coerceIn(0, 255),
+    )
+    val onErrorColor = OklchColor.parseHexColor(OklchColor.fillInkHex(errorHex))
     val colors: ColorScheme = if (palette.isDark) {
         darkColorScheme(
             primary = palette.brand,
@@ -58,7 +66,7 @@ fun TroupeTheme(
             outline = palette.fieldBorder,
             outlineVariant = palette.border,
             error = palette.error,
-            onError = palette.brandForeground,
+            onError = onErrorColor,
         )
     } else {
         lightColorScheme(
@@ -80,7 +88,7 @@ fun TroupeTheme(
             outline = palette.fieldBorder,
             outlineVariant = palette.border,
             error = palette.error,
-            onError = palette.brandForeground,
+            onError = onErrorColor,
         )
     }
     CompositionLocalProvider(LocalTroupePalette provides palette) {
