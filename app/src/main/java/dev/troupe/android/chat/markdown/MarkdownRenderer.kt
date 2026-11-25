@@ -31,6 +31,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
@@ -158,28 +161,37 @@ private fun MarkdownInlineText(
 ) {
     val uriHandler = LocalUriHandler.current
     var layoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
-    val hasLinks = remember(text) { text.getStringAnnotations(URL_TAG, 0, text.length).isNotEmpty() }
+    val linkRanges = remember(text) { text.getStringAnnotations(URL_TAG, 0, text.length) }
+    val linkActions = linkRanges.map { range ->
+        val label = text.substring(range.start, range.end).ifBlank { range.item }
+        val actionLabel = stringResource(R.string.markdown_open_link, label)
+        CustomAccessibilityAction(label = actionLabel) {
+            runCatching { uriHandler.openUri(range.item) }.isSuccess
+        }
+    }
     Text(
         text = text,
         style = style,
         color = color,
         onTextLayout = { layoutResult = it },
-        modifier = if (hasLinks) {
-            modifier.pointerInput(text) {
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    val up = waitForUpOrCancellation()
-                    if (up != null && !up.isConsumed &&
-                        (up.uptimeMillis - down.uptimeMillis) < viewConfiguration.longPressTimeoutMillis
-                    ) {
-                        val offset = layoutResult?.getOffsetForPosition(up.position) ?: return@awaitEachGesture
-                        val url = text.getStringAnnotations(URL_TAG, offset, offset).firstOrNull()?.item
-                        if (url != null) {
-                            runCatching { uriHandler.openUri(url) }
+        modifier = if (linkRanges.isNotEmpty()) {
+            modifier
+                .semantics { customActions = linkActions }
+                .pointerInput(text) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val up = waitForUpOrCancellation()
+                        if (up != null && !up.isConsumed &&
+                            (up.uptimeMillis - down.uptimeMillis) < viewConfiguration.longPressTimeoutMillis
+                        ) {
+                            val offset = layoutResult?.getOffsetForPosition(up.position) ?: return@awaitEachGesture
+                            val url = text.getStringAnnotations(URL_TAG, offset, offset).firstOrNull()?.item
+                            if (url != null) {
+                                runCatching { uriHandler.openUri(url) }
+                            }
                         }
                     }
                 }
-            }
         } else {
             modifier
         },

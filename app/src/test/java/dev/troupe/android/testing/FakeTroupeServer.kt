@@ -51,7 +51,7 @@ class FakeTroupeServer : Closeable {
      * `data` object, or throw [Refused] for an error reply. Frames pushed with [sendTerminalFrame]
      * from here go out before the reply, as termul sends `replay` before the `attach` reply.
      */
-    var onTerminalRequest: (type: String, payload: JsonObject) -> JsonObject = { type, _ ->
+    var onTerminalRequest: (type: String, payload: JsonObject) -> JsonElement = { type, _ ->
         error("FakeTroupeServer: no script for terminal request '$type'")
     }
 
@@ -316,6 +316,16 @@ class FakeTroupeServer : Closeable {
                 put("terminal_id", terminalId)
                 put("exit_code", exitCode)
                 put("signal", null as Int?)
+            })
+        }
+
+        /** The `cwd_changed` event; its payload keys are snake_case. */
+        fun cwdChangedEvent(terminalId: String, cwd: String): JsonObject = buildJsonObject {
+            put("type", "event")
+            put("payload", buildJsonObject {
+                put("type", "cwd_changed")
+                put("terminal_id", terminalId)
+                put("cwd", cwd)
             })
         }
 

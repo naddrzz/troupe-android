@@ -377,5 +377,6 @@
         <item quantity="other">%1$d need you</item>
     </plurals>
     <string name="setup_port_invalid">Enter a port between 1 and 65535.</string>
+    <string name="markdown_open_link">Open %1$s</string>
     <string name="settings_notify_turn_finished">Notify when a turn finishes</string>
 </resources>

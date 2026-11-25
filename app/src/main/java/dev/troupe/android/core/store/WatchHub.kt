@@ -83,17 +83,44 @@ class WatchHub(
                 e to (e.refCount == 1)
             }
             try {
+                var lastDeliveredEpoch: String? = null
+                var lastDeliveredN: Long = 0
+                var awaitingReset = false
                 // onSubscription runs AFTER the collector is registered on entry.flow, guaranteeing
                 // zero dropped frames between emitting lastReset / sending watch and collecting deltas.
                 entry.flow.onSubscription {
                     val snapshot = mutex.withLock { entry.lastReset }
                     if (snapshot != null) {
+                        lastDeliveredEpoch = snapshot.hostEpoch
+                        lastDeliveredN = snapshot.n
                         emit(snapshot)
                     }
                     if (shouldSubscribe) {
                         scope.launch { sendWatch(key) }
                     }
-                }.collect { update -> emit(update) }
+                }.collect { update ->
+                    when {
+                        update.reset -> {
+                            lastDeliveredEpoch = update.hostEpoch
+                            lastDeliveredN = update.n
+                            awaitingReset = false
+                            emit(update)
+                        }
+                        awaitingReset -> Unit
+                        lastDeliveredEpoch != null && update.hostEpoch == lastDeliveredEpoch && update.n <= lastDeliveredN -> Unit
+                        lastDeliveredEpoch != null && (update.hostEpoch != lastDeliveredEpoch || update.n != lastDeliveredN + 1) -> {
+                            // Subscriber fell behind (e.g., DROP_OLDEST overflow while suspended on emit(snapshot)):
+                            // trigger a clean resync so this subscriber receives a fresh reset snapshot.
+                            awaitingReset = true
+                            scope.launch { triggerResync(key) }
+                        }
+                        else -> {
+                            lastDeliveredEpoch = update.hostEpoch
+                            lastDeliveredN = update.n
+                            emit(update)
+                        }
+                    }
+                }
             } finally {
                 val shouldUnsubscribe = withContext(NonCancellable) {
                     mutex.withLock {
@@ -110,6 +137,20 @@ class WatchHub(
                     scope.launch { sendUnwatch(key) }
                 }
             }
+        }
+    }
+
+    private suspend fun triggerResync(key: Key) {
+        val active = mutex.withLock {
+            val entry = channels[key] ?: return@withLock false
+            entry.hostEpoch = null
+            entry.lastN = 0
+            entry.lastReset = null
+            true
+        }
+        if (active) {
+            sendUnwatch(key)
+            sendWatch(key)
         }
     }
 

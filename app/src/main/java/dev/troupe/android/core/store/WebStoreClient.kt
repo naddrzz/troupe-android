@@ -122,8 +122,11 @@ class WebStoreClient(
             var outcome: StoreWriteResult? = null
             return try {
                 sendWriteAndRecordRetry(logicalKey, data, wrapped, epoch).also { outcome = it }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                outcome = StoreWriteResult.Error("CANCELLED", e.message ?: "Write cancelled")
+                throw e
             } finally {
-                val finalOutcome = outcome ?: StoreWriteResult.Error("CANCELLED", "Write cancelled")
+                val finalOutcome = outcome ?: StoreWriteResult.Error("WRITE_FAILED", "Write aborted")
                 existingWaiters.forEach { it.complete(finalOutcome) }
             }
         }
@@ -142,11 +145,13 @@ class WebStoreClient(
                     var outcome: StoreWriteResult? = null
                     try {
                         outcome = sendWriteAndRecordRetry(ready.logicalKey, ready.data, wrap(ready.data), ready.epoch)
-                    } catch (t: Throwable) {
-                        outcome = StoreWriteResult.Error("CANCELLED", t.message)
-                        if (t is kotlinx.coroutines.CancellationException) throw t
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        outcome = StoreWriteResult.Error("CANCELLED", e.message ?: "Write cancelled")
+                        throw e
+                    } catch (e: Exception) {
+                        outcome = StoreWriteResult.Error("WRITE_FAILED", e.message)
                     } finally {
-                        val finalOutcome = outcome ?: StoreWriteResult.Error("CANCELLED", "Write cancelled")
+                        val finalOutcome = outcome ?: StoreWriteResult.Error("WRITE_FAILED", "Write aborted")
                         ready.waiters.forEach { it.complete(finalOutcome) }
                     }
                 }
@@ -213,8 +218,11 @@ class WebStoreClient(
             var outcome: StoreWriteResult? = null
             try {
                 outcome = sendWriteAndRecordRetry(item.logicalKey, item.data, wrap(item.data), item.epoch)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                outcome = StoreWriteResult.Error("CANCELLED", e.message ?: "Flush interrupted")
+                throw e
             } finally {
-                val finalOutcome = outcome ?: StoreWriteResult.Error("CANCELLED", "Flush interrupted")
+                val finalOutcome = outcome ?: StoreWriteResult.Error("WRITE_FAILED", "Flush aborted")
                 item.waiters.forEach { it.complete(finalOutcome) }
             }
         }

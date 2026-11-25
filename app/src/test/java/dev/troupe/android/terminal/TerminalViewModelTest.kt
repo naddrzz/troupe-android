@@ -4,6 +4,7 @@ import dev.troupe.android.R
 import dev.troupe.android.terminal.render.TermSize
 import dev.troupe.android.terminal.render.TerminalKey
 import dev.troupe.android.testing.FakeTroupeServer
+import dev.troupe.android.testing.FakeTroupeServer.Companion.cwdChangedEvent
 import dev.troupe.android.testing.FakeTroupeServer.Companion.dataFrame
 import dev.troupe.android.testing.FakeTroupeServer.Companion.exitEvent
 import dev.troupe.android.testing.FakeTroupeServer.Companion.gapFrame
@@ -19,7 +20,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -322,5 +325,66 @@ class TerminalViewModelTest {
             JsonObject(emptyMap())
         }
         assertEquals(TerminalUi.Exited(0), openTerminal(pairedServerHolding("t1")).ui.value)
+    }
+
+    @Test fun attachingSeedsCwdGitBranchAndExitCodeMetadata() {
+        server.onTerminalRequest = { type, _ ->
+            when (type) {
+                "attach" -> {
+                    server.sendTerminalFrame(replayFrame("t1", "$ ".toByteArray()))
+                    JsonObject(emptyMap())
+                }
+                "get_cwd" -> JsonPrimitive("/workspace/app")
+                "get_git_branch" -> JsonPrimitive("feat/v2")
+                "get_exit_code" -> JsonPrimitive(0)
+                else -> JsonObject(emptyMap())
+            }
+        }
+        val vm = openTerminal(pairedServerHolding("t1"))
+
+        eventually(5_000) {
+            vm.metadata.value == TerminalMetadata(
+                cwd = "/workspace/app",
+                gitBranch = "feat/v2",
+                lastExitCode = 0,
+            )
+        }
+    }
+
+    @Test fun liveCwdChangedDuringSeedIsNotOverwrittenByStaleGetCwdReply() {
+        val vmRef = AtomicReference<TerminalViewModel?>(null)
+        server.onTerminalRequest = { type, _ ->
+            when (type) {
+                "attach" -> {
+                    server.sendTerminalFrame(replayFrame("t1", "$ ".toByteArray()))
+                    JsonObject(emptyMap())
+                }
+                "get_cwd" -> {
+                    server.sendTerminalFrame(cwdChangedEvent("t1", "/workspace/live"))
+                    val deadline = System.currentTimeMillis() + 5_000
+                    while (vmRef.get()?.metadata?.value?.cwd != "/workspace/live" && System.currentTimeMillis() < deadline) {
+                        Thread.sleep(10)
+                    }
+                    JsonPrimitive("/workspace/stale")
+                }
+                "get_git_branch" -> JsonPrimitive("main")
+                "get_exit_code" -> JsonPrimitive(1)
+                else -> JsonObject(emptyMap())
+            }
+        }
+        val serverId = pairedServerHolding("t1")
+        val vm = graph.terminalViewModel(serverId, "t1")
+        vmRef.set(vm)
+        runBlocking { withTimeout(10_000) { vm.ui.first { it != TerminalUi.Connecting } } }
+
+        eventually(5_000) { vm.metadata.value.lastExitCode == 1 }
+        assertEquals(
+            TerminalMetadata(
+                cwd = "/workspace/live",
+                gitBranch = "main",
+                lastExitCode = 1,
+            ),
+            vm.metadata.value,
+        )
     }
 }
