@@ -1,6 +1,7 @@
 package dev.troupe.android.terminal.render
 
 import android.view.MotionEvent
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import androidx.compose.runtime.Composable
@@ -9,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.viewinterop.AndroidView
+import kotlin.math.abs
 
 /** Hosts the renderer's WebView in Compose. */
 @Composable
@@ -27,11 +29,25 @@ fun TerminalView(renderer: XtermWebViewRenderer, modifier: Modifier = Modifier) 
                 // Inside Compose a tap does not always give the WebView View focus, and without it
                 // neither the soft keyboard nor a hardware key reaches xterm. The touch itself is
                 // not consumed, so selection and scrolling work as before.
+                val slop = ViewConfiguration.get(context).scaledTouchSlop
+                var downX = 0f
+                var downY = 0f
                 @Suppress("ClickableViewAccessibility")
                 setOnTouchListener { view, event ->
-                    if (event.actionMasked == MotionEvent.ACTION_UP) {
-                        if (!view.hasFocus()) view.requestFocus()
-                        view.context.getSystemService(InputMethodManager::class.java)?.showSoftInput(view, 0)
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> {
+                            downX = event.x
+                            downY = event.y
+                        }
+                        MotionEvent.ACTION_UP -> {
+                            if (!view.hasFocus()) view.requestFocus()
+                            // A tap only: not the end of a scroll, nor of a long press that selects.
+                            val moved = abs(event.x - downX) > slop || abs(event.y - downY) > slop
+                            val held = event.eventTime - event.downTime >= ViewConfiguration.getLongPressTimeout()
+                            if (!moved && !held) {
+                                view.context.getSystemService(InputMethodManager::class.java)?.showSoftInput(view, 0)
+                            }
+                        }
                     }
                     false
                 }

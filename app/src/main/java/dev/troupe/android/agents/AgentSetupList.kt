@@ -2,7 +2,7 @@ package dev.troupe.android.agents
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -116,7 +116,13 @@ private fun AgentSetupRow(
 ) {
     val palette = TroupeTheme.palette
     val typo = TroupeTheme.typography
-    val status = if (ready) AgentStatus.Ready else agent.status
+    // "Ready" means a chat can start with it: a ready catalog entry this app cannot build a launch
+    // config for is not available here.
+    val status = when {
+        ready -> AgentStatus.Ready
+        agent.status == AgentStatus.Ready -> AgentStatus.Unavailable
+        else -> agent.status
+    }
     val runtime = stringResource(if (agent.needsUv) R.string.agents_runtime_uv else R.string.agents_runtime_node)
     val (word, tone) = when (status) {
         AgentStatus.Ready -> stringResource(R.string.agents_status_ready) to palette.success
@@ -138,7 +144,7 @@ private fun AgentSetupRow(
             .clip(shape)
             .background(palette.card)
             .border(if (selected) 1.dp else 0.5.dp, if (selected) palette.brandText else palette.border, shape)
-            .then(if (ready) Modifier.clickable(role = Role.RadioButton, onClick = onSelect) else Modifier)
+            .then(if (ready) Modifier.selectable(selected = selected, role = Role.RadioButton, onClick = onSelect) else Modifier)
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {

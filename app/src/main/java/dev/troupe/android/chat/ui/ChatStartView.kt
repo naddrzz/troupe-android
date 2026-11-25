@@ -88,6 +88,8 @@ fun ChatStartView(
 
     var draft by remember(project?.id) { mutableStateOf("") }
     var worktrees by remember(project?.id) { mutableStateOf<List<WorktreeInfo>>(emptyList()) }
+    /** Null until `worktree/list` answered; a failed call other than "not a repository" counts as a repository. */
+    var isGitProject by remember(project?.id) { mutableStateOf<Boolean?>(null) }
     var creating by remember { mutableStateOf(false) }
     var launchJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -100,8 +102,13 @@ fun ChatStartView(
         val path = project?.path ?: return@LaunchedEffect
         val token = tokenProvider()
         val res = worktreeApi.list(srv.address, token, path)
-        if (res is ApiResult.Ok) {
-            worktrees = res.value
+        when (res) {
+            is ApiResult.Ok -> {
+                worktrees = res.value
+                isGitProject = res.value.isNotEmpty()
+            }
+            is ApiResult.ServerError -> isGitProject = res.code != "NOT_A_GIT_REPO"
+            else -> isGitProject = true
         }
     }
 
@@ -123,7 +130,8 @@ fun ChatStartView(
             try {
                 // Troupe only starts an agent whose config is saved under `acp/agents`.
                 val result = if (onSaveAgent(config)) {
-                    launchChat(conn.socket, config, project?.id.takeIf { cwd != null }, cwd, prompt)
+                    // A Project without a folder has nowhere to start a session in: a quick chat instead.
+                    launchChat(conn.socket, config, if (cwd != null) project?.id else null, cwd, prompt)
                 } else {
                     LaunchResult.Failed("Could not save ${config.name} on the server.")
                 }
@@ -197,7 +205,7 @@ fun ChatStartView(
 
         // Worktree isolation selector strip above the composer
         // Troupe shows it for git Projects only: a folder that is not a repository lists no worktree.
-        if (project?.path != null && !viewOnly && worktrees.isNotEmpty()) {
+        if (project?.path != null && !viewOnly && isGitProject == true) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()

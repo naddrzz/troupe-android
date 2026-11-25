@@ -41,6 +41,13 @@ class RecentsGroupingTest {
         )
     }
 
+    @Test fun aChatIsGroupedByTheTimeItsRowShows() {
+        // Made on the 3rd, active today: the row shows "Nov 3", so it belongs under Earlier.
+        val revived = SessionSummary(sessionId = "revived", projectId = "p1", createdAt = at(3, 8), lastActivityAt = at(25, 20))
+        assertEquals(listOf(RecentsGroup.Earlier), groupRecents(listOf(revived), now, zone).map { it.first })
+        assertEquals(RecentsTime.Date("Nov 3"), recentsTime(revived.recentsAt, now, zone, Locale.US))
+    }
+
     @Test fun emptyGroupsAreLeftOut() {
         assertEquals(emptyList<Any>(), groupRecents(emptyList(), now, zone))
         assertEquals(listOf(RecentsGroup.Earlier), groupRecents(listOf(chat("old", at(3, 8))), now, zone).map { it.first })

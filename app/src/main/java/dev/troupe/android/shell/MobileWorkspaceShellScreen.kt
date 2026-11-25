@@ -155,17 +155,24 @@ fun MobileWorkspaceShellScreen(
             onInstallAgent = { agent -> scope.launch { viewModel.session.currentAgentSetup()?.install(agent) } },
             onCheckAgents = { scope.launch { viewModel.session.currentAgentSetup()?.refresh() } },
             onCreateProject = viewModel.session::createProject,
-            onFinish = { picked ->
+            onFinish = { picked, projectCreated ->
                 if (picked != null) {
                     scope.launch {
                         viewModel.session.currentAgentSetup()?.let { if (it.save(picked)) it.select(picked.id) }
                     }
-                    quickLauncher = true
                 }
+                // Troupe lands in the Project's launcher, in a quick chat when only an agent was
+                // picked, and in the empty workspace when neither was.
+                quickLauncher = picked != null && !projectCreated
                 viewModel.session.finishOnboarding()
             },
         )
         return
+    }
+
+    // Choosing a Project leaves the quick launcher: its launcher is the Project's from then on.
+    LaunchedEffect(state.activeProjectId) {
+        if (state.activeProjectId != null) quickLauncher = false
     }
 
     val activeTab = state.workspace.activeTab
@@ -491,7 +498,7 @@ fun MobileWorkspaceShellScreen(
                 onOpenGitChanges = { gitSheetOpen = true },
                 onOpenFiles = { filesSheetOpen = true },
                 onOpenCommandPalette = { paletteSheetOpen = true },
-                onNewTerminal = { viewModel.session.spawnTerminal() },
+                onNewTerminal = { viewModel.session.spawnTerminal() }.takeIf { activeProject != null && !state.viewOnly },
                 onReportBug = { uriHandler.openUri("https://github.com/naddrzz/troupe-android/issues/new") },
                 onReloadChat = if (activeTab is WorkspaceTab.AgentChat) {
                     { viewModel.session.openChat(activeTab.sessionId, activeTab.title) }
@@ -534,9 +541,7 @@ fun MobileWorkspaceShellScreen(
             viewOnly = state.viewOnly,
             onDismiss = { snapshotsSheetOpen = false },
             onRestoreSnapshot = { snap ->
-                // As in Troupe: a restore replaces the Project's terminals with the saved ones.
-                state.terminals.forEach { viewModel.session.killTerminal(it.id) }
-                snap.terminals.forEach { t -> viewModel.session.spawnTerminal(cwdOverride = t.cwd) }
+                viewModel.session.replaceTerminals(snap.terminals.map { it.cwd })
             },
         )
     }

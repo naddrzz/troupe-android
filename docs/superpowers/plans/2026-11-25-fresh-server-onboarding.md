@@ -63,10 +63,10 @@
 **Files:** Create `agents/AgentSetup.kt`; modify `workspace/WorkspaceSessionManager.kt`, `workspace/AppSettingsStore.kt` (`onboardingCompletedAt`); test `agents/OnboardingGateTest.kt`.
 
 **Produces:**
-- `data class AgentSetupState(loading, catalog, saved, lastSelected, installing: Set<String>, error)` with `val launchable: List<AgentConfig>` and `val selected: AgentConfig?`
-- `class AgentSetup(socket, store, scope)`: `state`, `refresh()`, `install(agentId)`, `select(configId)`, `save(config)`
+- `data class AgentSetupState(loaded, catalog, saved, lastSelected, installing: Set<String>, error)` with `val launchable: List<AgentConfig>` and `val selected: AgentConfig?`
+- `class AgentSetup(socket, store, scope)`: `state`, `refresh()`, `install(agent: CatalogAgent)`, `select(configId)`, `save(config)`
 - `fun shouldShowOnboarding(projectsLoaded, projectCount, settingsLoaded, completedAt, viewOnly): Boolean`
-- `WorkspaceShellState.agentSetup`, `.onboarding: Boolean`; `WorkspaceSessionManager.finishOnboarding()`, `.agentSetup()`
+- `WorkspaceShellState.agentSetup`, `.onboarding: Boolean`; `WorkspaceSessionManager.finishOnboarding()`, `.currentAgentSetup()`
 
 - [ ] Tests for the gate: true only with zero projects, settings loaded, null timestamp, not view-only.
 - [ ] Implement; wire into the session job; fix `openChat` for `__unassigned__`.

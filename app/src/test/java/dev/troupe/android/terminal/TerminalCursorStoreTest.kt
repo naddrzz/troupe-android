@@ -55,6 +55,18 @@ class TerminalCursorStoreTest {
         }
     }
 
+    @Test fun aRefusedClaimIsRemovedOnlyWhileItIsStillTheStoredOne() = TestGraph(tmp.root).use { graph ->
+        runBlocking {
+            graph.cursors.putClaim("s1", "t1", "reissued")
+            // The refusal was for the claim before the reissue: the stored one stays.
+            graph.cursors.removeClaim("s1", "t1", "refused")
+            assertEquals("reissued", graph.cursors.get("s1", "t1")!!.claim)
+
+            graph.cursors.removeClaim("s1", "t1", "reissued")
+            assertNull(graph.cursors.get("s1", "t1"))
+        }
+    }
+
     @Test fun aRecordThatNoLongerDecryptsCanStillBeRemoved() {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val store = DataStoreFactory.create(OkioStorage(FileSystem.SYSTEM, PreferencesSerializer) { File(tmp.root, "c.preferences_pb").toOkioPath() }, scope = scope)

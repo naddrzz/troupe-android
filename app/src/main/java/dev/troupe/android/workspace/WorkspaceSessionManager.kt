@@ -8,6 +8,7 @@ import dev.troupe.android.chat.net.ChatConnectFailed
 import dev.troupe.android.chat.net.ChatConnection
 import dev.troupe.android.chat.net.ChatConnections
 import dev.troupe.android.chat.protocol.SessionSummary
+import dev.troupe.android.chat.protocol.UNASSIGNED_PROJECT_ID
 import dev.troupe.android.core.net.ApiResult
 import dev.troupe.android.core.net.ConnectionFailure
 import dev.troupe.android.core.net.ConnectionState
@@ -59,12 +60,10 @@ import javax.inject.Singleton
 /** Live status of a single chat session from `chat_activity` watch + `AttentionCenter`. */
 enum class SessionLiveState { Idle, Running, NeedsYou, Error }
 
+/** An agent a chat can start with: a launch config's id and name. */
 data class AgentDescriptor(
     val id: String,
     val name: String,
-    val provider: String = "",
-    val installed: Boolean = true,
-    val authRequired: Boolean = false,
 )
 
 data class WorkspaceShellState(
@@ -376,6 +375,9 @@ class WorkspaceSessionManager @Inject constructor(
         project: Project,
         cwdOverride: String?,
     ) {
+        // Read before waiting for the lock, and from this Project's own pick: the active Project
+        // may be another one by the time the request goes out.
+        val cwd = cwdOverride ?: _state.value.worktreePickByProject[project.id] ?: project.path.orEmpty()
         try {
             val socket = terminalConnections.socket(server.id)
             val spawned = terminalsMutex.withLock {
@@ -383,7 +385,7 @@ class WorkspaceSessionManager @Inject constructor(
                     "spawn",
                 buildJsonObject {
                     put("projectId", project.id)
-                    put("cwd", cwdOverride ?: _state.value.activeWorktreePath ?: project.path.orEmpty())
+                    put("cwd", cwd)
                     put("cols", 80)
                     put("rows", 24)
                 },
@@ -407,6 +409,24 @@ class WorkspaceSessionManager @Inject constructor(
             refreshProjectTerminals(project.id)
         } catch (e: IOException) {
             _state.update { it.copy(bannerMessage = e.message ?: "Could not start terminal.") }
+        }
+    }
+
+    /**
+     * A snapshot restore, as in Troupe: closes the Project's terminals, then starts one per saved
+     * working directory. In order, so a new Terminal never races the close of an old one.
+     */
+    fun replaceTerminals(cwds: List<String?>) {
+        val server = _state.value.activeServer ?: return
+        val project = _state.value.activeProject ?: return
+        if (_state.value.viewOnly) {
+            _state.update { it.copy(bannerMessage = "Server is in View-only mode.") }
+            return
+        }
+        val existing = _state.value.terminals.map { it.id }
+        scope.launch {
+            existing.forEach { killTerminalSuspend(server, project.id, it) }
+            cwds.forEach { spawnTerminalSuspend(server, project, it) }
         }
     }
 
@@ -988,9 +1008,6 @@ private fun classifyChatActivityRecord(info: JsonObject): SessionLiveState {
         else -> SessionLiveState.Idle
     }
 }
-
-/** The Project id the server gives a quick chat (Troupe's `UNASSIGNED_PROJECT_ID`). */
-const val UNASSIGNED_PROJECT_ID = "__unassigned__"
 
 /**
  * Troupe's `onboarding-gate.ts`: first run shows only on a server with no Projects whose

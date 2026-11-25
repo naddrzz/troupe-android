@@ -74,14 +74,19 @@ class AgentSetup(
         } catch (e: IOException) {
             return _state.update { it.copy(loaded = true, error = "Could not reach the server.") }
         }
-        val saved = (store.read(PersistenceKeys.ACP_AGENTS) as? StoreReadResult.Found)?.data
+        val saved = when (val read = store.read(PersistenceKeys.ACP_AGENTS)) {
+            is StoreReadResult.Found -> parseSaved(read.data)
+            StoreReadResult.NotFound -> emptyList()
+            is StoreReadResult.Error -> null
+        }
         val last = (store.read(PersistenceKeys.LAST_SELECTED_AGENT) as? StoreReadResult.Found)?.data
         _state.update {
             it.copy(
                 loaded = true,
                 catalog = if (catalog.ok) parseCatalog(catalog.payload) else it.catalog,
-                saved = saved?.let(::parseSaved) ?: it.saved,
-                lastSelected = (last as? JsonObject)?.string("agentId") ?: it.lastSelected,
+                saved = saved ?: it.saved,
+                // A pick made here wins: its write may not have reached the host yet.
+                lastSelected = it.lastSelected ?: (last as? JsonObject)?.string("agentId"),
                 error = if (catalog.ok) null else catalog.message ?: "Could not list agents.",
             )
         }
@@ -105,15 +110,20 @@ class AgentSetup(
                 command == null -> "${agent.name} is still installing. Check again in a moment."
                 else -> {
                     val config = agent.installedConfig(command, outcome.strings("args"))
-                    if (save(config)) select(config.id)
-                    null
+                    if (save(config)) {
+                        select(config.id)
+                        null
+                    } else {
+                        // Installed on the host, but without a saved config it cannot start a chat.
+                        _state.value.error ?: "${agent.name} is installed, but saving it failed. Check again to retry."
+                    }
                 }
             }
         } catch (e: IOException) {
             "Lost the connection while installing ${agent.name}. Check again in a moment."
         }
-        _state.update { it.copy(installing = it.installing - agent.id, error = error) }
         refresh()
+        _state.update { it.copy(installing = it.installing - agent.id, error = error ?: it.error) }
     }
 
     /**
@@ -153,6 +163,7 @@ class AgentSetup(
                     put("agentId", configId)
                     put("mode", "acp")
                 },
+                immediate = true,
             )
         }
     }

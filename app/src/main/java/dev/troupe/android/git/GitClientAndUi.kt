@@ -325,6 +325,7 @@ fun GitChangesSheet(
         onPop = {
             activeDiff = null
             showBranches = false
+            confirmDiscard = null
         },
         onDismiss = onDismiss,
     ) {
@@ -521,7 +522,10 @@ fun GitChangesSheet(
                                         onClick = {
                                             scope.launch {
                                                 val res = gitApi.diff(server.address, tokenProvider(), cwd, file.path, staged = true)
-                                                if (res is ApiResult.Ok) activeDiff = Triple(file.path, true, res.value)
+                                                if (res is ApiResult.Ok) {
+                                                    confirmDiscard = null
+                                                    activeDiff = Triple(file.path, true, res.value)
+                                                }
                                             }
                                         },
                                     )
@@ -551,7 +555,10 @@ fun GitChangesSheet(
                                         onClick = {
                                             scope.launch {
                                                 val res = gitApi.diff(server.address, tokenProvider(), cwd, file.path, staged = false)
-                                                if (res is ApiResult.Ok) activeDiff = Triple(file.path, false, res.value)
+                                                if (res is ApiResult.Ok) {
+                                                    confirmDiscard = null
+                                                    activeDiff = Triple(file.path, false, res.value)
+                                                }
                                             }
                                         },
                                     )
@@ -564,6 +571,8 @@ fun GitChangesSheet(
                                 value = commitMessage,
                                 onValueChange = { commitMessage = it },
                                 label = { Text(stringResource(R.string.git_commit_summary)) },
+                                // Locked while the commit runs: what is typed then would be cleared unsent.
+                                enabled = !busy,
                                 singleLine = true,
                                 textStyle = typo.bodyLarge,
                                 modifier = Modifier.fillMaxWidth(),
@@ -578,6 +587,7 @@ fun GitChangesSheet(
                                 value = commitDescription,
                                 onValueChange = { commitDescription = it },
                                 label = { Text(stringResource(R.string.git_commit_description)) },
+                                enabled = !busy,
                                 minLines = 2,
                                 maxLines = 5,
                                 textStyle = typo.bodyLarge,

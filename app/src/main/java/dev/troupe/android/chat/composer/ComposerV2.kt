@@ -176,7 +176,7 @@ fun ComposerV2(
                     )
                     Text(
                         text = selectedAgent?.name
-                            ?: stringResource(if (setUpAgents != null) R.string.agents_set_up else R.string.composer_default_agent),
+                            ?: stringResource(if (agentSelectable) R.string.agents_set_up else R.string.composer_default_agent),
                         style = typo.labelMedium,
                         color = palette.foreground,
                         maxLines = 1,
@@ -367,7 +367,7 @@ private fun MobileModelSheet(
     val palette = TroupeTheme.palette
     var query by remember { mutableStateOf("") }
     val filtered = agents.filter {
-        query.isBlank() || it.name.contains(query, ignoreCase = true) || it.provider.contains(query, ignoreCase = true)
+        query.isBlank() || it.name.contains(query, ignoreCase = true)
     }
 
     TroupeMobileSheet(
@@ -390,7 +390,6 @@ private fun MobileModelSheet(
                     if (idx > 0) SheetRowDivider()
                     SheetRow(
                         title = agent.name,
-                        subtitle = agent.provider.takeIf { it.isNotBlank() },
                         picked = agent.id == selectedAgentId,
                         leading = {
                             Icon(

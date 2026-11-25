@@ -26,8 +26,11 @@ interface LaunchTransport {
     fun dispatch(type: String, payload: JsonObject, commandId: String?)
 }
 
-/** The host starts an agent process; a first `npx` run also downloads its package. */
-val SPAWN_TIMEOUT = 120.seconds
+/**
+ * Each step of a launch: the host starts an agent process (a first `npx` run also downloads its
+ * package), and `create_session` and `authenticate_agent` wait on that same process.
+ */
+val LAUNCH_STEP_TIMEOUT = 120.seconds
 
 const val AGENT_AUTH_REQUIRED = "agent_auth_required"
 
@@ -57,7 +60,7 @@ suspend fun launchChat(
         }
         put("projectId", projectId)
         put("sessionId", null as String?)
-    }, newCommandId(), SPAWN_TIMEOUT)
+    }, newCommandId(), LAUNCH_STEP_TIMEOUT)
     val spawned = spawn.payload as? JsonObject
     val agentId = spawned?.string("agentId")
     if (!spawn.ok || agentId == null) return LaunchResult.Failed(spawn.message ?: "Could not start ${config.name}.")
@@ -73,7 +76,7 @@ suspend fun launchChat(
         putJsonArray("mcpServers") {}
         put("ephemeral", false)
     }
-    var created = transport.request("create_session", sessionPayload, newCommandId(), SPAWN_TIMEOUT)
+    var created = transport.request("create_session", sessionPayload, newCommandId(), LAUNCH_STEP_TIMEOUT)
     if (!created.ok && created.needsAgentAuth()) {
         val methods = (spawned["authMethods"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.string("id") }
         val method = methods.singleOrNull()
@@ -81,9 +84,9 @@ suspend fun launchChat(
         val auth = transport.request("authenticate_agent", buildJsonObject {
             put("agentId", agentId)
             put("methodId", method)
-        }, newCommandId(), SPAWN_TIMEOUT)
+        }, newCommandId(), LAUNCH_STEP_TIMEOUT)
         if (!auth.ok) return LaunchResult.Failed(auth.message ?: "Could not sign in to ${config.name}.")
-        created = transport.request("create_session", sessionPayload, newCommandId(), SPAWN_TIMEOUT)
+        created = transport.request("create_session", sessionPayload, newCommandId(), LAUNCH_STEP_TIMEOUT)
     }
     val sessionId = (created.payload as? JsonObject)?.string("sessionId")
     if (!created.ok || sessionId == null) return LaunchResult.Failed(created.message ?: "Could not start the chat.")

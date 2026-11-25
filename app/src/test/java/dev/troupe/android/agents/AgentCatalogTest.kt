@@ -64,12 +64,18 @@ class AgentCatalogTest {
     }
 
     @Test fun launchableListsSavedConfigsOnceAndReadyCatalogAgents() {
-        val saved = AgentConfig(id = "acp-registry:cursor", name = "Cursor", command = "/opt/cursor")
-        val state = AgentSetupState(loaded = true, catalog = catalog, saved = listOf(saved))
+        // One saved config the catalog cannot derive (cursor), one it also derives (opencode).
+        val saved = listOf(
+            AgentConfig(id = "acp-registry:cursor", name = "Cursor", command = "/opt/cursor"),
+            AgentConfig(id = "acp-registry:opencode", name = "OpenCode", command = "/saved/opencode"),
+        )
+        val state = AgentSetupState(loaded = true, catalog = catalog, saved = saved)
         assertEquals(
             listOf("acp-registry:cursor", "acp-registry:opencode", "acp-registry:codex-acp"),
             state.launchable.map { it.id },
         )
+        // The saved config wins over the one derived from the catalog.
+        assertEquals("/saved/opencode", state.launchable.first { it.id == "acp-registry:opencode" }.command)
         // No last pick: Troupe's featured order decides (codex-acp before cursor and opencode).
         assertEquals("acp-registry:codex-acp", state.selected?.id)
         assertEquals("acp-registry:opencode", state.copy(lastSelected = "acp-registry:opencode").selected?.id)

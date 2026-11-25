@@ -26,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.troupe.android.R
@@ -242,7 +243,12 @@ fun SnapshotsSheet(
                 else -> snapshots.forEach { snap ->
                     if (confirmRestore == snap.id) {
                         Text(
-                            text = stringResource(R.string.snapshots_restore_confirm, snap.name, snap.terminals.size),
+                            text = pluralStringResource(
+                                R.plurals.snapshots_restore_confirm,
+                                snap.terminals.size,
+                                snap.name,
+                                snap.terminals.size,
+                            ),
                             style = typo.bodySmall,
                             color = palette.warning,
                         )

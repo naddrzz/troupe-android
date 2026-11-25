@@ -22,7 +22,8 @@ sealed interface RecentsTime {
 
 /**
  * Splits [sessions] (newest first) into the drawer's groups. Quick chats get their own group
- * whatever their age; the rest go by the day of their last activity. Empty groups are left out.
+ * whatever their age; the rest go by the day of [recentsAt], the time their row shows. Empty
+ * groups are left out.
  */
 fun groupRecents(
     sessions: List<SessionSummary>,
@@ -33,7 +34,7 @@ fun groupRecents(
     return sessions.groupBy { session ->
         when {
             session.isQuick -> RecentsGroup.Quick
-            else -> when (dayOf(session.lastActivityAt, zone)) {
+            else -> when (dayOf(session.recentsAt, zone)) {
                 today -> RecentsGroup.Today
                 today.minusDays(1) -> RecentsGroup.Yesterday
                 else -> RecentsGroup.Earlier
@@ -53,5 +54,8 @@ fun recentsTime(at: Long, now: Long, zone: ZoneId = ZoneId.systemDefault(), loca
         else -> RecentsTime.Date(DateTimeFormatter.ofPattern("MMM d", locale).format(moment))
     }
 }
+
+/** When the chat was made (Troupe's rows show creation time), or its last activity on older hosts. */
+val SessionSummary.recentsAt: Long get() = createdAt.takeIf { it > 0 } ?: lastActivityAt
 
 private fun dayOf(epochMs: Long, zone: ZoneId): LocalDate = Instant.ofEpochMilli(epochMs).atZone(zone).toLocalDate()

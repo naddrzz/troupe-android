@@ -352,6 +352,8 @@ internal fun AddProjectContent(
 
     var currentBrowse by remember { mutableStateOf<BrowseDirectoryResponse?>(null) }
     var loadingDir by remember { mutableStateOf(true) }
+    /** The folder last asked for, which is the one to ask again when it failed. */
+    var requestedPath by remember { mutableStateOf<String?>(null) }
     var browseError by remember { mutableStateOf<String?>(null) }
     var selectedPath by remember { mutableStateOf("") }
     var projectName by remember { mutableStateOf("") }
@@ -360,6 +362,7 @@ internal fun AddProjectContent(
     var submitError by remember { mutableStateOf<String?>(null) }
 
     fun loadDir(path: String?) {
+        requestedPath = path
         loadingDir = true
         browseError = null
         scope.launch {
@@ -458,11 +461,13 @@ internal fun AddProjectContent(
             TroupeButton(
                 text = stringResource(R.string.agents_check_again),
                 variant = TroupeButtonVariant.Secondary,
-                onClick = { loadDir(currentBrowse?.currentPath) },
+                onClick = { loadDir(requestedPath) },
             )
         } else {
             val browse = currentBrowse
-            val dirs = browse?.entries.orEmpty().filter { it.isDirectory }
+            // Rendered eagerly inside the sheet's scroll: bounded, with the path field for the rest.
+            val allDirs = browse?.entries.orEmpty().filter { it.isDirectory }
+            val dirs = allDirs.take(MAX_BROWSE_FOLDERS)
             SheetGroup {
                 if (browse?.parentPath != null) {
                     SheetRow(
@@ -493,6 +498,15 @@ internal fun AddProjectContent(
             }
         }
 
+        val hiddenFolders = currentBrowse?.entries.orEmpty().count { it.isDirectory } - MAX_BROWSE_FOLDERS
+        if (!loadingDir && browseError == null && hiddenFolders > 0) {
+            Text(
+                text = stringResource(R.string.shell_browse_more_folders, MAX_BROWSE_FOLDERS, hiddenFolders),
+                style = typo.bodySmall,
+                color = palette.mutedForeground,
+            )
+        }
+
         if (submitError != null) {
             Text(text = submitError!!, style = typo.bodySmall, color = palette.destructive)
         }
@@ -518,3 +532,6 @@ internal fun AddProjectContent(
         Spacer(modifier = Modifier.height(4.dp))
     }
 }
+
+/** Folders listed per level when choosing a Project folder. */
+private const val MAX_BROWSE_FOLDERS = 200

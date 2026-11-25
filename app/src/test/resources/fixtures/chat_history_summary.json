@@ -1,0 +1,19 @@
+{
+  "storageKey": "sess-b9ac9edb",
+  "sessionId": "sess-b9ac9edb",
+  "stableAgentNamespace": "config:acp-registry:opencode",
+  "cwd": "/home/u/.troupe/quick-chats/q1",
+  "title": "Say hello in one short sentence.",
+  "createdAt": 1795613700000,
+  "lastActivityAt": 1795613760000,
+  "status": "closed",
+  "messageCount": 2,
+  "toolCount": 0,
+  "lastSeq": 9,
+  "resumeEligible": true,
+  "projectId": "__unassigned__",
+  "titleSource": "derived_first_message",
+  "turnActive": false,
+  "quickChatId": "q1",
+  "kind": "quick"
+}

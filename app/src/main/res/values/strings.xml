@@ -459,6 +459,9 @@
     <string name="files_delete_folder_body">This will delete the folder and all its contents. This cannot be undone.</string>
     <string name="files_delete_file_body">This will delete the file. This cannot be undone.</string>
     <string name="snapshots_empty_body">Create a snapshot to save your current workspace state</string>
-    <string name="snapshots_restore_confirm">Restore \"%1$s\"? This will close all current terminals and recreate %2$d terminal(s) from the snapshot. Tap Restore again to confirm.</string>
-    <string name="settings_notify_terminal_idle">Notify when a terminal agent finishes</string>
+    <plurals name="snapshots_restore_confirm">
+        <item quantity="one">Restore \"%1$s\"? This will close all current terminals and recreate %2$d terminal from the snapshot. Tap Restore again to confirm.</item>
+        <item quantity="other">Restore \"%1$s\"? This will close all current terminals and recreate %2$d terminals from the snapshot. Tap Restore again to confirm.</item>
+    </plurals>
+    <string name="shell_browse_more_folders">Showing the first %1$d folders; %2$d more are here. Type the path above to reach one.</string>
 </resources>

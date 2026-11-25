@@ -118,6 +118,21 @@ class ChatLauncherTest {
         assertEquals(JsonPrimitive("oauth"), ws.payloads("authenticate_agent").single()["methodId"])
     }
 
+    @Test fun anAuthRequiredMessageWithoutACodeAlsoSignsIn() = runTest {
+        val ws = Script(
+            mapOf(
+                "spawn_agent" to listOf(spawned("oauth")),
+                "create_session" to listOf(ChatFrame.Reply("r", false, null, null, "ACP_AUTH_REQUIRED: sign in first"), session),
+                "authenticate_agent" to listOf(ok(JsonObject(emptyMap()))),
+            ),
+        )
+
+        val result = launchChat(ws, config, "p1", "/work/p1", "hello")
+
+        assertEquals(LaunchResult.Started("sess-1", "agent-9"), result)
+        assertEquals(1, ws.payloads("authenticate_agent").size)
+    }
+
     @Test fun severalSignInMethodsAreLeftToTheUser() = runTest {
         val ws = Script(
             mapOf(

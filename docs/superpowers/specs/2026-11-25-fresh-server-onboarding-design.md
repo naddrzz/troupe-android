@@ -67,6 +67,7 @@ All on `/ws` unless noted. Envelope fields are snake_case, payloads camelCase.
 - Store key `settings/app` (shared LWW): `onboardingCompletedAt` is an ISO-8601 string or null.
 - `spawn_agent {config:{configId,name,command,args,env,allowTerminal}, projectId, sessionId:null}`
   with `command_id` -> `{agentId, authMethods, hostAuthReady}`. `config` rejects unknown fields.
+  `projectId` is the Project's id, or `null` for a quick chat.
 - `create_session` with `command_id`:
   - Project chat: `{agentId,cwd,mcpServers:[],ephemeral:false,projectId}`.
   - Quick chat: `{agentId,kind:"quick",mcpServers:[],ephemeral:false}`.
@@ -121,7 +122,8 @@ the new-chat launcher (in the Project, or as a quick chat).
 
 **Networking**
 
-`ChatSocket.request` takes a timeout (default 15 s): 120 s for `spawn_agent`, 330 s for
+`ChatSocket.request` takes a timeout (default 15 s): 120 s for each step of a launch
+(`spawn_agent`, `create_session`, `authenticate_agent`), 330 s for
 `install_acp_agent`.
 
 ## Testing

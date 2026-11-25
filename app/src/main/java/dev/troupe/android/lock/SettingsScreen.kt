@@ -324,14 +324,8 @@ private fun NotificationSettingsDetail(shellViewModel: WorkspaceShellViewModel) 
     val scope = rememberCoroutineScope()
     val settings by shellViewModel.appSettings.settings.collectAsStateWithLifecycle()
 
-    // Troupe's three switches, in its order: Terminal, then Agent chat.
-    SettingsToggleRow(
-        title = stringResource(R.string.settings_notify_terminal_idle),
-        checked = settings.notifyOnTerminalIdle,
-        onCheckedChange = { checked ->
-            shellViewModel.appSettings.update(scope) { it.copy(notifyOnTerminalIdle = checked) }
-        },
-    )
+    // Troupe's order. Its third switch, for an idle terminal, is left out until this app sends
+    // that notification: a switch that changes nothing here would mislead.
     SettingsToggleRow(
         title = stringResource(R.string.settings_notify_turn_finished),
         checked = settings.notifyOnAgentChatTurnFinished,

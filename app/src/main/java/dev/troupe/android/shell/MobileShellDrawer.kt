@@ -58,6 +58,7 @@ import dev.troupe.android.workspace.MobileSection
 import dev.troupe.android.workspace.SessionLiveState
 import dev.troupe.android.workspace.WorkspaceShellState
 import dev.troupe.android.workspace.WorkspaceTab
+import kotlinx.coroutines.delay
 
 /**
  * 1:1 port of Troupe's `MobileShellDrawer.tsx`:
@@ -97,6 +98,8 @@ fun MobileShellDrawer(
     var query by remember { mutableStateOf("") }
 
     LaunchedEffect(section) {
+        // Only Chats shows the search field: a query must not go on filtering the others unseen.
+        query = ""
         onSectionChanged(section)
     }
 
@@ -268,17 +271,27 @@ fun MobileShellDrawer(
                             (s.isQuick || activeProject == null || s.projectId == activeProject.id || s.projectId == null) &&
                                 (query.isBlank() || displayedTitle.contains(query, ignoreCase = true))
                         }
-                        if (filteredAttention.isEmpty() && projectSessions.isEmpty()) {
-                            DrawerEmptyState(
-                                text = if (query.isBlank()) {
-                                    stringResource(R.string.shell_empty_chats)
-                                } else {
-                                    stringResource(R.string.recents_no_match)
-                                },
-                            )
+                        val nothingToList = filteredAttention.isEmpty() && projectSessions.isEmpty()
+                        if (nothingToList && query.isNotBlank()) {
+                            DrawerEmptyState(text = stringResource(R.string.recents_no_match))
                         } else {
-                            val now = remember(state.sessions) { System.currentTimeMillis() }
+                            // Re-read every minute, so an open drawer follows the day changing.
+                            var now by remember { mutableStateOf(System.currentTimeMillis()) }
+                            LaunchedEffect(Unit) {
+                                while (true) {
+                                    delay(60_000)
+                                    now = System.currentTimeMillis()
+                                }
+                            }
                             val groups = groupRecents(projectSessions, now)
+                            val newQuickChat: (() -> Unit)? = if (state.viewOnly) {
+                                null
+                            } else {
+                                {
+                                    onDismiss()
+                                    onNewQuickChat()
+                                }
+                            }
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
                                 verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -287,6 +300,16 @@ fun MobileShellDrawer(
                                     vertical = 6.dp,
                                 ),
                             ) {
+                                if (nothingToList) {
+                                    item(key = "empty") {
+                                        Text(
+                                            text = stringResource(R.string.shell_empty_chats),
+                                            style = typo.bodyMedium,
+                                            color = palette.mutedForeground,
+                                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 20.dp),
+                                        )
+                                    }
+                                }
                                 if (filteredAttention.isNotEmpty()) {
                                     item(key = "attention_section") {
                                         dev.troupe.android.attention.AttentionSection(
@@ -313,20 +336,13 @@ fun MobileShellDrawer(
                                                     RecentsGroup.Quick -> R.string.recents_quick
                                                 },
                                             ),
-                                            onAdd = if (group == RecentsGroup.Quick && !state.viewOnly) {
-                                                {
-                                                    onDismiss()
-                                                    onNewQuickChat()
-                                                }
-                                            } else {
-                                                null
-                                            },
+                                            onAdd = newQuickChat.takeIf { group == RecentsGroup.Quick },
                                         )
                                     }
                                     items(sessions, key = { it.sessionId }) { session ->
                                     ChatRecentsRow(
                                         session = session,
-                                        time = recentsTime(session.createdAt.takeIf { it > 0 } ?: session.lastActivityAt, now),
+                                        time = recentsTime(session.recentsAt, now),
                                         isActive = session.sessionId == activeSessionId,
                                         liveState = state.sessionStates[session.sessionId]
                                             ?: when {
@@ -340,6 +356,11 @@ fun MobileShellDrawer(
                                             onOpenChat(session.sessionId, session.title, session.projectId)
                                         },
                                     )
+                                    }
+                                }
+                                if (query.isBlank() && groups.none { it.first == RecentsGroup.Quick }) {
+                                    item(key = "group_quick_empty") {
+                                        RecentsHeader(title = stringResource(R.string.recents_quick), onAdd = newQuickChat)
                                     }
                                 }
                             }

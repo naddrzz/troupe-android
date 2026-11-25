@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -44,6 +45,7 @@ import dev.troupe.android.R
 import dev.troupe.android.agents.AgentConfig
 import dev.troupe.android.agents.AgentSetupList
 import dev.troupe.android.agents.CatalogAgent
+import dev.troupe.android.agents.registryConfigId
 import dev.troupe.android.core.theme.TroupeTheme
 import dev.troupe.android.core.ui.TroupeButton
 import dev.troupe.android.core.ui.TroupeButtonVariant
@@ -56,7 +58,7 @@ import dev.troupe.android.workspace.WorkspaceShellState
 /**
  * Troupe's first run (`components/onboarding/`): Welcome, "Check your agents", "Where should
  * agents work?". Every step can be passed without doing it; [onFinish] gets the agent the user
- * picked, if any, and runs once, whether or not a Project was added.
+ * picked, if any, and whether a Project was added, and runs once.
  */
 @Composable
 fun OnboardingScreen(
@@ -68,7 +70,7 @@ fun OnboardingScreen(
     onInstallAgent: (CatalogAgent) -> Unit,
     onCheckAgents: () -> Unit,
     onCreateProject: (name: String, path: String, color: String, onDone: (String?) -> Unit) -> Unit,
-    onFinish: (picked: AgentConfig?) -> Unit,
+    onFinish: (picked: AgentConfig?, projectCreated: Boolean) -> Unit,
 ) {
     val palette = TroupeTheme.palette
     var step by rememberSaveable { mutableIntStateOf(0) }
@@ -105,7 +107,11 @@ fun OnboardingScreen(
                         selectedConfigId = picked?.id,
                         viewOnly = state.viewOnly,
                         onSelect = { pickedId = it.id },
-                        onInstall = onInstallAgent,
+                        onInstall = { agent ->
+                            // The agent being installed becomes the pick once it is ready.
+                            pickedId = registryConfigId(agent.id)
+                            onInstallAgent(agent)
+                        },
                         onCheckAgain = onCheckAgents,
                     )
                 }
@@ -120,7 +126,7 @@ fun OnboardingScreen(
                             onCreate = { name, path, color, onDone ->
                                 onCreateProject(name, path, color) { error ->
                                     onDone(error)
-                                    if (error == null) onFinish(picked)
+                                    if (error == null) onFinish(picked, true)
                                 }
                             },
                         )
@@ -173,7 +179,7 @@ fun OnboardingScreen(
                 else -> FooterRow(
                     onBack = { if (browsing) browsing = false else step = 1 },
                     secondary = stringResource(if (picked != null) R.string.onboarding_skip_project else R.string.onboarding_skip),
-                    onSecondary = { onFinish(picked) },
+                    onSecondary = { onFinish(picked, false) },
                 )
             }
         }
@@ -240,7 +246,7 @@ private fun WelcomeStep(darkTheme: Boolean, onSetDarkTheme: (Boolean) -> Unit) {
                         .heightIn(min = 44.dp)
                         .clip(RoundedCornerShape(6.dp))
                         .background(if (on) palette.secondarySurface else androidx.compose.ui.graphics.Color.Transparent)
-                        .clickable(role = Role.RadioButton) { onSetDarkTheme(dark) }
+                        .selectable(selected = on, role = Role.RadioButton) { onSetDarkTheme(dark) }
                         .padding(horizontal = 14.dp),
                     contentAlignment = Alignment.Center,
                 ) {

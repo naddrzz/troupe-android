@@ -164,13 +164,17 @@ fun MobileFileExplorerSheet(
     var actionMode by remember(currentPath) { mutableStateOf(FileAction.Menu) }
     var renameText by remember(currentPath) { mutableStateOf("") }
     var actionError by remember(currentPath) { mutableStateOf<String?>(null) }
+    var actionBusy by remember(currentPath) { mutableStateOf(false) }
 
     fun load(path: String) {
         loading = true
         error = null
         scope.launch {
             val token = tokenProvider()
-            when (val res = filesApi.ls(server.address, token, path)) {
+            val res = filesApi.ls(server.address, token, path)
+            // The user has moved on: a late listing must not replace the folder now shown.
+            if (path != currentPath) return@launch
+            when (res) {
                 is ApiResult.Ok -> {
                     // Troupe's order: folders, then what git does not ignore, then A to Z.
                     entries = res.value.sortedWith(
@@ -193,8 +197,12 @@ fun MobileFileExplorerSheet(
     LaunchedEffect(currentPath) { load(currentPath) }
 
     fun runAction(failure: String, call: suspend (token: String?) -> ApiResult<Unit>) {
+        if (actionBusy) return
+        actionBusy = true
         scope.launch {
-            when (val res = call(tokenProvider())) {
+            val res = call(tokenProvider())
+            actionBusy = false
+            when (res) {
                 is ApiResult.Ok -> {
                     actionEntry = null
                     actionError = null
@@ -347,17 +355,30 @@ fun MobileFileExplorerSheet(
                     mode = actionMode,
                     renameText = renameText,
                     error = actionError,
+                    busy = actionBusy,
                     onRenameText = { renameText = it },
                     onMode = { actionMode = it },
                     onCancel = { actionEntry = null },
                     onRename = {
-                        val target = "${currentPath.trimEnd('/')}/${renameText.trim()}"
-                        runAction("Failed to rename") { token -> filesApi.rename(server.address, token, entry.path, target) }
+                        val newName = renameText.trim()
+                        if (entries.any { it.name == newName }) {
+                            actionError = "An entry named '$newName' already exists in this folder."
+                        } else {
+                            val target = "${currentPath.trimEnd('/')}/$newName"
+                            runAction("Failed to rename") { token -> filesApi.rename(server.address, token, entry.path, target) }
+                        }
                     },
                     onDuplicate = {
-                        val stem = entry.name.substringBeforeLast('.', entry.name)
-                        val ext = entry.name.substringAfterLast('.', "").let { if (it.isEmpty() || !entry.name.contains('.')) "" else ".$it" }
-                        val target = "${currentPath.trimEnd('/')}/$stem copy$ext"
+                        // The dot of a dotfile (".env") opens its name, it does not start an extension.
+                        val dot = entry.name.lastIndexOf('.')
+                        val stem = if (dot > 0) entry.name.substring(0, dot) else entry.name
+                        val ext = if (dot > 0) entry.name.substring(dot) else ""
+                        // "name copy.ext", then "name copy 2.ext" and so on: never onto an existing entry.
+                        val taken = entries.map { it.name }.toSet()
+                        val copyName = generateSequence(1) { it + 1 }
+                            .map { n -> if (n == 1) "$stem copy$ext" else "$stem copy $n$ext" }
+                            .first { it !in taken }
+                        val target = "${currentPath.trimEnd('/')}/$copyName"
                         runAction("Failed to copy") { token -> filesApi.copy(server.address, token, entry.path, target) }
                     },
                     onDelete = {
@@ -450,6 +471,7 @@ private fun FileActionCard(
     mode: FileAction,
     renameText: String,
     error: String?,
+    busy: Boolean,
     onRenameText: (String) -> Unit,
     onMode: (FileAction) -> Unit,
     onCancel: () -> Unit,
@@ -478,6 +500,7 @@ private fun FileActionCard(
                 TroupeButton(
                     text = stringResource(R.string.files_rename),
                     variant = TroupeButtonVariant.Secondary,
+                    enabled = !busy,
                     onClick = { onMode(FileAction.Rename) },
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -485,6 +508,8 @@ private fun FileActionCard(
                     TroupeButton(
                         text = stringResource(R.string.files_duplicate),
                         variant = TroupeButtonVariant.Secondary,
+                        enabled = !busy,
+                        loading = busy,
                         onClick = onDuplicate,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -492,6 +517,7 @@ private fun FileActionCard(
                 TroupeButton(
                     text = stringResource(R.string.files_delete),
                     variant = TroupeButtonVariant.Destructive,
+                    enabled = !busy,
                     onClick = { onMode(FileAction.Delete) },
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -513,7 +539,8 @@ private fun FileActionCard(
                 )
                 TroupeButton(
                     text = stringResource(R.string.files_rename),
-                    enabled = renameText.isNotBlank() && renameText.trim() != entry.name && '/' !in renameText,
+                    enabled = !busy && renameText.isNotBlank() && renameText.trim() != entry.name && '/' !in renameText,
+                    loading = busy,
                     onClick = onRename,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -527,6 +554,8 @@ private fun FileActionCard(
                 TroupeButton(
                     text = stringResource(R.string.files_delete),
                     variant = TroupeButtonVariant.Destructive,
+                    enabled = !busy,
+                    loading = busy,
                     onClick = onDelete,
                     modifier = Modifier.fillMaxWidth(),
                 )

@@ -78,6 +78,8 @@ class AppSettingsStore @Inject constructor() {
     /** Server IDs whose initial `settings/app` read or watch delivery has completed. */
     private val loadedServers = MutableStateFlow<Set<String>>(emptySet())
     private val writeMutex = Mutex()
+    /** Fields edited per server and not confirmed written yet: a later edit sends them along. */
+    private val unsentChanges = ConcurrentHashMap<String, Map<String, JsonElement>>()
     @Volatile private var attachedServerId: String? = null
     private var storeClient: WebStoreClient? = null
     private var watchJob: Job? = null
@@ -104,6 +106,7 @@ class AppSettingsStore @Inject constructor() {
     /** Drops cached settings for a removed Paired Server. */
     fun forget(serverId: String) {
         perServer.remove(serverId)
+        unsentChanges.remove(serverId)
         serverRevisions.remove(serverId)
         loadedServers.update { it - serverId }
     }
@@ -181,9 +184,18 @@ class AppSettingsStore @Inject constructor() {
             val cachedRaw = perServer[serverId]?.rawJson.orEmpty()
             perServer[serverId] = CachedServerSettings(next, cachedRaw)
         }
+        // Only the fields this edit changed go out: a field the user never touched keeps the
+        // server's value, even where this app's default differs from Troupe's.
+        val before = TroupeJson.encodeToJsonElement(AppSettings.serializer(), previous) as? JsonObject
+        val after = TroupeJson.encodeToJsonElement(AppSettings.serializer(), next) as? JsonObject ?: return
+        val key = serverId.orEmpty()
+        val changed = after.filter { (field, value) -> before?.get(field) != value }
+        if (changed.isNotEmpty()) unsentChanges.merge(key, changed) { old, new -> old + new }
         val client = storeClient ?: return
         scope.launch {
             writeMutex.withLock {
+                val pending = unsentChanges[key].orEmpty()
+                if (pending.isEmpty()) return@withLock
                 val baseRaw = if (serverId != null && serverId !in loadedServers.value) {
                     when (val read = client.read(PersistenceKeys.APP_SETTINGS)) {
                         is StoreReadResult.Found -> {
@@ -200,21 +212,18 @@ class AppSettingsStore @Inject constructor() {
                 } else {
                     serverId?.let { perServer[it]?.rawJson }.orEmpty()
                 }
-                val encoded = TroupeJson.encodeToJsonElement(AppSettings.serializer(), next) as? JsonObject
-                    ?: return@withLock
-                // Only the fields this edit changed go out: a field the user never touched keeps the
-                // server's value, even where this app's default differs from Troupe's.
-                val before = TroupeJson.encodeToJsonElement(AppSettings.serializer(), previous) as? JsonObject
-                val changed = encoded.filter { (key, value) -> before?.get(key) != value }
-                if (changed.isEmpty()) return@withLock
-                val merged = JsonObject(baseRaw + changed)
+                val merged = JsonObject(baseRaw + pending)
                 if (serverId != null) {
                     perServer[serverId] = CachedServerSettings(next, merged)
                     loadedServers.update { it + serverId }
                 }
                 val result = client.write(PersistenceKeys.APP_SETTINGS, merged)
-                if (serverId != null && result is StoreWriteResult.Ok) {
-                    serverRevisions.merge(serverId, result.revision, ::maxOf)
+                if (result is StoreWriteResult.Ok) {
+                    if (serverId != null) serverRevisions.merge(serverId, result.revision, ::maxOf)
+                    // Written: forget these, unless a newer edit changed a field again meanwhile.
+                    unsentChanges.computeIfPresent(key) { _, now ->
+                        now.filterNot { (field, value) -> pending[field] == value }.ifEmpty { null }
+                    }
                 }
             }
         }
