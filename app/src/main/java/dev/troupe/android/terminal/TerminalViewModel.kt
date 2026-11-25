@@ -223,14 +223,28 @@ class TerminalViewModel @Inject constructor(
     }
 
     private suspend fun attach() {
-        val claim = cursors.get(serverId, terminalId)?.claim ?: return fail(R.string.terminal_unavailable)
+        var claim = cursors.get(serverId, terminalId)?.claim ?: return fail(R.string.terminal_unavailable)
         val current = socket ?: return
-        val reply = try {
+        var reply = try {
             current.request("attach", attachPayload(claim))
         } catch (e: TerminalDisconnected) {
             return // The next connection attaches again.
         } catch (e: IOException) {
             return fail(R.string.pair_error_unreachable)
+        }
+        if (!reply.success && reply.code == TerminalErrorCodes.UNAUTHORIZED) {
+            // A `list_preserved` elsewhere in the app may have reissued the claim meanwhile: try the new one once.
+            val newer = cursors.get(serverId, terminalId)?.claim
+            if (newer != null && newer != claim) {
+                claim = newer
+                reply = try {
+                    current.request("attach", attachPayload(claim))
+                } catch (e: TerminalDisconnected) {
+                    return
+                } catch (e: IOException) {
+                    return fail(R.string.pair_error_unreachable)
+                }
+            }
         }
         if (!reply.success) {
             if (reply.code == TerminalErrorCodes.UNAUTHORIZED) {

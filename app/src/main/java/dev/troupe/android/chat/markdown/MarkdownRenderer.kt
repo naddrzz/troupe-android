@@ -334,7 +334,8 @@ private fun renderInline(
                 val end = text.indexOf("**", i + 2)
                 if (end > i + 2) {
                     withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
-                        append(text.substring(i + 2, end))
+                        // Bold may wrap other inline marks, as in **`path`**.
+                        append(renderInline(text.substring(i + 2, end), syntax, codeBg, linkColor))
                     }
                     i = end + 2
                 } else {

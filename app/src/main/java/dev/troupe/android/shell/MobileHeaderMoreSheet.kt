@@ -35,7 +35,8 @@ fun MobileHeaderMoreSheet(
     onOpenGitChanges: () -> Unit,
     onOpenFiles: () -> Unit,
     onOpenCommandPalette: () -> Unit,
-    onOpenSettings: () -> Unit,
+    onNewTerminal: () -> Unit,
+    onReportBug: () -> Unit,
     onReloadChat: (() -> Unit)? = null,
     onCloseTab: (() -> Unit)? = null,
 ) {
@@ -87,13 +88,24 @@ fun MobileHeaderMoreSheet(
                 )
                 SheetRowDivider()
                 SheetRow(
-                    title = stringResource(R.string.settings_title),
+                    title = stringResource(R.string.terminals_new),
                     leading = {
-                        Icon(TroupeIcons.Settings, contentDescription = null, tint = palette.foreground, modifier = Modifier.size(18.dp))
+                        Icon(TroupeIcons.Terminal, contentDescription = null, tint = palette.foreground, modifier = Modifier.size(18.dp))
                     },
                     onClick = {
                         onDismiss()
-                        onOpenSettings()
+                        onNewTerminal()
+                    },
+                )
+                SheetRowDivider()
+                SheetRow(
+                    title = stringResource(R.string.shell_report_bug),
+                    leading = {
+                        Icon(TroupeIcons.Link, contentDescription = null, tint = palette.foreground, modifier = Modifier.size(18.dp))
+                    },
+                    onClick = {
+                        onDismiss()
+                        onReportBug()
                     },
                 )
                 if (isChatTab && onReloadChat != null) {

@@ -1,6 +1,8 @@
 package dev.troupe.android.terminal.render
 
+import android.view.MotionEvent
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -22,6 +24,17 @@ fun TerminalView(renderer: XtermWebViewRenderer, modifier: Modifier = Modifier) 
                 // A tap focuses the WebView but not Compose's focus target for it, so Compose would
                 // keep Enter and Space for whatever it had focused. Move Compose focus along and
                 // ensure xterm's hidden textarea also holds DOM focus.
+                // Inside Compose a tap does not always give the WebView View focus, and without it
+                // neither the soft keyboard nor a hardware key reaches xterm. The touch itself is
+                // not consumed, so selection and scrolling work as before.
+                @Suppress("ClickableViewAccessibility")
+                setOnTouchListener { view, event ->
+                    if (event.actionMasked == MotionEvent.ACTION_UP) {
+                        if (!view.hasFocus()) view.requestFocus()
+                        view.context.getSystemService(InputMethodManager::class.java)?.showSoftInput(view, 0)
+                    }
+                    false
+                }
                 setOnFocusChangeListener { _, hasFocus ->
                     if (hasFocus) {
                         focus.requestFocus()

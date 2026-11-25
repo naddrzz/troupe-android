@@ -195,6 +195,14 @@ fun ProjectAndServerSheet(
                                             )
                                         },
                                         trailing = {
+                                            if (isSelected && !isDefault) {
+                                                Text(
+                                                    text = stringResource(R.string.projects_current_badge),
+                                                    style = typo.labelSmall,
+                                                    color = palette.mutedForeground,
+                                                    modifier = Modifier.padding(end = 6.dp),
+                                                )
+                                            }
                                             if (isDefault) {
                                                 Text(
                                                     text = stringResource(R.string.projects_default_badge),
@@ -330,8 +338,9 @@ private fun ServersSwitcherContent(
     }
 }
 
+/** Names a Project and picks its folder by browsing the server (`GET /fs/browse`). */
 @Composable
-private fun AddProjectContent(
+internal fun AddProjectContent(
     server: PairedServer,
     projectApi: ProjectApi,
     tokenProvider: suspend () -> String?,
@@ -446,9 +455,14 @@ private fun AddProjectContent(
             }
         } else if (browseError != null) {
             Text(text = browseError!!, style = typo.bodySmall, color = palette.destructive)
+            TroupeButton(
+                text = stringResource(R.string.agents_check_again),
+                variant = TroupeButtonVariant.Secondary,
+                onClick = { loadDir(currentBrowse?.currentPath) },
+            )
         } else {
             val browse = currentBrowse
-            val dirs = browse?.entries.orEmpty().filter { it.isDirectory }.take(12)
+            val dirs = browse?.entries.orEmpty().filter { it.isDirectory }
             SheetGroup {
                 if (browse?.parentPath != null) {
                     SheetRow(

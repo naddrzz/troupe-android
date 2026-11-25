@@ -15,7 +15,9 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -47,8 +49,10 @@ data class AppSettings(
     val editorAutoSaveDelayMs: Int = 1000,
     val notifyOnAgentChatTurnFinished: Boolean = true,
     val notifyOnAgentChatNeedsYou: Boolean = true,
-    val notifyOnTerminalIdle: Boolean = false,
+    val notifyOnTerminalIdle: Boolean = true,
     val defaultProjectColor: String = "blue",
+    /** ISO-8601 instant at which first run ended on this server, or null: Troupe then shows onboarding. */
+    val onboardingCompletedAt: String? = null,
 ) {
     fun resolvedAppearance(): AppearanceMode = AppearanceMode.fromWire(appearanceMode)
 }
@@ -83,6 +87,9 @@ class AppSettingsStore @Inject constructor() {
 
     /** True once [serverId] has completed its initial `settings/app` load (or reported unsupported/missing). */
     fun isLoaded(serverId: String): Boolean = serverId in loadedServers.value
+
+    /** [isLoaded] as a flow. */
+    fun loaded(serverId: String): kotlinx.coroutines.flow.Flow<Boolean> = loadedServers.map { serverId in it }.distinctUntilChanged()
 
     /** Waits briefly for [serverId]'s initial `settings/app` read to complete before returning its settings. */
     suspend fun awaitSettingsFor(serverId: String, timeoutMs: Long = 3_000L): AppSettings {
@@ -167,7 +174,8 @@ class AppSettingsStore @Inject constructor() {
 
     fun update(scope: CoroutineScope, transform: (AppSettings) -> AppSettings) {
         val serverId = attachedServerId
-        val next = transform(_settings.value)
+        val previous = _settings.value
+        val next = transform(previous)
         _settings.value = next
         if (serverId != null) {
             val cachedRaw = perServer[serverId]?.rawJson.orEmpty()
@@ -194,7 +202,12 @@ class AppSettingsStore @Inject constructor() {
                 }
                 val encoded = TroupeJson.encodeToJsonElement(AppSettings.serializer(), next) as? JsonObject
                     ?: return@withLock
-                val merged = JsonObject(baseRaw + encoded)
+                // Only the fields this edit changed go out: a field the user never touched keeps the
+                // server's value, even where this app's default differs from Troupe's.
+                val before = TroupeJson.encodeToJsonElement(AppSettings.serializer(), previous) as? JsonObject
+                val changed = encoded.filter { (key, value) -> before?.get(key) != value }
+                if (changed.isEmpty()) return@withLock
+                val merged = JsonObject(baseRaw + changed)
                 if (serverId != null) {
                     perServer[serverId] = CachedServerSettings(next, merged)
                     loadedServers.update { it + serverId }

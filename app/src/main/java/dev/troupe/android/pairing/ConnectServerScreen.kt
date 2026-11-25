@@ -157,7 +157,7 @@ fun ConnectServerScreen(
                 ) {
                     Text(
                         text = stringResource(R.string.connect_title),
-                        style = typo.displayLarge,
+                        style = typo.headlineSmall,
                         color = palette.foreground,
                         textAlign = TextAlign.Center,
                     )

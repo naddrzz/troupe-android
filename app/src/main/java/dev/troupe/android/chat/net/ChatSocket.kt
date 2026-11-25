@@ -32,12 +32,15 @@ import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 /** The chat socket dropped while a request was waiting for its reply. */
 class ChatDisconnected : IOException("chat socket disconnected")
 
-class ChatRequestTimeout(type: String) : IOException("no reply to '$type' within 15 s")
+class ChatRequestTimeout(type: String) : IOException("no reply to '$type' in time")
+
+private val REPLY_TIMEOUT = 15.seconds
 
 class ChatSocketFactory @Inject constructor(
     private val client: OkHttpClient,
@@ -57,7 +60,7 @@ class ChatSocket internal constructor(
     private val address: ServerAddress,
     private val token: String,
     private val identity: ClientIdentityStore,
-) : LifecycleSocket {
+) : LifecycleSocket, dev.troupe.android.agents.LaunchTransport {
     // Unbounded: an event must never be dropped because a collector is slow.
     private val _frames = MutableSharedFlow<ChatFrame>(extraBufferCapacity = Int.MAX_VALUE)
     /** Session events, `gap` and `watch` frames, in arrival order. Only collectors subscribed at arrival see a frame. */
@@ -118,10 +121,14 @@ class ChatSocket internal constructor(
      * so a resend never runs twice. Throws [ChatDisconnected] when the socket is not connected or drops,
      * [ChatRequestTimeout] after 15 s.
      */
-    suspend fun request(type: String, payload: JsonObject, commandId: String? = null): ChatFrame.Reply {
+    suspend fun request(type: String, payload: JsonObject, commandId: String? = null): ChatFrame.Reply =
+        request(type, payload, commandId, REPLY_TIMEOUT)
+
+    /** [request] for a command the host answers only when slow work ends (an install, an agent start). */
+    override suspend fun request(type: String, payload: JsonObject, commandId: String?, timeout: Duration): ChatFrame.Reply {
         // The connection that was authenticated is the one the request goes out on.
         val current = connection?.takeIf { it.authenticated } ?: throw ChatDisconnected()
-        return send(current, type, payload, commandId)
+        return send(current, type, payload, commandId, timeout)
     }
 
     /**
@@ -129,7 +136,7 @@ class ChatSocket internal constructor(
      * reply (used for `send_prompt` when opening a new chat so long agent turns do not time out
      * waiting on the turn-completion reply). Throws [ChatDisconnected] if the socket cannot send.
      */
-    fun dispatch(type: String, payload: JsonObject, commandId: String? = null) {
+    override fun dispatch(type: String, payload: JsonObject, commandId: String?) {
         val current = connection?.takeIf { it.authenticated } ?: throw ChatDisconnected()
         val id = UUID.randomUUID().toString()
         val frame = TroupeJson.encodeToString(ChatRequest.serializer(), ChatRequest(id, type, payload, commandId))
@@ -138,7 +145,13 @@ class ChatSocket internal constructor(
         }
     }
 
-    private suspend fun send(connection: Connection, type: String, payload: JsonObject, commandId: String?): ChatFrame.Reply {
+    private suspend fun send(
+        connection: Connection,
+        type: String,
+        payload: JsonObject,
+        commandId: String?,
+        timeout: Duration = REPLY_TIMEOUT,
+    ): ChatFrame.Reply {
         val socket = connection.webSocket
         val id = UUID.randomUUID().toString()
         val reply = CompletableDeferred<ChatFrame.Reply>()
@@ -149,7 +162,7 @@ class ChatSocket internal constructor(
             throw ChatDisconnected()
         }
         return try {
-            withTimeout(15.seconds) { reply.await() }
+            withTimeout(timeout) { reply.await() }
         } catch (e: TimeoutCancellationException) {
             throw ChatRequestTimeout(type)
         } finally {

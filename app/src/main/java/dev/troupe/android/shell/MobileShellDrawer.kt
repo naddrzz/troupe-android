@@ -78,6 +78,7 @@ fun MobileShellDrawer(
     onOpenProjects: () -> Unit,
     onOpenChat: (sessionId: String, title: String?, projectId: String?) -> Unit,
     onNewChat: () -> Unit,
+    onNewQuickChat: () -> Unit,
     onOpenTerminal: (terminalId: String, title: String?) -> Unit,
     onNewTerminal: () -> Unit,
     onKillTerminal: (terminalId: String) -> Unit,
@@ -136,12 +137,20 @@ fun MobileShellDrawer(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
+                    // Troupe's project icon: the name's initial on the Project colour.
                     Box(
                         modifier = Modifier
-                            .size(12.dp)
-                            .clip(CircleShape)
+                            .size(22.dp)
+                            .clip(RoundedCornerShape(6.dp))
                             .background(TroupeColors.project(activeProject?.color)),
-                    )
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = activeProject?.name?.firstOrNull()?.uppercase().orEmpty(),
+                            style = typo.labelMedium,
+                            color = androidx.compose.ui.graphics.Color.White,
+                        )
+                    }
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = activeProject?.name ?: stringResource(R.string.shell_no_project),
@@ -220,8 +229,8 @@ fun MobileShellDrawer(
                 )
             }
 
-            // Search box for Chats / Terminals / Editors
-            if (section != MobileSection.Github) {
+            // Search box: Troupe has one for Chats only.
+            if (section == MobileSection.Chats) {
                 Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
                     SheetSearchField(
                         value = query,
@@ -256,7 +265,7 @@ fun MobileShellDrawer(
                         }
                         val projectSessions = state.sessions.filter { s ->
                             val displayedTitle = s.title?.takeIf { it.isNotBlank() } ?: untitledLabel
-                            (activeProject == null || s.projectId == activeProject.id || s.projectId == null) &&
+                            (s.isQuick || activeProject == null || s.projectId == activeProject.id || s.projectId == null) &&
                                 (query.isBlank() || displayedTitle.contains(query, ignoreCase = true))
                         }
                         if (filteredAttention.isEmpty() && projectSessions.isEmpty()) {
@@ -264,10 +273,12 @@ fun MobileShellDrawer(
                                 text = if (query.isBlank()) {
                                     stringResource(R.string.shell_empty_chats)
                                 } else {
-                                    stringResource(R.string.shell_search_no_results)
+                                    stringResource(R.string.recents_no_match)
                                 },
                             )
                         } else {
+                            val now = remember(state.sessions) { System.currentTimeMillis() }
+                            val groups = groupRecents(projectSessions, now)
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
                                 verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -291,9 +302,31 @@ fun MobileShellDrawer(
                                         )
                                     }
                                 }
-                                items(projectSessions, key = { it.sessionId }) { session ->
+                                groups.forEach { (group, sessions) ->
+                                    item(key = "group_$group") {
+                                        RecentsHeader(
+                                            title = stringResource(
+                                                when (group) {
+                                                    RecentsGroup.Today -> R.string.recents_today
+                                                    RecentsGroup.Yesterday -> R.string.recents_yesterday
+                                                    RecentsGroup.Earlier -> R.string.recents_earlier
+                                                    RecentsGroup.Quick -> R.string.recents_quick
+                                                },
+                                            ),
+                                            onAdd = if (group == RecentsGroup.Quick && !state.viewOnly) {
+                                                {
+                                                    onDismiss()
+                                                    onNewQuickChat()
+                                                }
+                                            } else {
+                                                null
+                                            },
+                                        )
+                                    }
+                                    items(sessions, key = { it.sessionId }) { session ->
                                     ChatRecentsRow(
                                         session = session,
+                                        time = recentsTime(session.createdAt.takeIf { it > 0 } ?: session.lastActivityAt, now),
                                         isActive = session.sessionId == activeSessionId,
                                         liveState = state.sessionStates[session.sessionId]
                                             ?: when {
@@ -307,6 +340,7 @@ fun MobileShellDrawer(
                                             onOpenChat(session.sessionId, session.title, session.projectId)
                                         },
                                     )
+                                    }
                                 }
                             }
                         }
@@ -526,7 +560,7 @@ fun MobileShellDrawer(
                             onDismiss()
                             onNewChat()
                         },
-                        enabled = activeProject != null,
+                        enabled = !state.viewOnly,
                         shape = CircleShape,
                     )
                     MobileSection.Terminals -> TroupeButton(
@@ -594,6 +628,7 @@ private fun DrawerSectionTab(
 @Composable
 private fun ChatRecentsRow(
     session: SessionSummary,
+    time: RecentsTime?,
     isActive: Boolean,
     liveState: SessionLiveState,
     onClick: () -> Unit,
@@ -622,6 +657,40 @@ private fun ChatRecentsRow(
             SessionLiveState.NeedsYou -> StatusDot(color = palette.warning)
             SessionLiveState.Error -> StatusDot(color = palette.error)
             SessionLiveState.Idle -> Unit
+        }
+        if (time != null) {
+            Text(
+                text = when (time) {
+                    is RecentsTime.Clock -> time.time
+                    is RecentsTime.Yesterday -> stringResource(R.string.recents_yesterday_at, time.time)
+                    is RecentsTime.Date -> time.date
+                },
+                style = typo.bodySmall.copy(fontFeatureSettings = "tnum"),
+                color = palette.mutedForeground,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+/** A group heading of the chat list; "Quick chats" carries the button that starts one. */
+@Composable
+private fun RecentsHeader(title: String, onAdd: (() -> Unit)?) {
+    val palette = TroupeTheme.palette
+    val typo = TroupeTheme.typography
+    Row(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(start = 16.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text = title, style = typo.labelLarge, color = palette.mutedForeground, modifier = Modifier.weight(1f))
+        if (onAdd != null) {
+            TroupeIconButton(
+                icon = TroupeIcons.Plus,
+                contentDescription = stringResource(R.string.recents_new_quick),
+                onClick = onAdd,
+                iconSize = 18.dp,
+                contentColor = palette.mutedForeground,
+            )
         }
     }
 }

@@ -82,6 +82,7 @@ data class GitStatusPayload(
     val branch: String? = null,
     val ahead: Int = 0,
     val behind: Int = 0,
+    val hasUpstream: Boolean = false,
     val staged: List<GitChangedFile> = emptyList(),
     val unstaged: List<GitChangedFile> = emptyList(),
     val untracked: List<GitChangedFile> = emptyList(),
@@ -140,6 +141,7 @@ class GitApi @Inject constructor(
                         branch = ctx?.branch,
                         ahead = ctx?.ahead ?: 0,
                         behind = ctx?.behind ?: 0,
+                        hasUpstream = ctx?.hasUpstream ?: false,
                         files = rowsRes.value,
                     ),
                 )
@@ -192,6 +194,8 @@ class GitApi @Inject constructor(
         val body = buildJsonObject {
             put("cwd", cwd)
             put("limit", limit)
+            // Troupe's history shows every branch by default.
+            put("all", true)
         }.toString()
         return api.postEnveloped(address, "git/log", token, body, ListSerializer(GitCommitEntry.serializer()))
     }
@@ -259,7 +263,10 @@ fun GitChangesSheet(
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var commitMessage by remember { mutableStateOf("") }
+    var commitDescription by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    /** Path whose discard waits for the user's confirmation: it cannot be undone. */
+    var confirmDiscard by remember { mutableStateOf<String?>(null) }
 
     // Drill-down: viewing a specific file diff or branch list
     var activeDiff by remember { mutableStateOf<Triple<String, Boolean, String>?>(null) } // path, staged, diffText
@@ -277,7 +284,12 @@ fun GitChangesSheet(
                     loading = false
                 }
                 is ApiResult.ServerError -> {
-                    error = res.message
+                    // Troupe's wording for the two ways reading changes fails.
+                    error = if (res.code == "NOT_A_GIT_REPO" || res.message.contains("not a git repository", ignoreCase = true)) {
+                        "This folder is not a git repository."
+                    } else {
+                        "Couldn't read changes: ${res.message}"
+                    }
                     loading = false
                 }
                 ApiResult.Unauthorized -> {
@@ -285,7 +297,7 @@ fun GitChangesSheet(
                     loading = false
                 }
                 else -> {
-                    error = "Could not load git status."
+                    error = "Couldn't read changes: the server did not answer."
                     loading = false
                 }
             }
@@ -359,6 +371,11 @@ fun GitChangesSheet(
                                     text = stringResource(R.string.git_discard),
                                     variant = TroupeButtonVariant.Destructive,
                                     onClick = {
+                                        if (confirmDiscard != path) {
+                                            confirmDiscard = path
+                                            return@TroupeButton
+                                        }
+                                        confirmDiscard = null
                                         scope.launch {
                                             val token = tokenProvider()
                                             when (val res = gitApi.discard(server.address, token, cwd, path)) {
@@ -377,6 +394,13 @@ fun GitChangesSheet(
                                 )
                             }
                         }
+                    }
+                    if (confirmDiscard == path) {
+                        Text(
+                            text = stringResource(R.string.git_discard_confirm, path),
+                            style = typo.bodySmall,
+                            color = palette.destructive,
+                        )
                     }
                     UnifiedDiffBox(diffText = diffText)
                 }
@@ -440,10 +464,16 @@ fun GitChangesSheet(
                             modifier = Modifier.weight(1f),
                         )
                         if (!viewOnly) {
+                            val ahead = st?.ahead ?: 0
                             TroupeButton(
-                                text = stringResource(R.string.git_push),
+                                text = when {
+                                    st?.hasUpstream != true -> stringResource(R.string.git_publish)
+                                    ahead > 0 -> stringResource(R.string.git_push_count, ahead)
+                                    else -> stringResource(R.string.git_up_to_date)
+                                },
                                 variant = TroupeButtonVariant.Secondary,
                                 loading = busy,
+                                enabled = st?.branch != null && (st.hasUpstream != true || ahead > 0),
                                 onClick = {
                                     busy = true
                                     error = null
@@ -480,7 +510,7 @@ fun GitChangesSheet(
                                     if (idx > 0) SheetRowDivider()
                                     SheetRow(
                                         title = file.path.substringAfterLast('/'),
-                                        subtitle = file.path,
+                                        subtitle = file.path.substringBeforeLast('/', "").takeIf { it.isNotEmpty() },
                                         trailing = {
                                             Text(
                                                 text = file.status.take(1).uppercase(),
@@ -510,7 +540,7 @@ fun GitChangesSheet(
                                     if (idx > 0) SheetRowDivider()
                                     SheetRow(
                                         title = file.path.substringAfterLast('/'),
-                                        subtitle = file.path,
+                                        subtitle = file.path.substringBeforeLast('/', "").takeIf { it.isNotEmpty() },
                                         trailing = {
                                             Text(
                                                 text = file.status.take(1).uppercase(),
@@ -544,22 +574,46 @@ fun GitChangesSheet(
                                     unfocusedTextColor = palette.foreground,
                                 ),
                             )
+                            OutlinedTextField(
+                                value = commitDescription,
+                                onValueChange = { commitDescription = it },
+                                label = { Text(stringResource(R.string.git_commit_description)) },
+                                minLines = 2,
+                                maxLines = 5,
+                                textStyle = typo.bodyLarge,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = palette.ring,
+                                    unfocusedBorderColor = palette.border,
+                                    focusedTextColor = palette.foreground,
+                                    unfocusedTextColor = palette.foreground,
+                                ),
+                            )
                             TroupeButton(
-                                text = stringResource(R.string.git_commit_action),
+                                text = st?.branch?.let { stringResource(R.string.git_commit_to, it) }
+                                    ?: stringResource(R.string.git_commit_action),
                                 enabled = commitMessage.isNotBlank(),
                                 loading = busy,
                                 onClick = {
                                     busy = true
                                     error = null
                                     scope.launch {
-                                        when (val r = gitApi.commit(server.address, tokenProvider(), cwd, commitMessage.trim())) {
+                                        val committed = gitApi.commit(
+                                            server.address,
+                                            tokenProvider(),
+                                            cwd,
+                                            commitMessage.trim(),
+                                            commitDescription.trim(),
+                                        )
+                                        when (val r = committed) {
                                             is ApiResult.Ok -> {
                                                 commitMessage = ""
+                                                commitDescription = ""
                                                 refresh()
                                             }
-                                            is ApiResult.ServerError -> error = r.message
+                                            is ApiResult.ServerError -> error = "Failed to commit: ${r.message}"
                                             ApiResult.Unauthorized -> error = "Authentication required. Re-enter your server token."
-                                            else -> error = "Commit failed."
+                                            else -> error = "Failed to commit: the server did not answer."
                                         }
                                         busy = false
                                     }

@@ -20,6 +20,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.IOException
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import kotlin.coroutines.resume
@@ -186,6 +187,9 @@ class ServerApi @Inject constructor(private val client: OkHttpClient) {
         if (!token.isNullOrBlank()) {
             builder.header("Authorization", "Bearer $token")
         }
+        // The host refuses its ledgered writes (file write/rename/copy, git commit/discard/stash,
+        // worktree create) without a command id; the other routes ignore the header.
+        if (method != "GET") builder.header("X-Command-Id", UUID.randomUUID().toString())
         val request = builder.build()
         // Off the caller's (main) thread: reading the body blocks.
         return try {

@@ -176,7 +176,7 @@ private fun SetupTokenEntry(
         TroupeMark(modifier = Modifier.size(32.dp))
         Text(
             text = stringResource(R.string.setup_token_title),
-            style = typo.displayLarge,
+            style = typo.headlineSmall,
             color = palette.foreground,
         )
         Text(

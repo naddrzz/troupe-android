@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -103,9 +105,22 @@ class FilesApi @Inject constructor(
         return api.postUnit(address, "fs/mkdir", token, body)
     }
 
-    suspend fun delete(address: ServerAddress, token: String?, path: String): ApiResult<Unit> {
-        val body = buildJsonObject { put("path", path) }.toString()
+    /** Deletes [path]; the server takes a folder only with [recursive]. */
+    suspend fun delete(address: ServerAddress, token: String?, path: String, recursive: Boolean = false): ApiResult<Unit> {
+        val body = buildJsonObject {
+            put("path", path)
+            if (recursive) put("recursive", true)
+        }.toString()
         return api.postUnit(address, "fs/delete", token, body)
+    }
+
+    /** Duplicates a file (`fs/copy`). */
+    suspend fun copy(address: ServerAddress, token: String?, from: String, to: String): ApiResult<Unit> {
+        val body = buildJsonObject {
+            put("from", from)
+            put("to", to)
+        }.toString()
+        return api.postUnit(address, "fs/copy", token, body)
     }
 
     suspend fun rename(address: ServerAddress, token: String?, oldPath: String, newPath: String): ApiResult<Unit> {
@@ -144,6 +159,11 @@ fun MobileFileExplorerSheet(
     var creatingKind by remember { mutableStateOf<String?>(null) } // "file" or "dir"
     var newName by remember { mutableStateOf("") }
     var createError by remember(currentPath) { mutableStateOf<String?>(null) }
+    // Row actions (Troupe's "Actions for X" sheet): the entry acted on, and what is being asked.
+    var actionEntry by remember(currentPath) { mutableStateOf<DirectoryEntry?>(null) }
+    var actionMode by remember(currentPath) { mutableStateOf(FileAction.Menu) }
+    var renameText by remember(currentPath) { mutableStateOf("") }
+    var actionError by remember(currentPath) { mutableStateOf<String?>(null) }
 
     fun load(path: String) {
         loading = true
@@ -152,7 +172,10 @@ fun MobileFileExplorerSheet(
             val token = tokenProvider()
             when (val res = filesApi.ls(server.address, token, path)) {
                 is ApiResult.Ok -> {
-                    entries = res.value.sortedWith(compareBy<DirectoryEntry> { !it.isDirectory }.thenBy { it.name.lowercase() })
+                    // Troupe's order: folders, then what git does not ignore, then A to Z.
+                    entries = res.value.sortedWith(
+                        compareBy<DirectoryEntry> { !it.isDirectory }.thenBy { it.ignored == true }.thenBy { it.name.lowercase() },
+                    )
                     loading = false
                 }
                 is ApiResult.ServerError -> {
@@ -169,8 +192,23 @@ fun MobileFileExplorerSheet(
 
     LaunchedEffect(currentPath) { load(currentPath) }
 
+    fun runAction(failure: String, call: suspend (token: String?) -> ApiResult<Unit>) {
+        scope.launch {
+            when (val res = call(tokenProvider())) {
+                is ApiResult.Ok -> {
+                    actionEntry = null
+                    actionError = null
+                    load(currentPath)
+                }
+                is ApiResult.ServerError -> actionError = "$failure: ${res.message}"
+                ApiResult.Unauthorized -> actionError = "Authentication required. Re-enter your server token."
+                is ApiResult.Unreachable -> actionError = "$failure: the server did not answer."
+            }
+        }
+    }
+
     val canGoUp = currentPath.trimEnd('/') != rootPath.trimEnd('/') && currentPath.startsWith(rootPath.trimEnd('/'))
-    val relative = currentPath.removePrefix(rootPath).trimStart('/').ifEmpty { rootPath.trimEnd('/').substringAfterLast('/') }
+    val relative = currentPath.removePrefix(rootPath).trimStart('/').ifEmpty { stringResource(R.string.files_project_files) }
 
     TroupeMobileSheet(
         title = stringResource(R.string.shell_files),
@@ -303,6 +341,33 @@ fun MobileFileExplorerSheet(
                 }
             }
 
+            actionEntry?.takeIf { !viewOnly }?.let { entry ->
+                FileActionCard(
+                    entry = entry,
+                    mode = actionMode,
+                    renameText = renameText,
+                    error = actionError,
+                    onRenameText = { renameText = it },
+                    onMode = { actionMode = it },
+                    onCancel = { actionEntry = null },
+                    onRename = {
+                        val target = "${currentPath.trimEnd('/')}/${renameText.trim()}"
+                        runAction("Failed to rename") { token -> filesApi.rename(server.address, token, entry.path, target) }
+                    },
+                    onDuplicate = {
+                        val stem = entry.name.substringBeforeLast('.', entry.name)
+                        val ext = entry.name.substringAfterLast('.', "").let { if (it.isEmpty() || !entry.name.contains('.')) "" else ".$it" }
+                        val target = "${currentPath.trimEnd('/')}/$stem copy$ext"
+                        runAction("Failed to copy") { token -> filesApi.copy(server.address, token, entry.path, target) }
+                    },
+                    onDelete = {
+                        runAction("Failed to delete") { token ->
+                            filesApi.delete(server.address, token, entry.path, recursive = entry.isDirectory)
+                        }
+                    },
+                )
+            }
+
             when {
                 loading -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
                     TroupeSpinner(size = 20.dp)
@@ -331,16 +396,32 @@ fun MobileFileExplorerSheet(
                                             modifier = Modifier.size(18.dp),
                                         )
                                     },
-                                    trailing = if (entry.isDirectory) {
-                                        {
-                                            Icon(
-                                                imageVector = TroupeIcons.ChevronRight,
-                                                contentDescription = null,
-                                                tint = palette.mutedForeground,
-                                                modifier = Modifier.size(16.dp),
-                                            )
+                                    trailing = {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            if (!viewOnly) {
+                                                TroupeIconButton(
+                                                    icon = TroupeIcons.MoreHorizontal,
+                                                    contentDescription = stringResource(R.string.files_actions_for, entry.name),
+                                                    onClick = {
+                                                        actionEntry = entry
+                                                        actionMode = FileAction.Menu
+                                                        renameText = entry.name
+                                                        actionError = null
+                                                    },
+                                                    iconSize = 16.dp,
+                                                    contentColor = palette.mutedForeground,
+                                                )
+                                            }
+                                            if (entry.isDirectory) {
+                                                Icon(
+                                                    imageVector = TroupeIcons.ChevronRight,
+                                                    contentDescription = null,
+                                                    tint = palette.mutedForeground,
+                                                    modifier = Modifier.size(16.dp),
+                                                )
+                                            }
                                         }
-                                    } else null,
+                                    },
                                     onClick = {
                                         if (entry.isDirectory) {
                                             query = ""
@@ -357,6 +438,107 @@ fun MobileFileExplorerSheet(
                 }
             }
         }
+    }
+}
+
+private enum class FileAction { Menu, Rename, Delete }
+
+/** Rename, Duplicate and Delete for one entry, with Troupe's confirmation before a delete. */
+@Composable
+private fun FileActionCard(
+    entry: DirectoryEntry,
+    mode: FileAction,
+    renameText: String,
+    error: String?,
+    onRenameText: (String) -> Unit,
+    onMode: (FileAction) -> Unit,
+    onCancel: () -> Unit,
+    onRename: () -> Unit,
+    onDuplicate: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val palette = TroupeTheme.palette
+    val typo = TroupeTheme.typography
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(palette.elevated)
+            .border(0.5.dp, palette.border, RoundedCornerShape(12.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = if (mode == FileAction.Delete) stringResource(R.string.files_delete_title, entry.name) else entry.name,
+            style = typo.titleSmall,
+            color = palette.foreground,
+        )
+        when (mode) {
+            FileAction.Menu -> {
+                TroupeButton(
+                    text = stringResource(R.string.files_rename),
+                    variant = TroupeButtonVariant.Secondary,
+                    onClick = { onMode(FileAction.Rename) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (!entry.isDirectory) {
+                    TroupeButton(
+                        text = stringResource(R.string.files_duplicate),
+                        variant = TroupeButtonVariant.Secondary,
+                        onClick = onDuplicate,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                TroupeButton(
+                    text = stringResource(R.string.files_delete),
+                    variant = TroupeButtonVariant.Destructive,
+                    onClick = { onMode(FileAction.Delete) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            FileAction.Rename -> {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = onRenameText,
+                    label = { Text(stringResource(R.string.files_rename)) },
+                    singleLine = true,
+                    textStyle = typo.bodyLarge,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = palette.ring,
+                        unfocusedBorderColor = palette.border,
+                        focusedTextColor = palette.foreground,
+                        unfocusedTextColor = palette.foreground,
+                    ),
+                )
+                TroupeButton(
+                    text = stringResource(R.string.files_rename),
+                    enabled = renameText.isNotBlank() && renameText.trim() != entry.name && '/' !in renameText,
+                    onClick = onRename,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            FileAction.Delete -> {
+                Text(
+                    text = stringResource(if (entry.isDirectory) R.string.files_delete_folder_body else R.string.files_delete_file_body),
+                    style = typo.bodySmall,
+                    color = palette.mutedForeground,
+                )
+                TroupeButton(
+                    text = stringResource(R.string.files_delete),
+                    variant = TroupeButtonVariant.Destructive,
+                    onClick = onDelete,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+        if (error != null) Text(error, style = typo.bodySmall, color = palette.destructive)
+        TroupeButton(
+            text = stringResource(R.string.files_cancel),
+            variant = TroupeButtonVariant.Ghost,
+            onClick = onCancel,
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 
@@ -502,14 +684,20 @@ fun CodeEditorPane(
             ) {
                 MarkdownText(markdown = content)
             }
-            else -> Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .horizontalScroll(rememberScrollState())
-                    .padding(12.dp),
+            else -> androidx.compose.foundation.layout.BoxWithConstraints(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
             ) {
+                // The field is at least as large as the pane, so a tap anywhere below or beside a
+                // short file still focuses it.
+                val fieldMinWidth = maxWidth - 24.dp
+                val fieldMinHeight = maxHeight - 24.dp
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .horizontalScroll(rememberScrollState())
+                        .padding(12.dp),
+                ) {
                 BasicTextField(
                     value = content,
                     onValueChange = { if (!viewOnly) content = it },
@@ -520,8 +708,9 @@ fun CodeEditorPane(
                         lineHeight = 19.sp,
                     ),
                     cursorBrush = SolidColor(palette.brand),
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.widthIn(min = fieldMinWidth).heightIn(min = fieldMinHeight),
                 )
+                }
             }
         }
     }
