@@ -358,6 +358,8 @@ internal fun AddProjectContent(
     /** The folder last asked for, which is the one to ask again when it failed. */
     var requestedPath by remember { mutableStateOf<String?>(null) }
     var browseError by remember { mutableStateOf<String?>(null) }
+    /** Counts browse requests, so only the answer to the latest one is shown. */
+    val browseRequests = remember { intArrayOf(0) }
     var selectedPath by remember { mutableStateOf("") }
     var projectName by remember { mutableStateOf("") }
     var selectedColor by remember { mutableStateOf("blue") }
@@ -366,13 +368,14 @@ internal fun AddProjectContent(
 
     fun loadDir(path: String?) {
         requestedPath = path
+        val request = ++browseRequests[0]
         loadingDir = true
         browseError = null
         scope.launch {
             val token = tokenProvider()
             val res = projectApi.browseDirectory(server.address, token, path)
-            // Another folder was asked for meanwhile: a late answer must not replace it.
-            if (requestedPath != path) return@launch
+            // Something was asked for after this: a late answer must not replace it.
+            if (request != browseRequests[0]) return@launch
             when (res) {
                 is ApiResult.Ok -> {
                     currentBrowse = res.value
