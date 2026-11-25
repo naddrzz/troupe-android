@@ -37,6 +37,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.troupe.android.R
+import dev.troupe.android.agents.AgentConfig
+import dev.troupe.android.agents.AgentSetupState
+import dev.troupe.android.agents.LaunchResult
+import dev.troupe.android.agents.launchChat
 import dev.troupe.android.chat.composer.ComposerV2
 import dev.troupe.android.chat.net.ChatConnection
 import dev.troupe.android.core.net.ApiResult
@@ -51,33 +55,29 @@ import dev.troupe.android.workspace.AgentDescriptor
 import dev.troupe.android.worktree.WorktreeApi
 import dev.troupe.android.worktree.WorktreeInfo
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.addJsonObject
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.putJsonArray
 import java.io.IOException
-import java.util.UUID
 
 /**
  * 1:1 port of Troupe's `chat-start.tsx`:
- * Centered 56dp `TroupeMark` + `"What should we do in <project>?"` (22/28 display hero),
+ * Centered 56dp `TroupeMark` + `"What should we do in <project>?"` (22/28 hero),
  * worktree isolation selector strip (Local / existing worktrees / + New worktree),
- * and pinned `ComposerV2` at the bottom that creates a live ACP session on `/ws`.
+ * and pinned `ComposerV2` at the bottom that starts a live ACP session on `/ws` ([launchChat]).
+ * Without a [project] it starts a quick chat.
  */
 @Composable
 fun ChatStartView(
     server: PairedServer?,
     project: Project?,
     activeWorktreePath: String?,
-    agents: List<AgentDescriptor>,
+    agentSetup: AgentSetupState,
     viewOnly: Boolean,
     connection: ChatConnection?,
     worktreeApi: WorktreeApi,
     tokenProvider: suspend () -> String?,
     onSelectWorktree: (projectId: String, path: String) -> Unit,
+    onSelectAgent: (configId: String) -> Unit,
+    onSaveAgent: suspend (AgentConfig) -> Boolean,
+    onSetUpAgents: () -> Unit,
     onSessionCreated: (sessionId: String, title: String) -> Unit,
     onOpenFiles: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
@@ -87,21 +87,28 @@ fun ChatStartView(
     val scope = rememberCoroutineScope()
 
     var draft by remember(project?.id) { mutableStateOf("") }
-    var selectedAgentId by remember(agents) { mutableStateOf(agents.firstOrNull()?.id) }
     var worktrees by remember(project?.id) { mutableStateOf<List<WorktreeInfo>>(emptyList()) }
+    /** Null until `worktree/list` answered; a failed call other than "not a repository" counts as a repository. */
+    var isGitProject by remember(project?.id) { mutableStateOf<Boolean?>(null) }
     var creating by remember { mutableStateOf(false) }
     var launchJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    var inFlightSession by remember { mutableStateOf<Pair<String, String>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var showNewWorktreeSheet by remember { mutableStateOf(false) }
+    val agents = agentSetup.launchable.map { AgentDescriptor(id = it.id, name = it.name) }
+    val selectedAgent = agentSetup.selected
 
     LaunchedEffect(server?.id, project?.path) {
         val srv = server ?: return@LaunchedEffect
         val path = project?.path ?: return@LaunchedEffect
         val token = tokenProvider()
         val res = worktreeApi.list(srv.address, token, path)
-        if (res is ApiResult.Ok) {
-            worktrees = res.value
+        when (res) {
+            is ApiResult.Ok -> {
+                worktrees = res.value
+                isGitProject = res.value.isNotEmpty()
+            }
+            is ApiResult.ServerError -> isGitProject = res.code != "NOT_A_GIT_REPO"
+            else -> isGitProject = true
         }
     }
 
@@ -109,93 +116,37 @@ fun ChatStartView(
         launchJob?.cancel()
         launchJob = null
         creating = false
-        val active = inFlightSession
-        inFlightSession = null
-        val conn = connection
-        if (active != null && conn != null) {
-            scope.launch {
-                runCatching {
-                    conn.socket.request(
-                        type = "cancel_prompt",
-                        payload = buildJsonObject {
-                            put("agentId", active.second)
-                            put("sessionId", active.first)
-                        },
-                        commandId = null,
-                    )
-                }
-            }
-        }
     }
 
     fun launchNewChat() {
         val conn = connection ?: return
-        val proj = project ?: return
         val prompt = draft.trim()
         if (prompt.isEmpty() || creating) return
-        val agentId = selectedAgentId ?: agents.firstOrNull()?.id ?: "claude"
-        val cwd = activeWorktreePath ?: proj.path.orEmpty()
+        val config = selectedAgent ?: return onSetUpAgents()
+        val cwd = (activeWorktreePath ?: project?.path)?.takeIf { it.isNotBlank() }
         creating = true
         error = null
-        inFlightSession = null
-        launchJob?.cancel()
         launchJob = scope.launch {
             try {
-                val createReply = conn.socket.request(
-                    type = "create_session",
-                    payload = buildJsonObject {
-                        put("agentId", agentId)
-                        put("cwd", cwd)
-                        put("projectId", proj.id)
-                    },
-                    commandId = UUID.randomUUID().toString(),
-                )
-                if (!kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]!!.isActive) return@launch
-                if (!createReply.ok) {
-                    error = createReply.message ?: "Failed to start chat."
-                    creating = false
-                    return@launch
+                // Troupe only starts an agent whose config is saved under `acp/agents`.
+                val result = if (onSaveAgent(config)) {
+                    // A Project without a folder has nowhere to start a session in: a quick chat instead.
+                    launchChat(conn.socket, config, if (cwd != null) project?.id else null, cwd, prompt)
+                } else {
+                    LaunchResult.Failed("Could not save ${config.name} on the server.")
                 }
-                val sessionId = (createReply.payload as? JsonObject)
-                    ?.get("sessionId")?.jsonPrimitive?.contentOrNull
-                if (sessionId.isNullOrBlank()) {
-                    error = "Server returned no session ID."
-                    creating = false
-                    return@launch
+                when (result) {
+                    is LaunchResult.Started -> {
+                        draft = ""
+                        onSessionCreated(result.sessionId, prompt.take(48))
+                    }
+                    is LaunchResult.Failed -> error = result.message
                 }
-                inFlightSession = sessionId to agentId
-                val turnId = UUID.randomUUID().toString()
-                // Dispatch without waiting for turn completion (which may exceed the 15 s RPC timeout);
-                // ChatPaneV2 streams the live turn and surfaces any server errors.
-                conn.socket.dispatch(
-                    type = "send_prompt",
-                    payload = buildJsonObject {
-                        put("agentId", agentId)
-                        put("sessionId", sessionId)
-                        put("turnId", turnId)
-                        putJsonArray("content") {
-                            addJsonObject {
-                                put("type", "text")
-                                put("text", prompt)
-                            }
-                        }
-                    },
-                    commandId = turnId,
-                )
-                if (!kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]!!.isActive) return@launch
-                draft = ""
-                creating = false
-                launchJob = null
-                inFlightSession = null
-                onSessionCreated(sessionId, prompt.take(48))
-            } catch (_: kotlinx.coroutines.CancellationException) {
-                creating = false
-                launchJob = null
             } catch (e: IOException) {
                 error = e.message ?: "Could not reach server."
+            } finally {
                 creating = false
                 launchJob = null
-                inFlightSession = null
             }
         }
     }
@@ -229,7 +180,7 @@ fun ChatStartView(
                     } else {
                         stringResource(R.string.chat_start_question)
                     },
-                    style = typo.displayLarge,
+                    style = typo.headlineSmall,
                     color = palette.foreground,
                     textAlign = TextAlign.Center,
                 )
@@ -253,7 +204,8 @@ fun ChatStartView(
         }
 
         // Worktree isolation selector strip above the composer
-        if (project?.path != null && !viewOnly) {
+        // Troupe shows it for git Projects only: a folder that is not a repository lists no worktree.
+        if (project?.path != null && !viewOnly && isGitProject == true) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -283,16 +235,37 @@ fun ChatStartView(
             }
         }
 
+        if (agentSetup.loaded && selectedAgent == null && !viewOnly) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.agents_none_ready),
+                    style = typo.bodySmall,
+                    color = palette.mutedForeground,
+                    modifier = Modifier.weight(1f),
+                )
+                TroupeButton(
+                    text = stringResource(R.string.agents_set_up),
+                    variant = dev.troupe.android.core.ui.TroupeButtonVariant.Secondary,
+                    onClick = onSetUpAgents,
+                )
+            }
+        }
+
         // Pinned Composer V2
         ComposerV2(
             draft = draft,
             onDraftChange = { draft = it },
             placeholder = stringResource(R.string.chat_composer_label),
             turnRunning = creating,
-            enabled = !viewOnly && project != null && connection != null,
+            enabled = !viewOnly && connection != null,
             agents = agents,
-            selectedAgentId = selectedAgentId,
-            onSelectAgent = { selectedAgentId = it },
+            selectedAgentId = selectedAgent?.id,
+            onSelectAgent = onSelectAgent,
+            onSetUpAgents = onSetUpAgents,
             onSend = { launchNewChat() },
             onCancel = { cancelLaunch() },
             onOpenFiles = onOpenFiles,

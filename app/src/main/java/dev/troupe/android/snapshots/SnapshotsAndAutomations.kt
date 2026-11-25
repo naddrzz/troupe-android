@@ -26,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.troupe.android.R
@@ -103,6 +104,8 @@ fun SnapshotsSheet(
     var error by remember(projectId) { mutableStateOf<String?>(null) }
     var saving by remember(projectId) { mutableStateOf(false) }
     var nameInput by remember(projectId) { mutableStateOf("") }
+    /** Id of the snapshot whose restore waits for confirmation. */
+    var confirmRestore by remember(projectId) { mutableStateOf<String?>(null) }
 
     fun persist(next: List<PersistedSnapshotDto>, savedNameToClear: String? = null) {
         if (!loadSucceeded || saving) return
@@ -230,13 +233,26 @@ fun SnapshotsSheet(
                     TroupeSpinner(size = 20.dp)
                 }
                 !loadSucceeded -> Unit
-                snapshots.isEmpty() -> Text(
-                    text = stringResource(R.string.snapshots_empty),
-                    style = typo.bodyMedium,
-                    color = palette.mutedForeground,
+                snapshots.isEmpty() -> Column(
                     modifier = Modifier.padding(vertical = 12.dp),
-                )
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(text = stringResource(R.string.snapshots_empty), style = typo.titleSmall, color = palette.foreground)
+                    Text(text = stringResource(R.string.snapshots_empty_body), style = typo.bodyMedium, color = palette.mutedForeground)
+                }
                 else -> snapshots.forEach { snap ->
+                    if (confirmRestore == snap.id) {
+                        Text(
+                            text = pluralStringResource(
+                                R.plurals.snapshots_restore_confirm,
+                                snap.terminals.size,
+                                snap.name,
+                                snap.terminals.size,
+                            ),
+                            style = typo.bodySmall,
+                            color = palette.warning,
+                        )
+                    }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -261,8 +277,12 @@ fun SnapshotsSheet(
                                 variant = TroupeButtonVariant.Secondary,
                                 minHeight = 36.dp,
                                 onClick = {
-                                    onDismiss()
-                                    onRestoreSnapshot(snap)
+                                    if (confirmRestore != snap.id) {
+                                        confirmRestore = snap.id
+                                    } else {
+                                        onDismiss()
+                                        onRestoreSnapshot(snap)
+                                    }
                                 },
                             )
                             TroupeIconButton(

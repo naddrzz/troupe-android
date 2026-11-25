@@ -52,7 +52,7 @@
     <string name="turn_finished_locked">An agent finished its turn</string>
 
     <!-- Settings -->
-    <string name="settings_title">Settings</string>
+    <string name="settings_title">Preferences</string>
     <string name="settings_lock">Lock Troupe</string>
     <string name="settings_lock_body">Ask for your fingerprint, face or screen lock when Troupe opens.</string>
     <string name="settings_lock_no_screen_lock">Set up a screen lock (PIN, pattern or password) in your device settings to lock Troupe.</string>
@@ -102,7 +102,7 @@
     <!-- Projects -->
     <string name="projects_title">Projects</string>
     <string name="projects_loading">Loading Projects…</string>
-    <string name="projects_empty">No Projects on this server yet. Add one in Troupe on your computer.</string>
+    <string name="projects_empty">No projects available. Add one to get started.</string>
     <string name="projects_default_badge">Default</string>
     <string name="projects_retry">Retry</string>
     <string name="projects_color_description">%1$s color</string>
@@ -159,7 +159,7 @@
     <string name="chat_answer_send">Send answer</string>
     <string name="chat_already_answered">Already answered on another device.</string>
     <string name="chat_answer_failed">Couldn\'t send your answer. Try again.</string>
-    <string name="chat_composer_label">Message the agent</string>
+    <string name="chat_composer_label">Ask anything…</string>
     <string name="chat_send">Send</string>
     <string name="chat_cancel_turn">Cancel</string>
     <string name="chat_cancel_turn_description">Cancel the current turn</string>
@@ -171,7 +171,7 @@
     <!-- Terminals tab -->
     <string name="terminals_new">New terminal</string>
     <string name="terminals_starting">Starting a terminal…</string>
-    <string name="terminals_empty">Start a terminal to run commands in this Project.</string>
+    <string name="terminals_empty">No open terminals</string>
     <string name="terminals_error_spawn">Couldn\'t start a terminal: %1$s</string>
     <string name="terminals_error_spawn_reply">Couldn\'t start a terminal. The server sent an unexpected reply.</string>
     <string name="terminals_error_list_reply">Couldn\'t list the terminals. The server sent an unexpected reply.</string>
@@ -271,11 +271,11 @@
     <string name="shell_search_chats">Search chats…</string>
     <string name="shell_search_terminals">Search terminals…</string>
     <string name="shell_search_editors">Search open files…</string>
-    <string name="shell_empty_chats">No chats yet. Start a new chat below.</string>
-    <string name="shell_empty_editors">No open files yet. Tap Browse files to open one.</string>
+    <string name="shell_empty_chats">No chats yet. Start one with the New chat button.</string>
+    <string name="shell_empty_editors">No open editors</string>
     <string name="shell_search_no_results">No matches found.</string>
     <string name="shell_browse_files">Browse files</string>
-    <string name="shell_snapshots">Snapshots</string>
+    <string name="shell_snapshots">Workspace Snapshots</string>
     <string name="shell_git_history">Git history</string>
     <string name="shell_git_changes">Git changes</string>
     <string name="shell_files">Files</string>
@@ -327,7 +327,7 @@
     <string name="files_new_file">New file</string>
     <string name="files_new_folder">New folder</string>
     <string name="files_create">Create</string>
-    <string name="files_empty_folder">This folder is empty.</string>
+    <string name="files_empty_folder">Empty</string>
     <string name="editor_preview">Preview</string>
     <string name="editor_source">Source</string>
 
@@ -339,10 +339,10 @@
     <string name="git_discard">Discard</string>
     <string name="git_staged">Staged</string>
     <string name="git_changes">Changes</string>
-    <string name="git_commit_summary">Commit summary</string>
+    <string name="git_commit_summary">Summary (required)</string>
     <string name="git_commit_action">Commit</string>
-    <string name="git_clean_working_tree">Working tree is clean.</string>
-    <string name="git_history_empty">No commits found.</string>
+    <string name="git_clean_working_tree">No changes detected</string>
+    <string name="git_history_empty">No commit history</string>
 
     <!-- GitHub -->
     <string name="github_no_project">Open a project to see its issues and pull requests.</string>
@@ -355,10 +355,10 @@
     <string name="github_add_comment">Add a comment…</string>
 
     <!-- Snapshots & Automations -->
-    <string name="snapshots_name_hint">Snapshot name…</string>
-    <string name="snapshots_save">Save</string>
+    <string name="snapshots_name_hint">Snapshot Name</string>
+    <string name="snapshots_save">Create</string>
     <string name="snapshots_restore">Restore</string>
-    <string name="snapshots_empty">No snapshots saved for this project yet.</string>
+    <string name="snapshots_empty">No snapshots yet</string>
     <string name="automations_empty">No automations configured for this project yet.</string>
     <string name="automations_run">Run</string>
 
@@ -372,12 +372,96 @@
     <string name="settings_color_theme">Color theme</string>
     <string name="settings_terminal_font_size">Font size</string>
     <string name="settings_confirm_terminal_close">Confirm before closing terminal</string>
-    <string name="settings_notify_needs_you">Notify when an agent needs you</string>
+    <string name="settings_notify_needs_you">Notify when an agent chat needs you</string>
     <plurals name="needs_you">
         <item quantity="one">%1$d needs you</item>
         <item quantity="other">%1$d need you</item>
     </plurals>
     <string name="setup_port_invalid">Enter a port between 1 and 65535.</string>
     <string name="markdown_open_link">Open %1$s</string>
-    <string name="settings_notify_turn_finished">Notify when a turn finishes</string>
+    <string name="settings_notify_turn_finished">Notify when an agent chat turn finishes</string>
+
+    <!-- First run and agent setup, worded as in Troupe's onboarding -->
+    <string name="onboarding_step">Step %1$d of 3</string>
+    <string name="onboarding_welcome_title">Welcome to Troupe</string>
+    <string name="onboarding_welcome_body">Run Claude Code, Codex and other coding agents side by side, in your own projects. Setup takes about a minute.</string>
+    <string name="onboarding_outline_agents">Check the agents on this server</string>
+    <string name="onboarding_outline_project">Pick a project folder</string>
+    <string name="onboarding_outline_message">Send your first message</string>
+    <string name="onboarding_appearance">Appearance</string>
+    <string name="onboarding_appearance_dark">Dark</string>
+    <string name="onboarding_appearance_light">Light</string>
+    <string name="onboarding_get_started">Get started</string>
+    <string name="onboarding_agents_title">Check your agents</string>
+    <string name="onboarding_agents_body">Troupe runs the coding agents you already use. Pick the one new chats start with. You can add more later.</string>
+    <string name="onboarding_agents_none">Install or sign in to one agent to continue</string>
+    <string name="onboarding_back">Back</string>
+    <string name="onboarding_later">Set up later</string>
+    <string name="onboarding_continue">Continue</string>
+    <string name="onboarding_continue_with">Continue with %1$s</string>
+    <string name="onboarding_project_title">Where should agents work?</string>
+    <string name="onboarding_project_body">Pick a folder. Agents start in it, and every chat shows what changed.</string>
+    <string name="onboarding_open_folder">Open a folder</string>
+    <string name="onboarding_open_folder_sub">A project already on the server</string>
+    <string name="onboarding_skip_project">Skip, chat without a project</string>
+    <string name="onboarding_skip">Skip for now</string>
+    <string name="agents_looking">Looking for agents…</string>
+    <plurals name="agents_found_ready">
+        <item quantity="one">Found %1$d ready on this server</item>
+        <item quantity="other">Found %1$d ready on this server</item>
+    </plurals>
+    <string name="agents_check_again">Check again</string>
+    <string name="agents_show_all">Show all %1$d agents</string>
+    <string name="agents_status_ready">Ready</string>
+    <string name="agents_status_not_installed">Not installed</string>
+    <string name="agents_status_needs_runtime">Needs %1$s</string>
+    <string name="agents_status_unavailable">Not available here</string>
+    <string name="agents_runtime_node">Node.js</string>
+    <string name="agents_runtime_uv">uv</string>
+    <string name="agents_hint_install">Troupe downloads and installs it</string>
+    <string name="agents_hint_runtime">Install %1$s on the server, then restart Troupe</string>
+    <string name="agents_hint_manual">Install it on the server, then check again</string>
+    <string name="agents_hint_unavailable">This server cannot run it</string>
+    <string name="agents_install">Install</string>
+    <string name="agents_installing">Installing…</string>
+    <string name="agents_sheet_title">Agents</string>
+    <string name="agents_set_up">Set up agents</string>
+    <string name="agents_none_ready">No agent is ready on this server yet.</string>
+    <string name="shell_no_projects_title">No Projects Yet</string>
+    <string name="shell_no_projects_body">Create your first project to organize your terminals, snapshots, and commands</string>
+    <string name="shell_no_projects_action">Create Your First Project</string>
+    <string name="shell_dismiss">Dismiss</string>
+    <!-- Shell wording taken from Troupe -->
+    <string name="recents_today">Today</string>
+    <string name="recents_yesterday">Yesterday</string>
+    <string name="recents_earlier">Earlier</string>
+    <string name="recents_quick">Quick chats</string>
+    <string name="recents_new_quick">New quick chat</string>
+    <string name="recents_yesterday_at">Yesterday %1$s</string>
+    <string name="recents_no_match">No chats match this search.</string>
+    <string name="shell_quick_chat">Quick chat</string>
+    <string name="shell_report_bug">Report a bug</string>
+    <string name="projects_current_badge">Current</string>
+    <!-- Files, Git, Snapshots and Preferences wording taken from Troupe -->
+    <string name="git_discard_confirm">Discard changes to \"%1$s\"? This cannot be undone. Tap Discard again to confirm.</string>
+    <string name="git_publish">Publish branch</string>
+    <string name="git_push_count">Push %1$d</string>
+    <string name="git_up_to_date">Up to date</string>
+    <string name="git_commit_description">Description (optional)</string>
+    <string name="git_commit_to">Commit to %1$s</string>
+    <string name="files_project_files">Project files</string>
+    <string name="files_actions_for">Actions for %1$s</string>
+    <string name="files_rename">Rename</string>
+    <string name="files_duplicate">Duplicate</string>
+    <string name="files_delete">Delete</string>
+    <string name="files_cancel">Cancel</string>
+    <string name="files_delete_title">Delete %1$s</string>
+    <string name="files_delete_folder_body">This will delete the folder and all its contents. This cannot be undone.</string>
+    <string name="files_delete_file_body">This will delete the file. This cannot be undone.</string>
+    <string name="snapshots_empty_body">Create a snapshot to save your current workspace state</string>
+    <plurals name="snapshots_restore_confirm">
+        <item quantity="one">Restore \"%1$s\"? This will close all current terminals and recreate %2$d terminal from the snapshot. Tap Restore again to confirm.</item>
+        <item quantity="other">Restore \"%1$s\"? This will close all current terminals and recreate %2$d terminals from the snapshot. Tap Restore again to confirm.</item>
+    </plurals>
+    <string name="shell_browse_more_folders">Showing the first %1$d of %2$d folders. To open another, type its path above and press Go.</string>
 </resources>

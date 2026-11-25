@@ -21,7 +21,7 @@ import dev.troupe.android.core.ui.TroupeMobileSheet
 
 /**
  * 1:1 port of Troupe's `MobileHeaderMoreSheet.tsx`:
- * Git changes, Files, Command palette, Project settings, Reload chat (for agent-chat),
+ * Git changes, Files, Command palette, New terminal, Report a bug, Reload chat (for agent-chat),
  * and destructive Close chat / Close tab separated by a divider.
  */
 @Composable
@@ -35,7 +35,9 @@ fun MobileHeaderMoreSheet(
     onOpenGitChanges: () -> Unit,
     onOpenFiles: () -> Unit,
     onOpenCommandPalette: () -> Unit,
-    onOpenSettings: () -> Unit,
+    /** Null where no Terminal can start: no Project, or a View-only server. */
+    onNewTerminal: (() -> Unit)?,
+    onReportBug: () -> Unit,
     onReloadChat: (() -> Unit)? = null,
     onCloseTab: (() -> Unit)? = null,
 ) {
@@ -86,14 +88,27 @@ fun MobileHeaderMoreSheet(
                     },
                 )
                 SheetRowDivider()
+                if (onNewTerminal != null) {
+                    SheetRow(
+                        title = stringResource(R.string.terminals_new),
+                        leading = {
+                            Icon(TroupeIcons.Terminal, contentDescription = null, tint = palette.foreground, modifier = Modifier.size(18.dp))
+                        },
+                        onClick = {
+                            onDismiss()
+                            onNewTerminal()
+                        },
+                    )
+                    SheetRowDivider()
+                }
                 SheetRow(
-                    title = stringResource(R.string.settings_title),
+                    title = stringResource(R.string.shell_report_bug),
                     leading = {
-                        Icon(TroupeIcons.Settings, contentDescription = null, tint = palette.foreground, modifier = Modifier.size(18.dp))
+                        Icon(TroupeIcons.Link, contentDescription = null, tint = palette.foreground, modifier = Modifier.size(18.dp))
                     },
                     onClick = {
                         onDismiss()
-                        onOpenSettings()
+                        onReportBug()
                     },
                 )
                 if (isChatTab && onReloadChat != null) {

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Troupe mark (TroupeMark, viewBox 569x507) centred in the adaptive icon's 66dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.0844"
+        android:scaleY="0.0844"
+        android:translateX="30"
+        android:translateY="32.6">
+        <group
+            android:scaleX="2.924821"
+            android:scaleY="2.924821"
+            android:translateX="-408.758"
+            android:translateY="-378.288">
+            <path
+                android:fillColor="#E5E5E6"
+                android:fillType="evenOdd"
+                android:pathData="M146.496,133.765L139.837,171.622C139.261,174.901 141.784,177.907 145.113,177.907L190.062,177.907L167.442,268.284C166.865,271.563 169.388,274.568 172.717,274.568L223.11,274.568C225.71,274.568 227.935,272.701 228.385,270.14L258.769,135.621C259.346,132.342 256.824,129.337 253.494,129.337L151.772,129.337C149.171,129.337 146.947,131.204 146.496,133.765Z" />
+            <group android:translateX="-26.2785">
+                <path
+                    android:fillColor="#E5E5E6"
+                    android:fillType="evenOdd"
+                    android:pathData="M272.622,302.62L251.873,302.62C254.474,302.62 256.699,300.753 257.148,298.192L288.639,157.389L248.668,157.389L216.975,296.321L248.668,157.389L354.887,157.389C358.216,157.389 360.739,160.394 360.163,163.673L353.504,201.53C353.053,204.091 350.829,205.959 348.228,205.959L300.845,205.959L277.898,298.192C277.448,300.753 275.223,302.62 272.622,302.62Z" />
+            </group>
+        </group>
+    </group>
+</vector>

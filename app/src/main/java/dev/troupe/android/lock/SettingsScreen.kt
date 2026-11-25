@@ -324,18 +324,20 @@ private fun NotificationSettingsDetail(shellViewModel: WorkspaceShellViewModel) 
     val scope = rememberCoroutineScope()
     val settings by shellViewModel.appSettings.settings.collectAsStateWithLifecycle()
 
-    SettingsToggleRow(
-        title = stringResource(R.string.settings_notify_needs_you),
-        checked = settings.notifyOnAgentChatNeedsYou,
-        onCheckedChange = { checked ->
-            shellViewModel.appSettings.update(scope) { it.copy(notifyOnAgentChatNeedsYou = checked) }
-        },
-    )
+    // Troupe's order. Its third switch, for an idle terminal, is left out until this app sends
+    // that notification: a switch that changes nothing here would mislead.
     SettingsToggleRow(
         title = stringResource(R.string.settings_notify_turn_finished),
         checked = settings.notifyOnAgentChatTurnFinished,
         onCheckedChange = { checked ->
             shellViewModel.appSettings.update(scope) { it.copy(notifyOnAgentChatTurnFinished = checked) }
+        },
+    )
+    SettingsToggleRow(
+        title = stringResource(R.string.settings_notify_needs_you),
+        checked = settings.notifyOnAgentChatNeedsYou,
+        onCheckedChange = { checked ->
+            shellViewModel.appSettings.update(scope) { it.copy(notifyOnAgentChatNeedsYou = checked) }
         },
     )
 }

@@ -30,6 +30,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.troupe.android.R
@@ -195,6 +198,14 @@ fun ProjectAndServerSheet(
                                             )
                                         },
                                         trailing = {
+                                            if (isSelected && !isDefault) {
+                                                Text(
+                                                    text = stringResource(R.string.projects_current_badge),
+                                                    style = typo.labelSmall,
+                                                    color = palette.mutedForeground,
+                                                    modifier = Modifier.padding(end = 6.dp),
+                                                )
+                                            }
                                             if (isDefault) {
                                                 Text(
                                                     text = stringResource(R.string.projects_default_badge),
@@ -330,8 +341,9 @@ private fun ServersSwitcherContent(
     }
 }
 
+/** Names a Project and picks its folder by browsing the server (`GET /fs/browse`). */
 @Composable
-private fun AddProjectContent(
+internal fun AddProjectContent(
     server: PairedServer,
     projectApi: ProjectApi,
     tokenProvider: suspend () -> String?,
@@ -343,7 +355,11 @@ private fun AddProjectContent(
 
     var currentBrowse by remember { mutableStateOf<BrowseDirectoryResponse?>(null) }
     var loadingDir by remember { mutableStateOf(true) }
+    /** The folder last asked for, which is the one to ask again when it failed. */
+    var requestedPath by remember { mutableStateOf<String?>(null) }
     var browseError by remember { mutableStateOf<String?>(null) }
+    /** Counts browse requests, so only the answer to the latest one is shown. */
+    val browseRequests = remember { intArrayOf(0) }
     var selectedPath by remember { mutableStateOf("") }
     var projectName by remember { mutableStateOf("") }
     var selectedColor by remember { mutableStateOf("blue") }
@@ -351,11 +367,16 @@ private fun AddProjectContent(
     var submitError by remember { mutableStateOf<String?>(null) }
 
     fun loadDir(path: String?) {
+        requestedPath = path
+        val request = ++browseRequests[0]
         loadingDir = true
         browseError = null
         scope.launch {
             val token = tokenProvider()
-            when (val res = projectApi.browseDirectory(server.address, token, path)) {
+            val res = projectApi.browseDirectory(server.address, token, path)
+            // Something was asked for after this: a late answer must not replace it.
+            if (request != browseRequests[0]) return@launch
+            when (res) {
                 is ApiResult.Ok -> {
                     currentBrowse = res.value
                     if (selectedPath.isBlank() || path != null) {
@@ -401,6 +422,9 @@ private fun AddProjectContent(
             onValueChange = { selectedPath = it },
             label = { Text(stringResource(R.string.shell_project_path_label)) },
             singleLine = true,
+            // Go opens the typed folder: the way to one the list below does not show.
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+            keyboardActions = KeyboardActions(onGo = { selectedPath.trim().takeIf { it.isNotEmpty() }?.let { loadDir(it) } }),
             textStyle = typo.bodyLarge,
             modifier = Modifier.fillMaxWidth(),
             colors = OutlinedTextFieldDefaults.colors(
@@ -446,9 +470,16 @@ private fun AddProjectContent(
             }
         } else if (browseError != null) {
             Text(text = browseError!!, style = typo.bodySmall, color = palette.destructive)
+            TroupeButton(
+                text = stringResource(R.string.agents_check_again),
+                variant = TroupeButtonVariant.Secondary,
+                onClick = { loadDir(requestedPath) },
+            )
         } else {
             val browse = currentBrowse
-            val dirs = browse?.entries.orEmpty().filter { it.isDirectory }.take(12)
+            // Rendered eagerly inside the sheet's scroll: bounded, with the path field for the rest.
+            val allDirs = browse?.entries.orEmpty().filter { it.isDirectory }
+            val dirs = allDirs.take(MAX_BROWSE_FOLDERS)
             SheetGroup {
                 if (browse?.parentPath != null) {
                     SheetRow(
@@ -479,6 +510,15 @@ private fun AddProjectContent(
             }
         }
 
+        val folderCount = currentBrowse?.entries.orEmpty().count { it.isDirectory }
+        if (!loadingDir && browseError == null && folderCount > MAX_BROWSE_FOLDERS) {
+            Text(
+                text = stringResource(R.string.shell_browse_more_folders, MAX_BROWSE_FOLDERS, folderCount),
+                style = typo.bodySmall,
+                color = palette.mutedForeground,
+            )
+        }
+
         if (submitError != null) {
             Text(text = submitError!!, style = typo.bodySmall, color = palette.destructive)
         }
@@ -504,3 +544,6 @@ private fun AddProjectContent(
         Spacer(modifier = Modifier.height(4.dp))
     }
 }
+
+/** Folders listed per level when choosing a Project folder. */
+private const val MAX_BROWSE_FOLDERS = 200

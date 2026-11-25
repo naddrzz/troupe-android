@@ -64,6 +64,8 @@ fun ComposerV2(
     agents: List<AgentDescriptor>,
     selectedAgentId: String?,
     onSelectAgent: ((String) -> Unit)? = null,
+    /** Opens agent setup; with it the pill works even when no agent is ready. */
+    onSetUpAgents: (() -> Unit)? = null,
     onSend: () -> Unit,
     onCancel: () -> Unit,
     onOpenFiles: (() -> Unit)? = null,
@@ -75,6 +77,7 @@ fun ComposerV2(
     var showModelSheet by remember { mutableStateOf(false) }
 
     val selectedAgent = agents.firstOrNull { it.id == selectedAgentId } ?: agents.firstOrNull()
+    val setUpAgents = onSetUpAgents
     val canSend = enabled && draft.isNotBlank() && !turnRunning
 
     Box(
@@ -142,20 +145,21 @@ fun ComposerV2(
                     enabled = enabled,
                     size = 40.dp,
                     iconSize = 18.dp,
-                    shape = CircleShape,
+                    shape = RoundedCornerShape(10.dp),
                     contentColor = palette.secondary,
                 )
 
                 // Model / Agent selector pill (interactive only when caller provides onSelectAgent)
-                val agentSelectable = onSelectAgent != null && enabled && agents.isNotEmpty()
+                val agentSelectable = onSelectAgent != null && enabled && (agents.isNotEmpty() || setUpAgents != null)
                 Row(
                     modifier = Modifier
                         .heightIn(min = 36.dp)
-                        .clip(CircleShape)
-                        .background(palette.mutedSurface)
+                        .clip(RoundedCornerShape(10.dp))
                         .then(
                             if (agentSelectable) {
-                                Modifier.clickable(role = Role.Button) { showModelSheet = true }
+                                Modifier.clickable(role = Role.Button) {
+                                    if (agents.isEmpty() && setUpAgents != null) setUpAgents() else showModelSheet = true
+                                }
                             } else {
                                 Modifier
                             },
@@ -171,13 +175,14 @@ fun ComposerV2(
                         modifier = Modifier.size(14.dp),
                     )
                     Text(
-                        text = selectedAgent?.name ?: stringResource(R.string.composer_default_agent),
+                        text = selectedAgent?.name
+                            ?: stringResource(if (agentSelectable) R.string.agents_set_up else R.string.composer_default_agent),
                         style = typo.labelMedium,
                         color = palette.foreground,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    if (agentSelectable && agents.size > 1) {
+                    if (agentSelectable) {
                         Icon(
                             imageVector = TroupeIcons.ChevronDown,
                             contentDescription = null,
@@ -193,9 +198,9 @@ fun ComposerV2(
                     TroupeButton(
                         onClick = onCancel,
                         variant = TroupeButtonVariant.Secondary,
-                        minHeight = 38.dp,
-                        shape = CircleShape,
-                        modifier = Modifier.size(40.dp),
+                        minHeight = 36.dp,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.size(36.dp),
                     ) {
                         Icon(
                             imageVector = TroupeIcons.StopSquare,
@@ -208,9 +213,9 @@ fun ComposerV2(
                         onClick = onSend,
                         variant = TroupeButtonVariant.Composer,
                         enabled = canSend,
-                        minHeight = 38.dp,
-                        shape = CircleShape,
-                        modifier = Modifier.size(40.dp),
+                        minHeight = 36.dp,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.size(36.dp),
                     ) {
                         Icon(
                             imageVector = TroupeIcons.ArrowUp,
@@ -248,6 +253,12 @@ fun ComposerV2(
             onSelect = { id ->
                 onSelectAgent(id)
                 showModelSheet = false
+            },
+            onSetUpAgents = setUpAgents?.let { open ->
+                {
+                    showModelSheet = false
+                    open()
+                }
             },
         )
     }
@@ -351,11 +362,12 @@ private fun MobileModelSheet(
     selectedAgentId: String?,
     onDismiss: () -> Unit,
     onSelect: (String) -> Unit,
+    onSetUpAgents: (() -> Unit)? = null,
 ) {
     val palette = TroupeTheme.palette
     var query by remember { mutableStateOf("") }
     val filtered = agents.filter {
-        query.isBlank() || it.name.contains(query, ignoreCase = true) || it.provider.contains(query, ignoreCase = true)
+        query.isBlank() || it.name.contains(query, ignoreCase = true)
     }
 
     TroupeMobileSheet(
@@ -378,7 +390,6 @@ private fun MobileModelSheet(
                     if (idx > 0) SheetRowDivider()
                     SheetRow(
                         title = agent.name,
-                        subtitle = agent.provider.takeIf { it.isNotBlank() },
                         picked = agent.id == selectedAgentId,
                         leading = {
                             Icon(
@@ -391,6 +402,14 @@ private fun MobileModelSheet(
                         onClick = { onSelect(agent.id) },
                     )
                 }
+            }
+            if (onSetUpAgents != null) {
+                TroupeButton(
+                    text = stringResource(R.string.agents_set_up),
+                    variant = TroupeButtonVariant.Secondary,
+                    onClick = onSetUpAgents,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         }
     }

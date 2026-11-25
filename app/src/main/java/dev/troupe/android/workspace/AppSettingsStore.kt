@@ -15,7 +15,9 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -47,8 +49,10 @@ data class AppSettings(
     val editorAutoSaveDelayMs: Int = 1000,
     val notifyOnAgentChatTurnFinished: Boolean = true,
     val notifyOnAgentChatNeedsYou: Boolean = true,
-    val notifyOnTerminalIdle: Boolean = false,
+    val notifyOnTerminalIdle: Boolean = true,
     val defaultProjectColor: String = "blue",
+    /** ISO-8601 instant at which first run ended on this server, or null: Troupe then shows onboarding. */
+    val onboardingCompletedAt: String? = null,
 ) {
     fun resolvedAppearance(): AppearanceMode = AppearanceMode.fromWire(appearanceMode)
 }
@@ -74,6 +78,8 @@ class AppSettingsStore @Inject constructor() {
     /** Server IDs whose initial `settings/app` read or watch delivery has completed. */
     private val loadedServers = MutableStateFlow<Set<String>>(emptySet())
     private val writeMutex = Mutex()
+    /** Fields edited per server and not confirmed written yet: a later edit sends them along. */
+    private val unsentChanges = ConcurrentHashMap<String, Map<String, JsonElement>>()
     @Volatile private var attachedServerId: String? = null
     private var storeClient: WebStoreClient? = null
     private var watchJob: Job? = null
@@ -83,6 +89,9 @@ class AppSettingsStore @Inject constructor() {
 
     /** True once [serverId] has completed its initial `settings/app` load (or reported unsupported/missing). */
     fun isLoaded(serverId: String): Boolean = serverId in loadedServers.value
+
+    /** [isLoaded] as a flow. */
+    fun loaded(serverId: String): kotlinx.coroutines.flow.Flow<Boolean> = loadedServers.map { serverId in it }.distinctUntilChanged()
 
     /** Waits briefly for [serverId]'s initial `settings/app` read to complete before returning its settings. */
     suspend fun awaitSettingsFor(serverId: String, timeoutMs: Long = 3_000L): AppSettings {
@@ -97,6 +106,7 @@ class AppSettingsStore @Inject constructor() {
     /** Drops cached settings for a removed Paired Server. */
     fun forget(serverId: String) {
         perServer.remove(serverId)
+        unsentChanges.remove(serverId)
         serverRevisions.remove(serverId)
         loadedServers.update { it - serverId }
     }
@@ -167,15 +177,25 @@ class AppSettingsStore @Inject constructor() {
 
     fun update(scope: CoroutineScope, transform: (AppSettings) -> AppSettings) {
         val serverId = attachedServerId
-        val next = transform(_settings.value)
+        val previous = _settings.value
+        val next = transform(previous)
         _settings.value = next
         if (serverId != null) {
             val cachedRaw = perServer[serverId]?.rawJson.orEmpty()
             perServer[serverId] = CachedServerSettings(next, cachedRaw)
         }
+        // Only the fields this edit changed go out: a field the user never touched keeps the
+        // server's value, even where this app's default differs from Troupe's.
+        val before = TroupeJson.encodeToJsonElement(AppSettings.serializer(), previous) as? JsonObject
+        val after = TroupeJson.encodeToJsonElement(AppSettings.serializer(), next) as? JsonObject ?: return
+        val key = serverId.orEmpty()
+        val changed = after.filter { (field, value) -> before?.get(field) != value }
+        if (changed.isNotEmpty()) unsentChanges.merge(key, changed) { old, new -> old + new }
         val client = storeClient ?: return
         scope.launch {
             writeMutex.withLock {
+                val pending = unsentChanges[key].orEmpty()
+                if (pending.isEmpty()) return@withLock
                 val baseRaw = if (serverId != null && serverId !in loadedServers.value) {
                     when (val read = client.read(PersistenceKeys.APP_SETTINGS)) {
                         is StoreReadResult.Found -> {
@@ -192,16 +212,22 @@ class AppSettingsStore @Inject constructor() {
                 } else {
                     serverId?.let { perServer[it]?.rawJson }.orEmpty()
                 }
-                val encoded = TroupeJson.encodeToJsonElement(AppSettings.serializer(), next) as? JsonObject
-                    ?: return@withLock
-                val merged = JsonObject(baseRaw + encoded)
+                val merged = JsonObject(baseRaw + pending)
                 if (serverId != null) {
-                    perServer[serverId] = CachedServerSettings(next, merged)
+                    // The server's copy stays what the server last had until the write is confirmed.
+                    perServer[serverId] = CachedServerSettings(next, baseRaw)
                     loadedServers.update { it + serverId }
                 }
                 val result = client.write(PersistenceKeys.APP_SETTINGS, merged)
-                if (serverId != null && result is StoreWriteResult.Ok) {
-                    serverRevisions.merge(serverId, result.revision, ::maxOf)
+                if (result is StoreWriteResult.Ok) {
+                    if (serverId != null) {
+                        serverRevisions.merge(serverId, result.revision, ::maxOf)
+                        perServer.computeIfPresent(serverId) { _, cached -> cached.copy(rawJson = merged) }
+                    }
+                    // Written: forget these, unless a newer edit changed a field again meanwhile.
+                    unsentChanges.computeIfPresent(key) { _, now ->
+                        now.filterNot { (field, value) -> pending[field] == value }.ifEmpty { null }
+                    }
                 }
             }
         }
@@ -266,8 +292,15 @@ class AppSettingsStore @Inject constructor() {
 
     private fun applyJson(serverId: String, element: JsonElement) {
         val obj = element as? JsonObject ?: return
+        // A field the server changed since its last known copy is the server's now: an edit of it
+        // still waiting here must not undo that. The other waiting edits stay on screen until sent.
+        // Before the first snapshot there is no known copy: an edit made by then is kept.
+        val known = perServer[serverId]?.rawJson?.takeIf { serverId in loadedServers.value }
+        val waiting = unsentChanges.computeIfPresent(serverId) { _, pending ->
+            pending.filterNot { (field, _) -> known != null && obj[field] != known[field] }.ifEmpty { null }
+        }.orEmpty()
         val decoded = runCatching {
-            TroupeJson.decodeFromJsonElement(AppSettings.serializer(), obj)
+            TroupeJson.decodeFromJsonElement(AppSettings.serializer(), JsonObject(obj + waiting))
         }.getOrNull() ?: return
         perServer[serverId] = CachedServerSettings(decoded, obj)
         if (attachedServerId == serverId) {

@@ -143,7 +143,16 @@ class SessionSummary(
     val lastActivityAt: Long = 0,
     val status: String? = null,
     val turnActive: Boolean? = null,
-)
+    val createdAt: Long = 0,
+    /** `quick` for a chat started without a Project. */
+    val kind: String? = null,
+) {
+    /** A quick chat: the server files it under the reserved Project `__unassigned__`. */
+    val isQuick: Boolean get() = kind == "quick" || projectId == UNASSIGNED_PROJECT_ID
+}
+
+/** The Project id the server gives a quick chat (Troupe's `UNASSIGNED_PROJECT_ID`). */
+const val UNASSIGNED_PROJECT_ID = "__unassigned__"
 
 /** The `subscribe` reply: events with `seq <= headSeq` are replay, anything above is live. */
 @Serializable

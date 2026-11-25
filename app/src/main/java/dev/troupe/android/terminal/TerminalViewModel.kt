@@ -223,18 +223,42 @@ class TerminalViewModel @Inject constructor(
     }
 
     private suspend fun attach() {
-        val claim = cursors.get(serverId, terminalId)?.claim ?: return fail(R.string.terminal_unavailable)
+        var claim = cursors.get(serverId, terminalId)?.claim ?: return fail(R.string.terminal_unavailable)
         val current = socket ?: return
-        val reply = try {
+        var reply = try {
             current.request("attach", attachPayload(claim))
         } catch (e: TerminalDisconnected) {
             return // The next connection attaches again.
         } catch (e: IOException) {
             return fail(R.string.pair_error_unreachable)
         }
+        if (!reply.success && reply.code == TerminalErrorCodes.UNAUTHORIZED) {
+            // A `list_preserved` elsewhere in the app may have reissued the claim meanwhile: try the new one once.
+            // The reissued claim is stored just after the listing's reply, so it may land a moment
+            // after this refusal: look a few times before giving the Terminal up.
+            var newer = cursors.get(serverId, terminalId)?.claim
+            repeat(CLAIM_REREADS) {
+                if (newer == claim) {
+                    delay(CLAIM_REREAD_DELAY_MS)
+                    newer = cursors.get(serverId, terminalId)?.claim
+                }
+            }
+            val reissued = newer
+            if (reissued != null && reissued != claim) {
+                claim = reissued
+                reply = try {
+                    current.request("attach", attachPayload(claim))
+                } catch (e: TerminalDisconnected) {
+                    return
+                } catch (e: IOException) {
+                    return fail(R.string.pair_error_unreachable)
+                }
+            }
+        }
         if (!reply.success) {
             if (reply.code == TerminalErrorCodes.UNAUTHORIZED) {
-                cursors.remove(serverId, terminalId)
+                // Drop only the claim that was refused: a newer one stored meanwhile is still good.
+                cursors.removeClaim(serverId, terminalId, claim)
                 return fail(R.string.terminal_unavailable)
             }
             return fail(R.string.pair_error_server, reply.error)
@@ -380,3 +404,6 @@ class TerminalViewModel @Inject constructor(
         const val CURSOR_SAVE_MS = 1_000L
     }
 }
+
+private const val CLAIM_REREADS = 4
+private const val CLAIM_REREAD_DELAY_MS = 150L

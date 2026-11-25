@@ -1,11 +1,14 @@
 package dev.troupe.android.workspace
 
+import dev.troupe.android.agents.AgentSetup
+import dev.troupe.android.agents.AgentSetupState
 import dev.troupe.android.attention.AttentionCenter
 import dev.troupe.android.attention.AttentionItem
 import dev.troupe.android.chat.net.ChatConnectFailed
 import dev.troupe.android.chat.net.ChatConnection
 import dev.troupe.android.chat.net.ChatConnections
 import dev.troupe.android.chat.protocol.SessionSummary
+import dev.troupe.android.chat.protocol.UNASSIGNED_PROJECT_ID
 import dev.troupe.android.core.net.ApiResult
 import dev.troupe.android.core.net.ConnectionFailure
 import dev.troupe.android.core.net.ConnectionState
@@ -19,6 +22,7 @@ import dev.troupe.android.core.store.WatchHub
 import dev.troupe.android.core.store.WebStoreClient
 import dev.troupe.android.servers.PairedServer
 import dev.troupe.android.servers.PairedServerRepository
+import dev.troupe.android.terminal.TerminalCursorStore
 import dev.troupe.android.terminal.net.ClientIdentityStore
 import dev.troupe.android.terminal.net.TerminalConnections
 import dev.troupe.android.terminal.protocol.PreservedTerminal
@@ -56,12 +60,10 @@ import javax.inject.Singleton
 /** Live status of a single chat session from `chat_activity` watch + `AttentionCenter`. */
 enum class SessionLiveState { Idle, Running, NeedsYou, Error }
 
+/** An agent a chat can start with: a launch config's id and name. */
 data class AgentDescriptor(
     val id: String,
     val name: String,
-    val provider: String = "",
-    val installed: Boolean = true,
-    val authRequired: Boolean = false,
 )
 
 data class WorkspaceShellState(
@@ -83,13 +85,21 @@ data class WorkspaceShellState(
     val attentionItemsByServer: Map<String, List<AttentionItem>> = emptyMap(),
     val terminals: List<PreservedTerminal> = emptyList(),
     val terminalNames: Map<String, String> = emptyMap(),
-    val agents: List<AgentDescriptor> = emptyList(),
+    /** False until the server's Project list arrived once, so "no Projects" is not a guess. */
+    val projectsLoaded: Boolean = false,
+    val agentSetup: AgentSetupState = AgentSetupState(),
+    /** Troupe's first-run flow is due: see [shouldShowOnboarding]. */
+    val onboarding: Boolean = false,
     val worktreePickByProject: Map<String, String> = emptyMap(),
     val bannerMessage: String? = null,
 ) {
     val activeProject: Project?
         get() = projects.firstOrNull { it.id == activeProjectId && !it.isArchived }
             ?: projects.firstOrNull { !it.isArchived }
+
+    /** The agents a new chat can start with: saved configs and ready catalog agents. */
+    val agents: List<AgentDescriptor>
+        get() = agentSetup.launchable.map { AgentDescriptor(id = it.id, name = it.name) }
 
     val activeWorktreePath: String?
         get() = activeProject?.let { worktreePickByProject[it.id] ?: it.path }
@@ -123,6 +133,7 @@ class WorkspaceSessionManager @Inject constructor(
     private val chatConnections: ChatConnections,
     private val terminalConnections: TerminalConnections,
     private val identityStore: ClientIdentityStore,
+    private val terminalCursors: TerminalCursorStore,
     private val viewOnlyRegistry: ViewOnlyRegistry,
     private val attentionCenter: AttentionCenter,
     val appSettingsStore: AppSettingsStore,
@@ -140,8 +151,11 @@ class WorkspaceSessionManager @Inject constructor(
     @Volatile private var activeConnection: ChatConnection? = null
     @Volatile private var activeWatchHub: WatchHub? = null
     @Volatile private var activeStoreClient: WebStoreClient? = null
+    @Volatile private var activeAgentSetup: AgentSetup? = null
     @Volatile private var explicitProjectSelection: Boolean = false
     private val sessionMutex = Mutex()
+    /** `spawn` and `list_preserved` both issue claims; one at a time, so the stored claim is the newest. */
+    private val terminalsMutex = Mutex()
     private var pendingTransferWrites: Pair<String, WebStoreClient.UnsentWrites>? = null
     private var sessionJob: Job? = null
     private var terminalsWatchJob: Job? = null
@@ -245,6 +259,13 @@ class WorkspaceSessionManager @Inject constructor(
     fun currentStoreClient(): WebStoreClient? = activeStoreClient
     fun currentWatchHub(): WatchHub? = activeWatchHub
     fun currentConnection(): ChatConnection? = activeConnection
+    fun currentAgentSetup(): AgentSetup? = activeAgentSetup
+
+    /** Records that first run is over (Troupe's `onboardingCompletedAt`, an ISO-8601 instant). */
+    fun finishOnboarding() {
+        _state.update { it.copy(onboarding = false) }
+        appSettingsStore.update(scope) { it.copy(onboardingCompletedAt = java.time.Instant.now().toString()) }
+    }
 
     /** Selects a project, parks the outgoing workspace, and restores the target project's workspace. */
     fun selectProject(projectId: String) {
@@ -311,7 +332,8 @@ class WorkspaceSessionManager @Inject constructor(
         val summary = cur.sessions.firstOrNull { it.sessionId == sessionId }
         val attentionItem = cur.attentionItems.firstOrNull { it.sessionId == sessionId }
         val resolvedProject = projectId ?: summary?.projectId ?: attentionItem?.projectId
-        if (resolvedProject != null && resolvedProject != cur.activeProjectId) {
+        // A quick chat belongs to the reserved Project `__unassigned__`, which is never selectable.
+        if (resolvedProject != null && resolvedProject != UNASSIGNED_PROJECT_ID && resolvedProject != cur.activeProjectId) {
             if (cur.projects.isEmpty() || cur.projects.any { it.id == resolvedProject && !it.isArchived }) {
                 selectProject(resolvedProject)
             }
@@ -337,7 +359,8 @@ class WorkspaceSessionManager @Inject constructor(
 
     fun spawnTerminal(cwdOverride: String? = null) {
         val server = _state.value.activeServer ?: return
-        val project = _state.value.activeProject ?: return
+        val project = _state.value.activeProject
+            ?: return _state.update { it.copy(bannerMessage = "Add a project to open a terminal.") }
         if (_state.value.viewOnly) {
             _state.update { it.copy(bannerMessage = "Server is in View-only mode.") }
             return
@@ -352,23 +375,31 @@ class WorkspaceSessionManager @Inject constructor(
         project: Project,
         cwdOverride: String?,
     ) {
+        // Read before waiting for the lock, and from this Project's own pick: the active Project
+        // may be another one by the time the request goes out.
+        val cwd = cwdOverride ?: _state.value.worktreePickByProject[project.id] ?: project.path.orEmpty()
         try {
             val socket = terminalConnections.socket(server.id)
-            val reply = socket.request(
-                "spawn",
+            val spawned = terminalsMutex.withLock {
+                val reply = socket.request(
+                    "spawn",
                 buildJsonObject {
                     put("projectId", project.id)
-                    put("cwd", cwdOverride ?: _state.value.activeWorktreePath ?: project.path.orEmpty())
+                    put("cwd", cwd)
                     put("cols", 80)
                     put("rows", 24)
                 },
-                ledgered = true,
-            )
-            if (!reply.success || reply.data == null) {
-                _state.update { it.copy(bannerMessage = reply.error ?: "Failed to start terminal.") }
-                return
+                    ledgered = true,
+                )
+                if (!reply.success || reply.data == null) {
+                    _state.update { it.copy(bannerMessage = reply.error ?: "Failed to start terminal.") }
+                    return
+                }
+                // The Terminal pane attaches with this claim.
+                TroupeJson.decodeFromJsonElement(SpawnedTerminal.serializer(), reply.data).also {
+                    terminalCursors.putClaim(server.id, it.id, it.claim)
+                }
             }
-            val spawned = TroupeJson.decodeFromJsonElement(SpawnedTerminal.serializer(), reply.data)
             val tab = WorkspaceTab.Terminal(
                 id = WorkspaceTabIds.terminal(spawned.id),
                 terminalId = spawned.id,
@@ -378,6 +409,30 @@ class WorkspaceSessionManager @Inject constructor(
             refreshProjectTerminals(project.id)
         } catch (e: IOException) {
             _state.update { it.copy(bannerMessage = e.message ?: "Could not start terminal.") }
+        }
+    }
+
+    /**
+     * A snapshot restore, as in Troupe: closes the Project's terminals, then starts one per saved
+     * working directory. In order, so a new Terminal never races the close of an old one.
+     */
+    fun replaceTerminals(cwds: List<String?>) {
+        val server = _state.value.activeServer ?: return
+        val project = _state.value.activeProject ?: return
+        if (_state.value.viewOnly) {
+            _state.update { it.copy(bannerMessage = "Server is in View-only mode.") }
+            return
+        }
+        scope.launch {
+            // This Project's own list, asked for now: the one in state can still be the previous
+            // Project's just after a switch, and closing those would hit the wrong Project.
+            // Asked of the server the restore began on; a failure leaves its reason in the banner.
+            val existing = refreshProjectTerminals(project.id, server, reportFailure = true) ?: return@launch
+            // The user has moved to another Paired Server: the restore is no longer wanted here.
+            if (_state.value.activeServer?.id != server.id) return@launch
+            // A Terminal that will not close stops the restore: its banner stays, nothing is added.
+            if (existing.any { !killTerminalSuspend(server, project.id, it.id) }) return@launch
+            cwds.forEach { spawnTerminalSuspend(server, project, it) }
         }
     }
 
@@ -537,6 +592,7 @@ class WorkspaceSessionManager @Inject constructor(
         activeConnection = null
         activeWatchHub = null
         activeStoreClient = null
+        activeAgentSetup = null
         explicitProjectSelection = false
         hydratedServerId.value = null
         parkedWorkspaces.clear()
@@ -597,6 +653,7 @@ class WorkspaceSessionManager @Inject constructor(
         activeConnection = null
         activeWatchHub = null
         activeStoreClient = null
+        activeAgentSetup = null
         if (!rebindingSameServer) {
             explicitProjectSelection = false
             parkedWorkspaces.clear()
@@ -639,6 +696,17 @@ class WorkspaceSessionManager @Inject constructor(
                 adopted.complete(Unit)
             }
             appSettingsStore.attach(server.id, store, this)
+
+            val agentSetup = AgentSetup(conn.socket, store, this)
+            activeAgentSetup = agentSetup
+            launch { agentSetup.state.collect { setup -> _state.update { it.copy(agentSetup = setup) } } }
+
+            // First run: no Projects, never completed, and this client may write.
+            launch {
+                combine(_state, appSettingsStore.settings, appSettingsStore.loaded(server.id)) { st, settings, loaded ->
+                    shouldShowOnboarding(st.projectsLoaded, st.projects.size, loaded, settings.onboardingCompletedAt, st.viewOnly)
+                }.distinctUntilChanged().collect { show -> _state.update { it.copy(onboarding = show) } }
+            }
 
             // Rebind automatically if ChatConnections invalidates this connection (e.g. token update / re-pair).
             launch {
@@ -709,14 +777,6 @@ class WorkspaceSessionManager @Inject constructor(
                 }
             }
 
-            // Watch 4: agents
-            launch {
-                hub.watch(WatchHub.AGENTS).collect { update ->
-                    val raw = if (update.reset) update.state else update.delta
-                    if (raw != null) applyAgentsWatch(raw)
-                }
-            }
-
             // Watch 5: terminals (live sync when terminals are spawned or killed on desktop/other clients)
             terminalsWatchJob = launch {
                 hub.watch(WatchHub.TERMINALS).collect {
@@ -733,6 +793,7 @@ class WorkspaceSessionManager @Inject constructor(
                     if (gen <= 0) return@collect
                     store.flushPendingRetries()
                     hydrateDeviceState(server.id, store, conn)
+                    agentSetup.refresh()
                 }
             }
         }
@@ -845,6 +906,7 @@ class WorkspaceSessionManager @Inject constructor(
             }
             cur.copy(
                 loading = false,
+                projectsLoaded = true,
                 projects = data.projects,
                 defaultProjectId = data.defaultProjectId,
                 activeProjectId = nextActive,
@@ -890,39 +952,37 @@ class WorkspaceSessionManager @Inject constructor(
         }
     }
 
-    private fun applyAgentsWatch(element: kotlinx.serialization.json.JsonElement) {
-        val arr = (element as? JsonArray)
-            ?: (element as? JsonObject)?.get("agents") as? JsonArray
-            ?: return
-        val list = arr.mapNotNull { el ->
-            val obj = el as? JsonObject ?: return@mapNotNull null
-            val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: obj["configId"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-            val name = obj["name"]?.jsonPrimitive?.contentOrNull ?: id
-            AgentDescriptor(
-                id = id,
-                name = name,
-                provider = obj["provider"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-                installed = obj["installed"]?.jsonPrimitive?.booleanOrNull ?: true,
-                authRequired = obj["authRequired"]?.jsonPrimitive?.booleanOrNull ?: false,
-            )
+    /**
+     * Reads [projectId]'s running Terminals into state; returns them, or null when they could not
+     * be read. With [reportFailure] the reason goes to the banner; a background refresh stays quiet.
+     */
+    private suspend fun refreshProjectTerminals(
+        projectId: String,
+        server: PairedServer? = _state.value.activeServer,
+        reportFailure: Boolean = false,
+    ): List<PreservedTerminal>? {
+        if (server == null || _state.value.viewOnly) return null
+        fun failed(reason: String?): Nothing? {
+            if (reportFailure) _state.update { it.copy(bannerMessage = reason ?: "Could not list this Project's terminals.") }
+            return null
         }
-        _state.update { it.copy(agents = list) }
-    }
-
-    private suspend fun refreshProjectTerminals(projectId: String) {
-        val server = _state.value.activeServer ?: return
-        if (_state.value.viewOnly) return
-        try {
+        return try {
             val socket = terminalConnections.socket(server.id)
-            val reply = socket.request("list_preserved", buildJsonObject { put("projectId", projectId) })
-            if (reply.success && reply.data != null) {
-                val decoded = TroupeJson.decodeFromJsonElement(PreservedTerminals.serializer(), reply.data)
-                if (_state.value.activeProjectId == projectId) {
-                    _state.update { it.copy(terminals = decoded.terminals) }
+            val decoded = terminalsMutex.withLock {
+                val reply = socket.request("list_preserved", buildJsonObject { put("projectId", projectId) })
+                if (!reply.success || reply.data == null) return failed(reply.error)
+                // `list_preserved` reissues the claim of every Terminal that is not attached.
+                TroupeJson.decodeFromJsonElement(PreservedTerminals.serializer(), reply.data).also { list ->
+                    list.terminals.forEach { t -> t.claim?.let { terminalCursors.putClaim(server.id, t.id, it) } }
                 }
             }
-        } catch (_: IOException) {
+            if (_state.value.activeProjectId == projectId && _state.value.activeServer?.id == server.id) {
+                _state.update { it.copy(terminals = decoded.terminals) }
+            }
+            decoded.terminals
+        } catch (e: IOException) {
             // Terminal socket reconnects in background.
+            failed(e.message)
         }
     }
 }
@@ -967,3 +1027,15 @@ private fun classifyChatActivityRecord(info: JsonObject): SessionLiveState {
         else -> SessionLiveState.Idle
     }
 }
+
+/**
+ * Troupe's `onboarding-gate.ts`: first run shows only on a server with no Projects whose
+ * `settings/app` was read and never recorded a completion, and only to a client that may write.
+ */
+fun shouldShowOnboarding(
+    projectsLoaded: Boolean,
+    projectCount: Int,
+    settingsLoaded: Boolean,
+    completedAt: String?,
+    viewOnly: Boolean,
+): Boolean = projectsLoaded && projectCount == 0 && settingsLoaded && completedAt == null && !viewOnly

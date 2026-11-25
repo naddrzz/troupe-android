@@ -42,6 +42,14 @@ class TerminalCursorStore(
         it?.let { StoredTerminal(it.claim, cursor.logEpoch, cursor.lastSeq) }
     }
 
+    /**
+     * Deletes the record only while it still holds [claim], in one store edit: a newer claim stored
+     * meanwhile (a listing reissued it) stays.
+     */
+    suspend fun removeClaim(serverId: String, terminalId: String, claim: String) = edit(serverId, terminalId) {
+        it?.takeIf { stored -> stored.claim != claim }
+    }
+
     /** Deletes without reading, so a record that no longer decrypts can still go. */
     suspend fun remove(serverId: String, terminalId: String) {
         store.edit { it.remove(key(serverId, terminalId)) }
