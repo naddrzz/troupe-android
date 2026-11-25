@@ -120,7 +120,6 @@ private fun CameraPreview(onResult: (String) -> Unit, onUsePaste: () -> Unit) {
                         sightings.next(result.getValue(scanner)?.firstNotNullOfOrNull { it.rawValue })?.let { latest(it) }
                     },
                 )
-                bindToLifecycle(lifecycleOwner)
             }
         }.onFailure {
             cameraUnavailable = true
@@ -137,7 +136,12 @@ private fun CameraPreview(onResult: (String) -> Unit, onUsePaste: () -> Unit) {
                         if (!hasBack && hasFront) {
                             controller.cameraSelector = androidx.camera.core.CameraSelector.DEFAULT_FRONT_CAMERA
                         }
-                        hasBack || hasFront
+                        if (hasBack || hasFront) {
+                            controller.bindToLifecycle(lifecycleOwner)
+                            true
+                        } else {
+                            false
+                        }
                     }.getOrDefault(false)
                     if (ok) {
                         previewView.controller = controller

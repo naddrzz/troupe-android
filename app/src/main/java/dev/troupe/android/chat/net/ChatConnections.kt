@@ -17,7 +17,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
@@ -51,6 +54,11 @@ class ChatConnection internal constructor(
     val generation: StateFlow<Int> get() = lifecycle.generation
 
     fun retry() = lifecycle.retry()
+
+    /** Suspends until this connection is permanently stopped or replaced. */
+    internal suspend fun awaitClosed() {
+        connectionScope.coroutineContext[Job]?.join()
+    }
 
     internal fun stop() {
         healthWatch.cancel()
@@ -87,6 +95,9 @@ class ChatConnections internal constructor(
     private val lifecycles = CoroutineScope(SupervisorJob() + dispatcher)
     private val lifecycleLock = Any()
     private var backgrounded = false
+    private val _changes = MutableSharedFlow<String>(extraBufferCapacity = 32)
+    /** Emits a serverId whenever its connection is created or reset so background observers can rebind. */
+    internal val changes: SharedFlow<String> = _changes.asSharedFlow()
 
     init {
         lifecycles.launch { network.available.collect { open.values.forEach { it.retry() } } }
@@ -145,13 +156,18 @@ class ChatConnections internal constructor(
         ChatConnection(socket, lifecycle, pending(serverId), watchHub, connectionScope, healthWatch).also {
             open[serverId] = it
             lifecycle.start()
+            _changes.tryEmit(serverId)
         }
     }
 
     /** Drops an existing connection so the next [connection] call authenticates with the updated token. */
     suspend fun resetConnection(serverId: String) = mutex.withLock {
         open.remove(serverId)?.stop()
+        _changes.tryEmit(serverId)
     }
+
+    /** True while [connection] is still the registered instance for [serverId]. */
+    internal fun isCurrent(serverId: String, connection: ChatConnection): Boolean = open[serverId] === connection
 
     /** Forwards Android app foreground/background transitions to every active `/ws` connection. */
     fun notifyLifecycle(background: Boolean) {

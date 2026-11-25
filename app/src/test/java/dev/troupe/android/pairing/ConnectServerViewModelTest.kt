@@ -105,21 +105,26 @@ class ConnectServerViewModelTest {
                 throw java.io.IOException("Unexpected outbound request to ${chain.request().url}")
             }
             .build()
-        TestGraph(temp.newFolder(), client = recordingClient).use { graph ->
-            val vm = graph.connectServerViewModel()
-            vm.connectLink("http://8.8.8.8:8080/#token=secret")
-            assertEquals(
-                ConnectUiState.Error(dev.troupe.android.R.string.pair_error_cleartext, "8.8.8.8"),
-                vm.ui.value,
-            )
+        try {
+            TestGraph(temp.newFolder(), client = recordingClient).use { graph ->
+                val vm = graph.connectServerViewModel()
+                vm.connectLink("http://8.8.8.8:8080/#token=secret")
+                assertEquals(
+                    ConnectUiState.Error(dev.troupe.android.R.string.pair_error_cleartext, "8.8.8.8"),
+                    vm.ui.value,
+                )
 
-            vm.reset()
-            vm.connectManual("http://example.com:8080", "secret", "Public")
-            assertEquals(
-                ConnectUiState.Error(dev.troupe.android.R.string.pair_error_cleartext, "example.com"),
-                vm.ui.value,
-            )
-            assertTrue("Expected zero outbound requests, saw $attemptedUrls", attemptedUrls.isEmpty())
+                vm.reset()
+                vm.connectManual("http://example.com:8080", "secret", "Public")
+                assertEquals(
+                    ConnectUiState.Error(dev.troupe.android.R.string.pair_error_cleartext, "example.com"),
+                    vm.ui.value,
+                )
+                assertTrue("Expected zero outbound requests, saw $attemptedUrls", attemptedUrls.isEmpty())
+            }
+        } finally {
+            recordingClient.dispatcher.executorService.shutdown()
+            recordingClient.connectionPool.evictAll()
         }
     }
 

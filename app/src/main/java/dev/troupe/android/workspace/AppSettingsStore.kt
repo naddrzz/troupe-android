@@ -13,13 +13,19 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -51,24 +57,43 @@ data class AppSettings(
  */
 @Singleton
 class AppSettingsStore @Inject constructor() {
+    private data class CachedServerSettings(
+        val settings: AppSettings,
+        val rawJson: Map<String, JsonElement>,
+    )
+
     private val _settings = MutableStateFlow(AppSettings())
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
 
-    /** Cached `settings/app` by Paired Server ID so background notifications use each server's own preference. */
-    private val perServer = java.util.concurrent.ConcurrentHashMap<String, AppSettings>()
+    /** Cached `settings/app` + raw JSON by Paired Server ID so notifications and edits preserve server state. */
+    private val perServer = ConcurrentHashMap<String, CachedServerSettings>()
+    /** Server IDs whose initial `settings/app` read or watch delivery has completed. */
+    private val loadedServers = MutableStateFlow<Set<String>>(emptySet())
+    private val writeMutex = Mutex()
     @Volatile private var attachedServerId: String? = null
-
-    /** Raw JSON object from the server so unknown desktop fields survive partial Android updates. */
-    @Volatile private var rawServerJson: Map<String, kotlinx.serialization.json.JsonElement> = emptyMap()
     private var storeClient: WebStoreClient? = null
     private var watchJob: Job? = null
 
     /** Returns the last known settings for [serverId], or defaults when that server has not been loaded yet. */
-    fun settingsFor(serverId: String): AppSettings = perServer[serverId] ?: AppSettings()
+    fun settingsFor(serverId: String): AppSettings = perServer[serverId]?.settings ?: AppSettings()
+
+    /** True once [serverId] has completed its initial `settings/app` load (or reported unsupported/missing). */
+    fun isLoaded(serverId: String): Boolean = serverId in loadedServers.value
+
+    /** Waits briefly for [serverId]'s initial `settings/app` read to complete before returning its settings. */
+    suspend fun awaitSettingsFor(serverId: String, timeoutMs: Long = 3_000L): AppSettings {
+        if (serverId !in loadedServers.value) {
+            withTimeoutOrNull(timeoutMs) {
+                loadedServers.first { serverId in it }
+            }
+        }
+        return settingsFor(serverId)
+    }
 
     /** Drops cached settings for a removed Paired Server. */
     fun forget(serverId: String) {
         perServer.remove(serverId)
+        loadedServers.update { it - serverId }
     }
 
     /**
@@ -82,16 +107,16 @@ class AppSettingsStore @Inject constructor() {
                 launch {
                     connection.generation.collect { gen ->
                         if (gen <= 0) return@collect
-                        when (val read = store.read(PersistenceKeys.APP_SETTINGS)) {
-                            is StoreReadResult.Found -> applyJson(serverId, read.data)
-                            else -> Unit
+                        val read = store.read(PersistenceKeys.APP_SETTINGS)
+                        writeMutex.withLock {
+                            applyReadResult(serverId, read)
                         }
                     }
                 }
                 launch {
                     store.watch(PersistenceKeys.APP_SETTINGS).collect { element ->
-                        if (element != null && element !is JsonNull) {
-                            applyJson(serverId, element)
+                        writeMutex.withLock {
+                            applyWatchElement(serverId, element)
                         }
                     }
                 }
@@ -102,16 +127,17 @@ class AppSettingsStore @Inject constructor() {
         watchJob?.cancel()
         attachedServerId = serverId
         storeClient = client
-        rawServerJson = emptyMap()
-        _settings.value = perServer[serverId] ?: AppSettings()
+        _settings.value = perServer[serverId]?.settings ?: AppSettings()
         watchJob = scope.launch {
-            when (val read = client.read(PersistenceKeys.APP_SETTINGS)) {
-                is StoreReadResult.Found -> applyJson(serverId, read.data)
-                else -> Unit
+            val initialRead = client.read(PersistenceKeys.APP_SETTINGS)
+            writeMutex.withLock {
+                if (serverId !in loadedServers.value) {
+                    applyReadResult(serverId, initialRead)
+                }
             }
             client.watch(PersistenceKeys.APP_SETTINGS).collect { element ->
-                if (element != null && element !is JsonNull) {
-                    applyJson(serverId, element)
+                writeMutex.withLock {
+                    applyWatchElement(serverId, element)
                 }
             }
         }
@@ -122,31 +148,87 @@ class AppSettingsStore @Inject constructor() {
         watchJob = null
         attachedServerId = null
         storeClient = null
-        rawServerJson = emptyMap()
         _settings.value = AppSettings()
     }
 
     fun update(scope: CoroutineScope, transform: (AppSettings) -> AppSettings) {
+        val serverId = attachedServerId
         val next = transform(_settings.value)
         _settings.value = next
-        attachedServerId?.let { perServer[it] = next }
+        if (serverId != null) {
+            val cachedRaw = perServer[serverId]?.rawJson.orEmpty()
+            perServer[serverId] = CachedServerSettings(next, cachedRaw)
+        }
         val client = storeClient ?: return
         scope.launch {
-            val encoded = TroupeJson.encodeToJsonElement(AppSettings.serializer(), next) as? JsonObject ?: return@launch
-            val merged = JsonObject(rawServerJson + encoded)
-            rawServerJson = merged
-            client.write(PersistenceKeys.APP_SETTINGS, merged)
+            writeMutex.withLock {
+                val baseRaw = if (serverId != null && serverId !in loadedServers.value) {
+                    when (val read = client.read(PersistenceKeys.APP_SETTINGS)) {
+                        is StoreReadResult.Found -> (read.data as? JsonObject).orEmpty()
+                        StoreReadResult.NotFound -> emptyMap()
+                        is StoreReadResult.Error -> {
+                            // Never write with an empty merge base on transport failure; preserve desktop fields.
+                            if (read.code == "WS_ERROR") return@withLock
+                            emptyMap()
+                        }
+                    }
+                } else {
+                    serverId?.let { perServer[it]?.rawJson }.orEmpty()
+                }
+                val encoded = TroupeJson.encodeToJsonElement(AppSettings.serializer(), next) as? JsonObject
+                    ?: return@withLock
+                val merged = JsonObject(baseRaw + encoded)
+                if (serverId != null) {
+                    perServer[serverId] = CachedServerSettings(next, merged)
+                    loadedServers.update { it + serverId }
+                }
+                client.write(PersistenceKeys.APP_SETTINGS, merged)
+            }
         }
     }
 
-    private fun applyJson(serverId: String, element: kotlinx.serialization.json.JsonElement) {
+    private fun applyReadResult(serverId: String, read: StoreReadResult) {
+        when (read) {
+            is StoreReadResult.Found -> {
+                applyJson(serverId, read.data)
+                loadedServers.update { it + serverId }
+            }
+            StoreReadResult.NotFound -> {
+                clearServerCache(serverId)
+                loadedServers.update { it + serverId }
+            }
+            is StoreReadResult.Error -> {
+                // Non-transport errors (e.g. `unsupported` on older hosts) mean defaults apply immediately.
+                if (read.code != "WS_ERROR") {
+                    loadedServers.update { it + serverId }
+                }
+            }
+        }
+    }
+
+    private fun applyWatchElement(serverId: String, element: JsonElement?) {
+        if (element == null || element is JsonNull) {
+            clearServerCache(serverId)
+        } else {
+            applyJson(serverId, element)
+        }
+        loadedServers.update { it + serverId }
+    }
+
+    private fun clearServerCache(serverId: String) {
+        perServer.remove(serverId)
+        if (attachedServerId == serverId) {
+            _settings.value = AppSettings()
+        }
+    }
+
+    private fun applyJson(serverId: String, element: JsonElement) {
         val obj = element as? JsonObject ?: return
         val decoded = runCatching {
             TroupeJson.decodeFromJsonElement(AppSettings.serializer(), obj)
         }.getOrNull() ?: return
-        perServer[serverId] = decoded
+        perServer[serverId] = CachedServerSettings(decoded, obj)
         if (attachedServerId == serverId) {
-            rawServerJson = obj
             _settings.update { decoded }
         }
     }

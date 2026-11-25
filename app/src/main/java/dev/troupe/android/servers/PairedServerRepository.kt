@@ -8,6 +8,9 @@ import dev.troupe.android.core.protocol.TroupeJson
 import dev.troupe.android.pairing.PairingInput
 import dev.troupe.android.pairing.ServerAddress
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
@@ -45,6 +48,10 @@ class PairedServerRepository(
     private val store: DataStore<Preferences>,
     private val cipher: TokenCipher,
 ) {
+    private val _tokenUpdated = MutableSharedFlow<String>(extraBufferCapacity = 32)
+    /** Emits a Paired Server's id whenever its credentials are added or updated. */
+    val tokenUpdated: SharedFlow<String> = _tokenUpdated.asSharedFlow()
+
     val servers: Flow<List<PairedServer>> = store.data.map { prefs ->
         stored(prefs).map { PairedServer(it.id, it.name, ServerAddress.of(it.baseUrl), it.stayConnected, it.hasToken) }
     }
@@ -91,6 +98,7 @@ class PairedServerRepository(
                 prefs[ACTIVE_SERVER_ID] = id
             }
         }
+        _tokenUpdated.tryEmit(saved.id)
         return PairedServer(saved.id, saved.name, address, saved.stayConnected, saved.hasToken)
     }
 
@@ -103,9 +111,11 @@ class PairedServerRepository(
     /** Updates a Paired Server's token (used by TokenGateScreen after a mid-session 401/unauthorized). */
     suspend fun updateToken(serverId: String, token: String?) {
         val cleanToken = token?.trim()?.takeIf { it.isNotEmpty() }
+        var updated = false
         store.edit { prefs ->
             val list = stored(prefs)
             if (list.none { it.id == serverId }) return@edit
+            updated = true
             prefs[SERVERS] = TroupeJson.encodeToString(
                 list.map { if (it.id == serverId) it.copy(hasToken = cleanToken != null) else it },
             )
@@ -115,6 +125,7 @@ class PairedServerRepository(
                 prefs.remove(tokenKey(serverId))
             }
         }
+        if (updated) _tokenUpdated.tryEmit(serverId)
     }
 
     /**

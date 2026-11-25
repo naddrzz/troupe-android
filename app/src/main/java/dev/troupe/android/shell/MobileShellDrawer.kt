@@ -37,7 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -240,14 +240,14 @@ fun MobileShellDrawer(
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (section) {
                     MobileSection.Chats -> {
-                        val context = LocalContext.current
+                        val resources = LocalResources.current
                         val untitledLabel = stringResource(R.string.chats_untitled)
                         val filteredAttention = if (query.isBlank()) {
                             state.attentionItems
                         } else {
                             state.attentionItems.filter { item ->
                                 val displayed = chatName(item.projectName, item.sessionTitle).let {
-                                    context.getString(it.res, *it.args.toTypedArray())
+                                    resources.getString(it.res, *it.args.toTypedArray())
                                 }
                                 displayed.contains(query, ignoreCase = true) ||
                                     item.sessionTitle.orEmpty().contains(query, ignoreCase = true) ||

@@ -93,6 +93,8 @@ internal class AttentionMonitor(
     private var currentGeneration = 0
     /** `(hostEpoch, n)` of the last `chat_history` watch frame applied. */
     private var revision: Pair<String, Long>? = null
+    /** Latest `(hostEpoch, n)` delta seen before consuming our initial baseline snapshot. */
+    private var latestPreBaselineRevision: Pair<String, Long>? = null
 
     suspend fun run(): Unit = coroutineScope {
         // Single collector on socket.frames preserves exact WebSocket wire order between session
@@ -124,16 +126,31 @@ internal class AttentionMonitor(
                 Input.Failed -> {
                     sessions.clear()
                     revision = null
+                    latestPreBaselineRevision = null
                     _state.value = MonitorState()
                 }
                 is Input.CachedReset -> {
                     // Only apply cached snapshot when we joined after the wire reset already passed.
                     if (revision == null) {
-                        revision = input.update.hostEpoch to input.update.n
+                        val pre = latestPreBaselineRevision
+                        latestPreBaselineRevision = null
+                        val newerSameEpoch = pre != null &&
+                            pre.first == input.update.hostEpoch &&
+                            pre.second > input.update.n
+                        revision = if (newerSameEpoch) pre else (input.update.hostEpoch to input.update.n)
                         if (_state.value.projects.isEmpty()) {
                             projectNames()?.let { names -> _state.update { it.copy(projects = names) } }
                         }
-                        install(input.update.state)
+                        if (newerSameEpoch) {
+                            val reply = request("list_persisted_sessions", JsonObject(emptyMap()))
+                            when {
+                                reply != null && reply.ok -> install(reply.payload)
+                                reply?.code == ChatErrorCodes.UNSUPPORTED -> install(null)
+                                else -> install(input.update.state)
+                            }
+                        } else {
+                            install(input.update.state)
+                        }
                     }
                 }
                 is Input.Frame -> when (val frame = input.frame) {
@@ -153,14 +170,25 @@ internal class AttentionMonitor(
         when {
             frame.reset -> {
                 revision = frame.hostEpoch to frame.n
+                latestPreBaselineRevision = null
                 if (_state.value.projects.isEmpty()) {
                     projectNames()?.let { names -> _state.update { it.copy(projects = names) } }
                 }
                 install(frame.state)
             }
-            last == null || last.first != frame.hostEpoch || frame.n != last.second + 1 ||
-                (frame.delta as? JsonObject)?.containsKey("resync") == true -> {
+            (frame.delta as? JsonObject)?.containsKey("resync") == true -> {
                 revision = null
+                latestPreBaselineRevision = null
+                connection.watchHub.resync(WatchHub.CHAT_HISTORY)
+            }
+            last == null -> {
+                // Baseline reset (from wire or WatchHub cache) has not been consumed yet; avoid
+                // triggering a redundant shared unwatch/watch and let CachedReset reconcile if needed.
+                latestPreBaselineRevision = frame.hostEpoch to frame.n
+            }
+            last.first != frame.hostEpoch || frame.n != last.second + 1 -> {
+                revision = null
+                latestPreBaselineRevision = null
                 connection.watchHub.resync(WatchHub.CHAT_HISTORY)
             }
             else -> {

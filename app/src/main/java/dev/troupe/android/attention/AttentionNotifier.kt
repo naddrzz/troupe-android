@@ -22,6 +22,7 @@ import dev.troupe.android.chat.net.ChatConnections
 import dev.troupe.android.core.nav.ChatLink
 import dev.troupe.android.core.nav.Screens
 import dev.troupe.android.core.nav.openChatIntent
+import dev.troupe.android.core.net.ConnectionState
 import dev.troupe.android.lock.LockSettingsStore
 import dev.troupe.android.servers.PairedServerRepository
 import dev.troupe.android.workspace.AppSettingsStore
@@ -29,13 +30,17 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -103,12 +108,47 @@ class AttentionNotifier @Inject constructor(
                 }
                 (ids - settingsJobs.keys).forEach { id ->
                     settingsJobs[id] = launch {
+                        val retrySignals = Channel<Unit>(Channel.CONFLATED)
+                        val signalJob = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                            merge(connections.changes, repository.tokenUpdated)
+                                .filter { it == id }
+                                .collect { retrySignals.trySend(Unit) }
+                        }
                         try {
-                            val conn = connections.connection(id)
-                            appSettings.observeServer(id, conn, this).join()
-                        } catch (_: ChatConnectFailed) {
-                            // Server token unreadable or unrecoverable; defaults apply until re-paired.
+                            while (isActive) {
+                                retrySignals.tryReceive()
+                                val conn = try {
+                                    connections.connection(id)
+                                } catch (_: ChatConnectFailed) {
+                                    // Wait until credentials or connection state change before retrying.
+                                    retrySignals.receive()
+                                    if (repository.server(id) == null) return@launch
+                                    continue
+                                }
+                                // Drain the change signal emitted by our own connection(id) creation above.
+                                retrySignals.tryReceive()
+                                val observer = appSettings.observeServer(id, conn, this)
+                                val lifecycleWatcher = launch {
+                                    launch {
+                                        conn.awaitClosed()
+                                        observer.cancel()
+                                    }
+                                    launch {
+                                        conn.state.first { it is ConnectionState.Failed }
+                                        observer.cancel()
+                                    }
+                                }
+                                observer.join()
+                                lifecycleWatcher.cancel()
+                                if (repository.server(id) == null) return@launch
+                                if (conn.state.value is ConnectionState.Failed && connections.isCurrent(id, conn)) {
+                                    retrySignals.receive()
+                                    if (repository.server(id) == null) return@launch
+                                }
+                            }
                         } finally {
+                            signalJob.cancel()
+                            retrySignals.close()
                             if (settingsJobs[id] === coroutineContext[Job]) settingsJobs.remove(id)
                         }
                     }
@@ -123,18 +163,35 @@ class AttentionNotifier @Inject constructor(
                     posted.remove(tag(serverId, key))
                     manager.cancel(tag(serverId, key), 0)
                 }
-                changes.added
-                    .filter { item ->
+                changes.added.forEach { item ->
+                    if (appSettings.isLoaded(item.serverId)) {
                         val notifyNeedsYou = appSettings.settingsFor(item.serverId).notifyOnAgentChatNeedsYou
-                        mayAlert(item, screens.foreground.value, screens.current.value, stayConnected, notifyNeedsYou)
+                        if (mayAlert(item, screens.foreground.value, screens.current.value, stayConnected, notifyNeedsYou)) {
+                            notify(item)
+                        }
+                    } else {
+                        scope.launch {
+                            val notifyNeedsYou = appSettings.awaitSettingsFor(item.serverId).notifyOnAgentChatNeedsYou
+                            val stillPresent = center.servers.value[item.serverId]?.items?.any { it.key == item.key } == true
+                            if (stillPresent && mayAlert(item, screens.foreground.value, screens.current.value, stayConnected, notifyNeedsYou)) {
+                                notify(item)
+                            }
+                        }
                     }
-                    .forEach { notify(it) }
+                }
             }
         }
         scope.launch {
             center.finished.collect { turn ->
-                val notifyTurnFinished = appSettings.settingsFor(turn.serverId).notifyOnAgentChatTurnFinished
-                if (mayNotifyFinished(turn, screens.foreground.value, stayConnected, notifyTurnFinished)) notifyFinished(turn)
+                if (appSettings.isLoaded(turn.serverId)) {
+                    val notifyTurnFinished = appSettings.settingsFor(turn.serverId).notifyOnAgentChatTurnFinished
+                    if (mayNotifyFinished(turn, screens.foreground.value, stayConnected, notifyTurnFinished)) notifyFinished(turn)
+                } else {
+                    scope.launch {
+                        val notifyTurnFinished = appSettings.awaitSettingsFor(turn.serverId).notifyOnAgentChatTurnFinished
+                        if (mayNotifyFinished(turn, screens.foreground.value, stayConnected, notifyTurnFinished)) notifyFinished(turn)
+                    }
+                }
             }
         }
         scope.launch {
