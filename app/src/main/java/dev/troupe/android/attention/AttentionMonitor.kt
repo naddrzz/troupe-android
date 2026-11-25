@@ -143,10 +143,10 @@ internal class AttentionMonitor(
                         }
                         if (newerSameEpoch) {
                             val reply = request("list_persisted_sessions", JsonObject(emptyMap()))
-                            when {
-                                reply != null && reply.ok -> install(reply.payload)
-                                reply?.code == ChatErrorCodes.UNSUPPORTED -> install(null)
-                                else -> install(input.update.state)
+                            if (reply != null && reply.ok) {
+                                install(reply.payload)
+                            } else {
+                                install(input.update.state)
                             }
                         } else {
                             install(input.update.state)

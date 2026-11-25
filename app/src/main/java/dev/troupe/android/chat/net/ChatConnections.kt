@@ -48,6 +48,8 @@ class ChatConnection internal constructor(
     private val connectionScope: CoroutineScope,
     /** Reads View-only from `/health` on every connect. */
     private val healthWatch: Job,
+    /** Credential version captured from [PairedServerRepository] when this connection was opened. */
+    internal val credentialVersion: Long = 0L,
 ) {
     val state: StateFlow<ConnectionState> get() = lifecycle.state
     /** Changes on every new connection; the server has then forgotten every subscription and watch. */
@@ -81,6 +83,9 @@ class ChatConnections internal constructor(
     private val dispatcher: CoroutineDispatcher,
     private val newBackoff: () -> Backoff,
 ) {
+    /** Identifies whether [connection] was created (non-null) or invalidated (null) for [serverId]. */
+    internal data class ConnectionEvent(val serverId: String, val connection: ChatConnection?)
+
     @Inject constructor(
         sockets: ChatSocketFactory,
         repository: PairedServerRepository,
@@ -95,9 +100,9 @@ class ChatConnections internal constructor(
     private val lifecycles = CoroutineScope(SupervisorJob() + dispatcher)
     private val lifecycleLock = Any()
     private var backgrounded = false
-    private val _changes = MutableSharedFlow<String>(extraBufferCapacity = 32)
-    /** Emits a serverId whenever its connection is created or reset so background observers can rebind. */
-    internal val changes: SharedFlow<String> = _changes.asSharedFlow()
+    private val _changes = MutableSharedFlow<ConnectionEvent>(extraBufferCapacity = 32)
+    /** Emits whenever a server's connection is created or invalidated so background observers can rebind. */
+    internal val changes: SharedFlow<ConnectionEvent> = _changes.asSharedFlow()
 
     init {
         lifecycles.launch { network.available.collect { open.values.forEach { it.retry() } } }
@@ -108,6 +113,18 @@ class ChatConnections internal constructor(
                     open.keys.filter { repository.server(it) == null }.forEach { id ->
                         open.remove(id)?.stop()
                         pending.remove(id)
+                    }
+                }
+            }
+        }
+        // Invalidate any connection opened with older credentials so subsequent traffic authenticates with the new token.
+        lifecycles.launch {
+            repository.tokenUpdated.collect { update ->
+                mutex.withLock {
+                    val current = open[update.serverId]
+                    if (current != null && current.credentialVersion < update.version) {
+                        open.remove(update.serverId)?.stop()
+                        _changes.tryEmit(ConnectionEvent(update.serverId, null))
                     }
                 }
             }
@@ -123,8 +140,11 @@ class ChatConnections internal constructor(
      * that is no longer paired.
      */
     suspend fun connection(serverId: String): ChatConnection = mutex.withLock {
-        open[serverId]?.takeIf { it.state.value !is ConnectionState.Failed }?.let { return it }
-        // A connection that failed for good still has its health watch running; stop it before replacing it.
+        val credVersion = repository.credentialVersion(serverId)
+        open[serverId]
+            ?.takeIf { it.state.value !is ConnectionState.Failed && it.credentialVersion >= credVersion }
+            ?.let { return it }
+        // A connection that failed for good (or carries stale credentials) is stopped before replacing it.
         open.remove(serverId)?.stop()
         val server = repository.server(serverId)
         val token = repository.token(serverId)
@@ -153,17 +173,17 @@ class ChatConnections internal constructor(
                 }
             }
         }
-        ChatConnection(socket, lifecycle, pending(serverId), watchHub, connectionScope, healthWatch).also {
+        ChatConnection(socket, lifecycle, pending(serverId), watchHub, connectionScope, healthWatch, credVersion).also {
             open[serverId] = it
             lifecycle.start()
-            _changes.tryEmit(serverId)
+            _changes.tryEmit(ConnectionEvent(serverId, it))
         }
     }
 
     /** Drops an existing connection so the next [connection] call authenticates with the updated token. */
     suspend fun resetConnection(serverId: String) = mutex.withLock {
         open.remove(serverId)?.stop()
-        _changes.tryEmit(serverId)
+        _changes.tryEmit(ConnectionEvent(serverId, null))
     }
 
     /** True while [connection] is still the registered instance for [serverId]. */

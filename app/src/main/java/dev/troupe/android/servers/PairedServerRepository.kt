@@ -17,6 +17,11 @@ import kotlinx.serialization.Serializable
 import java.security.GeneralSecurityException
 import java.util.Base64
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
+
+/** Emitted after a Paired Server's stored credentials are written to disk. */
+data class TokenUpdate(val serverId: String, val version: Long)
 
 /**
  * A Troupe Server the app remembers. Holds no token: that lives encrypted in [PairedServerRepository].
@@ -48,9 +53,16 @@ class PairedServerRepository(
     private val store: DataStore<Preferences>,
     private val cipher: TokenCipher,
 ) {
-    private val _tokenUpdated = MutableSharedFlow<String>(extraBufferCapacity = 32)
-    /** Emits a Paired Server's id whenever its credentials are added or updated. */
-    val tokenUpdated: SharedFlow<String> = _tokenUpdated.asSharedFlow()
+    private val credentialVersions = ConcurrentHashMap<String, AtomicLong>()
+    private val _tokenUpdated = MutableSharedFlow<TokenUpdate>(extraBufferCapacity = 32)
+    /** Emits a Paired Server's id and new credential version whenever its credentials are added or updated. */
+    val tokenUpdated: SharedFlow<TokenUpdate> = _tokenUpdated.asSharedFlow()
+
+    /** Monotonic credential version for [serverId], incremented after each persisted credential write. */
+    fun credentialVersion(serverId: String): Long = credentialVersions[serverId]?.get() ?: 0L
+
+    private fun bumpCredentialVersion(serverId: String): Long =
+        credentialVersions.computeIfAbsent(serverId) { AtomicLong(0L) }.incrementAndGet()
 
     val servers: Flow<List<PairedServer>> = store.data.map { prefs ->
         stored(prefs).map { PairedServer(it.id, it.name, ServerAddress.of(it.baseUrl), it.stayConnected, it.hasToken) }
@@ -98,7 +110,8 @@ class PairedServerRepository(
                 prefs[ACTIVE_SERVER_ID] = id
             }
         }
-        _tokenUpdated.tryEmit(saved.id)
+        val version = bumpCredentialVersion(saved.id)
+        _tokenUpdated.tryEmit(TokenUpdate(saved.id, version))
         return PairedServer(saved.id, saved.name, address, saved.stayConnected, saved.hasToken)
     }
 
@@ -125,7 +138,10 @@ class PairedServerRepository(
                 prefs.remove(tokenKey(serverId))
             }
         }
-        if (updated) _tokenUpdated.tryEmit(serverId)
+        if (updated) {
+            val version = bumpCredentialVersion(serverId)
+            _tokenUpdated.tryEmit(TokenUpdate(serverId, version))
+        }
     }
 
     /**
@@ -173,6 +189,7 @@ class PairedServerRepository(
                 if (next != null) prefs[ACTIVE_SERVER_ID] = next else prefs.remove(ACTIVE_SERVER_ID)
             }
         }
+        credentialVersions.remove(id)
     }
 
     private fun stored(prefs: Preferences): List<StoredServer> =

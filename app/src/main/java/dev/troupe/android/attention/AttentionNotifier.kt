@@ -30,6 +30,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -39,7 +40,6 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -108,25 +108,40 @@ class AttentionNotifier @Inject constructor(
                 }
                 (ids - settingsJobs.keys).forEach { id ->
                     settingsJobs[id] = launch {
-                        val retrySignals = Channel<Unit>(Channel.CONFLATED)
-                        val signalJob = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
-                            merge(connections.changes, repository.tokenUpdated)
-                                .filter { it == id }
-                                .collect { retrySignals.trySend(Unit) }
+                        val retrySignals = Channel<Any>(capacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+                        val connSignalJob = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                            connections.changes
+                                .filter { it.serverId == id }
+                                .collect { retrySignals.trySend(it) }
+                        }
+                        val tokenSignalJob = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                            repository.tokenUpdated
+                                .filter { it.serverId == id }
+                                .collect { retrySignals.trySend(it) }
                         }
                         try {
                             while (isActive) {
-                                retrySignals.tryReceive()
+                                val versionBeforeConnect = repository.credentialVersion(id)
                                 val conn = try {
                                     connections.connection(id)
                                 } catch (_: ChatConnectFailed) {
-                                    // Wait until credentials or connection state change before retrying.
-                                    retrySignals.receive()
+                                    // Wait until credentials change or another caller establishes a connection.
+                                    while (
+                                        isActive &&
+                                        repository.server(id) != null &&
+                                        repository.credentialVersion(id) <= versionBeforeConnect
+                                    ) {
+                                        val event = retrySignals.receive()
+                                        if (event is ChatConnections.ConnectionEvent &&
+                                            event.connection != null &&
+                                            connections.isCurrent(id, event.connection)
+                                        ) {
+                                            break
+                                        }
+                                    }
                                     if (repository.server(id) == null) return@launch
                                     continue
                                 }
-                                // Drain the change signal emitted by our own connection(id) creation above.
-                                retrySignals.tryReceive()
                                 val observer = appSettings.observeServer(id, conn, this)
                                 val lifecycleWatcher = launch {
                                     launch {
@@ -141,13 +156,24 @@ class AttentionNotifier @Inject constructor(
                                 observer.join()
                                 lifecycleWatcher.cancel()
                                 if (repository.server(id) == null) return@launch
-                                if (conn.state.value is ConnectionState.Failed && connections.isCurrent(id, conn)) {
-                                    retrySignals.receive()
+                                if (conn.state.value is ConnectionState.Failed) {
+                                    // Wait for an external credential update or connection replacement; ignore our own
+                                    // connection-created event so auth/protocol failures never spin-retry.
+                                    while (
+                                        isActive &&
+                                        repository.server(id) != null &&
+                                        connections.isCurrent(id, conn) &&
+                                        repository.credentialVersion(id) <= conn.credentialVersion
+                                    ) {
+                                        val event = retrySignals.receive()
+                                        if (event is ChatConnections.ConnectionEvent && event.connection === conn) continue
+                                    }
                                     if (repository.server(id) == null) return@launch
                                 }
                             }
                         } finally {
-                            signalJob.cancel()
+                            connSignalJob.cancel()
+                            tokenSignalJob.cancel()
                             retrySignals.close()
                             if (settingsJobs[id] === coroutineContext[Job]) settingsJobs.remove(id)
                         }

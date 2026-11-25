@@ -34,6 +34,13 @@ sealed interface StoreWriteResult {
     data class Error(val code: String?, val message: String?) : StoreWriteResult
 }
 
+/** One store watch payload along with its host revision and whether it came from a reset snapshot. */
+data class StoreWatchValue(
+    val value: JsonElement,
+    val revision: Long?,
+    val reset: Boolean,
+)
+
 /**
  * Full Troupe `WebStore` client over `/ws` (`store_read`, `store_write`, `store_delete`,
  * `watch("store")`), matching `src/renderer/lib/web-persistence-api.ts`:
@@ -183,15 +190,19 @@ class WebStoreClient(
         return reply.ok
     }
 
-    /** Watches a store key for cross-device live changes (e.g., `settings/app`). Emits `null` on delete. */
-    fun watch(logicalKey: String): Flow<JsonElement?> {
+    /** Watches a store key for cross-device live changes (e.g., `settings/app`). Emits `JsonNull` on delete. */
+    fun watch(logicalKey: String): Flow<JsonElement?> =
+        watchWithRevision(logicalKey).mapNotNull { it.value }
+
+    /** Watches a store key along with its host revision and reset flag so callers can ignore stale reads. */
+    fun watchWithRevision(logicalKey: String): Flow<StoreWatchValue> {
         val hostKey = PersistenceKeys.scopedKey(logicalKey, deviceId)
         return watchHub.watch(WatchHub.STORE, hostKey).mapNotNull { update ->
             val rawPayload = (if (update.reset) update.state else update.delta) as? JsonObject ?: return@mapNotNull null
             val rev = rawPayload["revision"]?.jsonPrimitive?.longOrNull
             if (rev != null) revisions[hostKey] = rev
             val value = rawPayload["value"]
-            when {
+            val resolved = when {
                 value == null || value is JsonNull -> {
                     casValues.remove(hostKey)
                     JsonNull
@@ -203,6 +214,7 @@ class WebStoreClient(
                     unwrap(value)
                 }
             }
+            StoreWatchValue(value = resolved, revision = rev, reset = update.reset)
         }
     }
 
