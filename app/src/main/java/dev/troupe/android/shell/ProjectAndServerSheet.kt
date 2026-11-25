@@ -370,7 +370,10 @@ internal fun AddProjectContent(
         browseError = null
         scope.launch {
             val token = tokenProvider()
-            when (val res = projectApi.browseDirectory(server.address, token, path)) {
+            val res = projectApi.browseDirectory(server.address, token, path)
+            // Another folder was asked for meanwhile: a late answer must not replace it.
+            if (requestedPath != path) return@launch
+            when (res) {
                 is ApiResult.Ok -> {
                     currentBrowse = res.value
                     if (selectedPath.isBlank() || path != null) {
@@ -418,7 +421,7 @@ internal fun AddProjectContent(
             singleLine = true,
             // Go opens the typed folder: the way to one the list below does not show.
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-            keyboardActions = KeyboardActions(onGo = { loadDir(selectedPath.trim()) }),
+            keyboardActions = KeyboardActions(onGo = { selectedPath.trim().takeIf { it.isNotEmpty() }?.let { loadDir(it) } }),
             textStyle = typo.bodyLarge,
             modifier = Modifier.fillMaxWidth(),
             colors = OutlinedTextFieldDefaults.colors(

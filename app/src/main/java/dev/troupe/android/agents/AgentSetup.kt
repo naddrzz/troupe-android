@@ -96,7 +96,19 @@ class AgentSetup(
     suspend fun install(agent: CatalogAgent) {
         if (agent.id in _state.value.installing) return
         _state.update { it.copy(installing = it.installing + agent.id, error = null) }
-        val error = try {
+        try {
+            val error = requestInstall(agent)
+            refresh()
+            _state.update { it.copy(error = error ?: it.error) }
+        } finally {
+            // Also when the caller is cancelled: a stale id would refuse every later install.
+            _state.update { it.copy(installing = it.installing - agent.id) }
+        }
+    }
+
+    /** Null when the agent is installed, saved and picked; otherwise what to tell the user. */
+    private suspend fun requestInstall(agent: CatalogAgent): String? =
+        try {
             val reply = socket.request(
                 "install_acp_agent",
                 buildJsonObject { put("agentId", agent.id) },
@@ -122,9 +134,6 @@ class AgentSetup(
         } catch (e: IOException) {
             "Lost the connection while installing ${agent.name}. Check again in a moment."
         }
-        refresh()
-        _state.update { it.copy(installing = it.installing - agent.id, error = error ?: it.error) }
-    }
 
     /**
      * Adds [config] to `acp/agents` unless one with its id is there. The list is read first, so

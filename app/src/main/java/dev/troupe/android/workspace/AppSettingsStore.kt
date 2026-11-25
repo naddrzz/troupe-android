@@ -294,7 +294,8 @@ class AppSettingsStore @Inject constructor() {
         val obj = element as? JsonObject ?: return
         // A field the server changed since its last known copy is the server's now: an edit of it
         // still waiting here must not undo that. The other waiting edits stay on screen until sent.
-        val known = perServer[serverId]?.rawJson
+        // Before the first snapshot there is no known copy: an edit made by then is kept.
+        val known = perServer[serverId]?.rawJson?.takeIf { serverId in loadedServers.value }
         val waiting = unsentChanges.computeIfPresent(serverId) { _, pending ->
             pending.filterNot { (field, _) -> known != null && obj[field] != known[field] }.ifEmpty { null }
         }.orEmpty()

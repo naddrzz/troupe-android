@@ -423,9 +423,16 @@ class WorkspaceSessionManager @Inject constructor(
             _state.update { it.copy(bannerMessage = "Server is in View-only mode.") }
             return
         }
-        val existing = _state.value.terminals.map { it.id }
         scope.launch {
-            existing.forEach { killTerminalSuspend(server, project.id, it) }
+            // This Project's own list, asked for now: the one in state can still be the previous
+            // Project's just after a switch, and closing those would hit the wrong Project.
+            val existing = refreshProjectTerminals(project.id)
+            if (existing == null) {
+                _state.update { it.copy(bannerMessage = "Could not list this Project's terminals.") }
+                return@launch
+            }
+            // A Terminal that will not close stops the restore: its banner stays, nothing is added.
+            if (existing.any { !killTerminalSuspend(server, project.id, it.id) }) return@launch
             cwds.forEach { spawnTerminalSuspend(server, project, it) }
         }
     }
@@ -946,14 +953,15 @@ class WorkspaceSessionManager @Inject constructor(
         }
     }
 
-    private suspend fun refreshProjectTerminals(projectId: String) {
-        val server = _state.value.activeServer ?: return
-        if (_state.value.viewOnly) return
-        try {
+    /** Reads [projectId]'s running Terminals into state; returns them, or null when they could not be read. */
+    private suspend fun refreshProjectTerminals(projectId: String): List<PreservedTerminal>? {
+        val server = _state.value.activeServer ?: return null
+        if (_state.value.viewOnly) return null
+        return try {
             val socket = terminalConnections.socket(server.id)
             val decoded = terminalsMutex.withLock {
                 val reply = socket.request("list_preserved", buildJsonObject { put("projectId", projectId) })
-                if (!reply.success || reply.data == null) return
+                if (!reply.success || reply.data == null) return null
                 // `list_preserved` reissues the claim of every Terminal that is not attached.
                 TroupeJson.decodeFromJsonElement(PreservedTerminals.serializer(), reply.data).also { list ->
                     list.terminals.forEach { t -> t.claim?.let { terminalCursors.putClaim(server.id, t.id, it) } }
@@ -962,8 +970,10 @@ class WorkspaceSessionManager @Inject constructor(
             if (_state.value.activeProjectId == projectId) {
                 _state.update { it.copy(terminals = decoded.terminals) }
             }
+            decoded.terminals
         } catch (_: IOException) {
             // Terminal socket reconnects in background.
+            null
         }
     }
 }
