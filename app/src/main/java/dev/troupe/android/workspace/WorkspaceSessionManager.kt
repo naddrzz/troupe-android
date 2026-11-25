@@ -28,6 +28,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -36,6 +37,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -77,6 +80,7 @@ data class WorkspaceShellState(
     val sessions: List<SessionSummary> = emptyList(),
     val sessionStates: Map<String, SessionLiveState> = emptyMap(),
     val attentionItems: List<AttentionItem> = emptyList(),
+    val attentionItemsByServer: Map<String, List<AttentionItem>> = emptyMap(),
     val terminals: List<PreservedTerminal> = emptyList(),
     val terminalNames: Map<String, String> = emptyMap(),
     val agents: List<AgentDescriptor> = emptyList(),
@@ -90,22 +94,18 @@ data class WorkspaceShellState(
     val activeWorktreePath: String?
         get() = activeProject?.let { worktreePickByProject[it.id] ?: it.path }
 
-    /** Number of chats in the active project needing user attention, excluding the currently visible chat. */
+    /**
+     * Number of chats on the active Paired Server needing user attention, excluding the currently
+     * visible chat (spans all Projects on the server so nothing waiting in another Project is missed).
+     */
     fun otherAttentionCount(): Int {
         val visibleChatId = (workspace.activeTab as? WorkspaceTab.AgentChat)?.sessionId
-        val projectId = activeProject?.id
         val attentionFromCenter = attentionItems
-            .filter { item ->
-                item.sessionId != visibleChatId &&
-                    (projectId == null || sessions.firstOrNull { it.sessionId == item.sessionId }?.projectId == projectId)
-            }
+            .filter { it.sessionId != visibleChatId }
             .map { it.sessionId }
             .toSet()
         val attentionFromActivity = sessionStates
-            .filter { (sid, st) ->
-                st == SessionLiveState.NeedsYou && sid != visibleChatId &&
-                    (projectId == null || sessions.firstOrNull { it.sessionId == sid }?.projectId == projectId)
-            }
+            .filter { (sid, st) -> st == SessionLiveState.NeedsYou && sid != visibleChatId }
             .keys
         return (attentionFromCenter + attentionFromActivity).size
     }
@@ -140,6 +140,9 @@ class WorkspaceSessionManager @Inject constructor(
     @Volatile private var activeConnection: ChatConnection? = null
     @Volatile private var activeWatchHub: WatchHub? = null
     @Volatile private var activeStoreClient: WebStoreClient? = null
+    @Volatile private var explicitProjectSelection: Boolean = false
+    private val sessionMutex = Mutex()
+    private var pendingTransferWrites: Pair<String, WebStoreClient.UnsentWrites>? = null
     private var sessionJob: Job? = null
     private var terminalsWatchJob: Job? = null
     private var started = false
@@ -148,11 +151,46 @@ class WorkspaceSessionManager @Inject constructor(
         if (started) return
         started = true
         scope.launch {
+            attentionCenter.servers.collect { byServer ->
+                val mapped = byServer.mapValues { it.value.items }
+                _state.update { cur ->
+                    val activeId = cur.activeServer?.id
+                    cur.copy(
+                        attentionItemsByServer = mapped,
+                        attentionItems = activeId?.let { mapped[it] }.orEmpty(),
+                    )
+                }
+            }
+        }
+        scope.launch {
             combine(repository.servers, repository.activeServerId) { servers, activeId ->
                 servers to servers.firstOrNull { it.id == activeId }
             }.distinctUntilChanged().collect { (servers, active) ->
-                val previousId = _state.value.activeServer?.id
-                _state.update { it.copy(servers = servers, activeServer = active, loading = active != null && previousId != active.id) }
+                val prevState = _state.value
+                val previousId = prevState.activeServer?.id
+                val currentServerIds = servers.map { it.id }.toSet()
+                prevState.servers.forEach { old ->
+                    if (old.id !in currentServerIds) appSettingsStore.forget(old.id)
+                }
+                val switchingServer = active != null && previousId != null && previousId != active.id
+                _state.update { cur ->
+                    if (switchingServer) {
+                        WorkspaceShellState(
+                            loading = true,
+                            activeServer = active,
+                            servers = servers,
+                            attentionItems = cur.attentionItemsByServer[active.id].orEmpty(),
+                            attentionItemsByServer = cur.attentionItemsByServer,
+                        )
+                    } else {
+                        cur.copy(
+                            servers = servers,
+                            activeServer = active,
+                            attentionItems = active?.id?.let { cur.attentionItemsByServer[it] }.orEmpty(),
+                            loading = active != null && previousId != active.id,
+                        )
+                    }
+                }
                 if (active == null) {
                     detachActiveSession()
                 } else if (previousId != active.id || activeConnection == null) {
@@ -186,7 +224,7 @@ class WorkspaceSessionManager @Inject constructor(
         scope.launch {
             repository.updateToken(server.id, clean)
             chatConnections.resetConnection(server.id)
-            attachToServer(server.copy(hasToken = true))
+            attachToServer(server.copy(hasToken = true), rebindingSameServer = true)
         }
     }
 
@@ -212,6 +250,7 @@ class WorkspaceSessionManager @Inject constructor(
     fun selectProject(projectId: String) {
         val current = _state.value
         if (current.activeProjectId == projectId) return
+        explicitProjectSelection = true
         current.activeProjectId?.let { oldId ->
             parkedWorkspaces[oldId] = current.workspace
         }
@@ -267,17 +306,21 @@ class WorkspaceSessionManager @Inject constructor(
         }
     }
 
-    fun openChat(sessionId: String, title: String? = null) {
-        val summary = _state.value.sessions.firstOrNull { it.sessionId == sessionId }
-        val resolvedProject = summary?.projectId
-        if (resolvedProject != null && resolvedProject != _state.value.activeProjectId && _state.value.projects.any { it.id == resolvedProject }) {
-            selectProject(resolvedProject)
+    fun openChat(sessionId: String, title: String? = null, projectId: String? = null) {
+        val cur = _state.value
+        val summary = cur.sessions.firstOrNull { it.sessionId == sessionId }
+        val attentionItem = cur.attentionItems.firstOrNull { it.sessionId == sessionId }
+        val resolvedProject = projectId ?: summary?.projectId ?: attentionItem?.projectId
+        if (resolvedProject != null && resolvedProject != cur.activeProjectId) {
+            if (cur.projects.isEmpty() || cur.projects.any { it.id == resolvedProject && !it.isArchived }) {
+                selectProject(resolvedProject)
+            }
         }
         openTab(
             WorkspaceTab.AgentChat(
                 id = WorkspaceTabIds.chat(sessionId),
                 sessionId = sessionId,
-                title = title ?: summary?.title,
+                title = title ?: summary?.title ?: attentionItem?.sessionTitle,
             ),
         )
     }
@@ -480,16 +523,21 @@ class WorkspaceSessionManager @Inject constructor(
         }
     }
 
-    private suspend fun detachActiveSession() {
-        activeStoreClient?.flushAll()
-        sessionJob?.cancel()
+    private suspend fun detachActiveSession() = sessionMutex.withLock {
+        pendingTransferWrites?.second?.abandon("Session detached")
+        pendingTransferWrites = null
+        val oldStore = activeStoreClient
+        oldStore?.flushAll()
+        sessionJob?.cancelAndJoin()
         sessionJob = null
+        oldStore?.drainUnsentWrites()?.abandon("Session detached")
         terminalsWatchJob?.cancel()
         terminalsWatchJob = null
         appSettingsStore.detach()
         activeConnection = null
         activeWatchHub = null
         activeStoreClient = null
+        explicitProjectSelection = false
         hydratedServerId.value = null
         parkedWorkspaces.clear()
         hydratedProjects.clear()
@@ -497,16 +545,63 @@ class WorkspaceSessionManager @Inject constructor(
             WorkspaceShellState(
                 loading = false,
                 servers = it.servers,
+                attentionItemsByServer = it.attentionItemsByServer,
             )
         }
     }
 
-    private suspend fun attachToServer(server: PairedServer) {
-        activeStoreClient?.flushAll()
-        sessionJob?.cancel()
-        terminalsWatchJob?.cancel()
+    private suspend fun attachToServer(server: PairedServer, rebindingSameServer: Boolean = false) = sessionMutex.withLock {
+        attachToServerLocked(server, rebindingSameServer)
+    }
+
+    private suspend fun reattachIfClosed(serverId: String, closedConn: ChatConnection) = sessionMutex.withLock {
+        val currentActive = _state.value.activeServer ?: return@withLock
+        if (currentActive.id != serverId || activeConnection !== closedConn) return@withLock
+        attachToServerLocked(currentActive, rebindingSameServer = true)
+    }
+
+    private suspend fun attachToServerLocked(server: PairedServer, rebindingSameServer: Boolean) {
+        val oldStore = activeStoreClient
+        val carriedWrites: WebStoreClient.UnsentWrites?
+        if (rebindingSameServer) {
+            // The previous connection was already invalidated/stopped; cancel its session scope first
+            // and drain unsent writes without attempting I/O on the dead socket.
+            sessionJob?.cancelAndJoin()
+            sessionJob = null
+            terminalsWatchJob?.cancel()
+            terminalsWatchJob = null
+            val drained = oldStore?.drainUnsentWrites()
+            val previous = pendingTransferWrites?.takeIf { it.first == server.id }?.second
+            if (pendingTransferWrites != null && pendingTransferWrites?.first != server.id) {
+                pendingTransferWrites?.second?.abandon("Switched server")
+            }
+            carriedWrites = when {
+                previous != null && drained != null -> previous.mergeWith(drained)
+                drained != null && !drained.isEmpty() -> drained
+                else -> previous
+            }
+            pendingTransferWrites = carriedWrites?.takeUnless { it.isEmpty() }?.let { server.id to it }
+        } else {
+            if (pendingTransferWrites != null && pendingTransferWrites?.first != server.id) {
+                pendingTransferWrites?.second?.abandon("Switched server")
+                pendingTransferWrites = null
+            }
+            oldStore?.flushAll()
+            sessionJob?.cancelAndJoin()
+            sessionJob = null
+            oldStore?.drainUnsentWrites()?.abandon("Switched server")
+            terminalsWatchJob?.cancel()
+            terminalsWatchJob = null
+            carriedWrites = pendingTransferWrites?.takeIf { it.first == server.id }?.second
+        }
+        activeConnection = null
+        activeWatchHub = null
+        activeStoreClient = null
+        if (!rebindingSameServer) {
+            explicitProjectSelection = false
+            parkedWorkspaces.clear()
+        }
         hydratedServerId.value = null
-        parkedWorkspaces.clear()
         hydratedProjects.clear()
         appSettingsStore.detach()
 
@@ -525,15 +620,33 @@ class WorkspaceSessionManager @Inject constructor(
             return
         }
 
+        val writesToAdopt = carriedWrites?.takeUnless { it.isEmpty() }
+
         activeConnection = conn
         val deviceId = identityStore.get().deviceId
+        val adopted = kotlinx.coroutines.CompletableDeferred<Unit>()
 
         sessionJob = scope.launch {
-            val hub = WatchHub(conn, this)
+            val hub = conn.watchHub
             val store = WebStoreClient(conn, hub, deviceId, this)
-            activeWatchHub = hub
-            activeStoreClient = store
-            appSettingsStore.attach(store, this)
+            try {
+                if (writesToAdopt != null) {
+                    store.adoptUnsentWrites(writesToAdopt, retryImmediately = false)
+                }
+                activeWatchHub = hub
+                activeStoreClient = store
+            } finally {
+                adopted.complete(Unit)
+            }
+            appSettingsStore.attach(server.id, store, this)
+
+            // Rebind automatically if ChatConnections invalidates this connection (e.g. token update / re-pair).
+            launch {
+                conn.awaitClosed()
+                if (activeConnection === conn && _state.value.activeServer?.id == server.id) {
+                    scope.launch { reattachIfClosed(server.id, conn) }
+                }
+            }
 
             // Track connection state & mid-session 401 -> TokenGateScreen
             launch {
@@ -554,13 +667,6 @@ class WorkspaceSessionManager @Inject constructor(
             launch {
                 viewOnlyRegistry.state(server.id).collect { vo ->
                     _state.update { it.copy(viewOnly = vo) }
-                }
-            }
-
-            // Track AttentionCenter items for this server
-            launch {
-                attentionCenter.attention(server.id).collect { items ->
-                    _state.update { it.copy(attentionItems = items) }
                 }
             }
 
@@ -621,13 +727,18 @@ class WorkspaceSessionManager @Inject constructor(
                 }
             }
 
-            // Hydrate device-scoped active project + shell layout once connected
+            // Flush any carried writes before hydrating device-scoped active project + shell layout
             launch {
                 conn.generation.collect { gen ->
                     if (gen <= 0) return@collect
+                    store.flushPendingRetries()
                     hydrateDeviceState(server.id, store, conn)
                 }
             }
+        }
+        adopted.await()
+        if (pendingTransferWrites?.first == server.id) {
+            pendingTransferWrites = null
         }
     }
 
@@ -647,6 +758,9 @@ class WorkspaceSessionManager @Inject constructor(
         }
         val currentProjects = _state.value.projects.filterNot { it.isArchived }
         val resolvedId = when {
+            explicitProjectSelection && _state.value.activeProjectId != null &&
+                (currentProjects.isEmpty() || currentProjects.any { it.id == _state.value.activeProjectId }) ->
+                _state.value.activeProjectId
             savedProjectId != null && currentProjects.any { it.id == savedProjectId } -> savedProjectId
             _state.value.activeProjectId != null && currentProjects.any { it.id == _state.value.activeProjectId } -> _state.value.activeProjectId
             _state.value.defaultProjectId != null -> _state.value.defaultProjectId
@@ -716,7 +830,16 @@ class WorkspaceSessionManager @Inject constructor(
                 if (previousActiveId != null) {
                     parkedWorkspaces[previousActiveId] = cur.workspace
                 }
-                if (nextActive != null) parkedWorkspaces[nextActive] ?: PersistedWorkspace() else PersistedWorkspace()
+                val base = if (nextActive != null) parkedWorkspaces[nextActive] ?: PersistedWorkspace() else PersistedWorkspace()
+                if (previousActiveId == null && cur.workspace.tabs.isNotEmpty()) {
+                    var merged = base
+                    for (t in cur.workspace.tabs) merged = merged.openOrFocus(t)
+                    merged.copy(activeTabId = cur.workspace.activeTabId ?: merged.activeTabId).also {
+                        if (nextActive != null) parkedWorkspaces[nextActive] = it
+                    }
+                } else {
+                    base
+                }
             } else {
                 cur.workspace
             }
@@ -762,23 +885,8 @@ class WorkspaceSessionManager @Inject constructor(
     }
 
     private fun applyChatActivity(obj: JsonObject, reset: Boolean) {
-        val entries = (obj["sessions"] as? JsonObject) ?: obj
         _state.update { cur ->
-            val next = if (reset) LinkedHashMap() else LinkedHashMap(cur.sessionStates)
-            for ((sid, el) in entries) {
-                val info = el as? JsonObject ?: continue
-                val status = when {
-                    info["needsUser"]?.jsonPrimitive?.booleanOrNull == true ||
-                        info["pendingApproval"]?.jsonPrimitive?.booleanOrNull == true ||
-                        info["status"]?.jsonPrimitive?.contentOrNull == "needs_user" -> SessionLiveState.NeedsYou
-                    info["turnActive"]?.jsonPrimitive?.booleanOrNull == true ||
-                        info["status"]?.jsonPrimitive?.contentOrNull == "running" -> SessionLiveState.Running
-                    info["status"]?.jsonPrimitive?.contentOrNull == "error" -> SessionLiveState.Error
-                    else -> SessionLiveState.Idle
-                }
-                next[sid] = status
-            }
-            cur.copy(sessionStates = next)
+            cur.copy(sessionStates = applyChatActivityUpdate(cur.sessionStates, obj, reset))
         }
     }
 
@@ -816,5 +924,46 @@ class WorkspaceSessionManager @Inject constructor(
         } catch (_: IOException) {
             // Terminal socket reconnects in background.
         }
+    }
+}
+
+/**
+ * Applies one `chat_activity` watch frame onto [current]. Supports both the canonical Troupe
+ * Server wire shapes (`{sessions: {sid: {busy, needsYou, turnEnd}}}` on reset and flat
+ * `{sessionId, busy, needsYou, turnEnd}` on delta) and legacy map shapes.
+ */
+internal fun applyChatActivityUpdate(
+    current: Map<String, SessionLiveState>,
+    obj: JsonObject,
+    reset: Boolean,
+): Map<String, SessionLiveState> {
+    val next = if (reset) LinkedHashMap() else LinkedHashMap(current)
+    val deltaSessionId = (obj["sessionId"] as? JsonPrimitive)?.contentOrNull
+    if (deltaSessionId != null && obj["sessions"] !is JsonObject) {
+        next[deltaSessionId] = classifyChatActivityRecord(obj)
+        return next
+    }
+    val entries = (obj["sessions"] as? JsonObject) ?: obj
+    for ((sid, el) in entries) {
+        val info = el as? JsonObject ?: continue
+        next[sid] = classifyChatActivityRecord(info)
+    }
+    return next
+}
+
+private fun classifyChatActivityRecord(info: JsonObject): SessionLiveState {
+    val turnEndReason = (info["turnEnd"] as? JsonObject)?.get("stopReason")?.jsonPrimitive?.contentOrNull
+    return when {
+        info["needsYou"]?.jsonPrimitive?.booleanOrNull == true ||
+            info["needsUser"]?.jsonPrimitive?.booleanOrNull == true ||
+            info["pendingApproval"]?.jsonPrimitive?.booleanOrNull == true ||
+            info["status"]?.jsonPrimitive?.contentOrNull == "needs_user" -> SessionLiveState.NeedsYou
+        info["busy"]?.jsonPrimitive?.booleanOrNull == true ||
+            info["turnActive"]?.jsonPrimitive?.booleanOrNull == true ||
+            info["status"]?.jsonPrimitive?.contentOrNull == "running" -> SessionLiveState.Running
+        info["status"]?.jsonPrimitive?.contentOrNull == "error" ||
+            turnEndReason == "error" ||
+            turnEndReason == "crashed" -> SessionLiveState.Error
+        else -> SessionLiveState.Idle
     }
 }

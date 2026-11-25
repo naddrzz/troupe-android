@@ -65,6 +65,8 @@ class FakeChatServer internal constructor(
     @Volatile var replayBeforeReply: Boolean = true
     /** Request types the host receives but never answers, as a host that hangs on them. */
     @Volatile var unanswered: Set<String> = emptySet()
+    /** true: include authoritative `pendingQuestions` on subscribe/snapshot replies (newer Troupe Server). */
+    @Volatile var sendPendingQuestions: Boolean = false
     val sessions: MutableMap<String, Session> = ConcurrentHashMap()
     /** Every request frame the app sent on `/ws`, parsed. */
     val requests: MutableList<JsonObject> = CopyOnWriteArrayList()
@@ -216,6 +218,7 @@ class FakeChatServer internal constructor(
                 !authed -> reply(id, Err("unauthorized", "Unauthorized"))
                 type in unanswered -> Unit
                 type == "watch" -> watch(id, payload)
+                type == "unwatch" -> unwatch(id, payload)
                 type == "list_persisted_sessions" -> reply(id, JsonArray(history))
                 type == "subscribe" -> subscribe(id, payload)
                 type == "recover_session_snapshot" -> snapshot(id, payload)
@@ -257,6 +260,13 @@ class FakeChatServer internal constructor(
             })
         }
 
+        private fun unwatch(id: String, payload: JsonObject) = synchronized(lock) {
+            if (payload["watch"]?.jsonPrimitive?.contentOrNull == "chat_history") {
+                watchN = 0
+            }
+            reply(id, JsonObject(emptyMap()))
+        }
+
         private fun subscribe(id: String, payload: JsonObject) = synchronized(lock) {
             val sid = payload["sessionId"]?.jsonPrimitive?.contentOrNull.orEmpty()
             val session = sessions[sid] ?: return@synchronized reply(id, Err("not_found", "session not found"))
@@ -273,6 +283,7 @@ class FakeChatServer internal constructor(
                 put("logEpoch", session.logEpoch)
                 put("headSeq", session.head)
                 put("pendingPermissions", JsonArray(session.permissions.toList()))
+                if (sendPendingQuestions) put("pendingQuestions", JsonArray(session.questions.toList()))
             }
             if (replayBeforeReply) {
                 replay.forEach(::send)
@@ -294,6 +305,7 @@ class FakeChatServer internal constructor(
                 put("logEpoch", session.logEpoch)
                 put("events", JsonArray(session.events.toList()))
                 put("pendingPermissions", JsonArray(session.permissions.toList()))
+                if (sendPendingQuestions) put("pendingQuestions", JsonArray(session.questions.toList()))
             })
         }
 

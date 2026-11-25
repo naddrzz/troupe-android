@@ -52,13 +52,15 @@ class XtermWebViewRenderer(
     private val pending = ByteArrayOutputStream() // guarded by lock
     private var flushScheduled = false // guarded by lock
     private var ready = false // guarded by lock
+    private var destroyed = false // guarded by lock
+    private var pendingFocus = false // guarded by lock
     @Volatile private var palette: AnsiPalette = initialPalette
     @Volatile private var currentFontSizePx: Int = initialFontSizePx
     private val flush = Runnable { flush() }
 
     init {
         if (webView is TroupeTerminalWebView) {
-            webView.onEnterKey = { typed.trySend("\r") }
+            webView.onEnterKey = { sendEnter() }
         }
         val assets = WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(webView.context))
@@ -98,6 +100,7 @@ class XtermWebViewRenderer(
         val json = TroupeJson.encodeToString(AnsiPalette.serializer(), next)
         val escaped = json.replace("\\", "\\\\").replace("'", "\\'")
         main.post {
+            if (isDestroyed()) return@post
             webView.setBackgroundColor(android.graphics.Color.parseColor(next.background))
             if (isReady()) webView.evaluateJavascript("troupe.setTheme('$escaped')", null)
         }
@@ -113,6 +116,7 @@ class XtermWebViewRenderer(
 
     override fun write(bytes: ByteArray) {
         synchronized(lock) {
+            if (destroyed) return
             pending.write(bytes)
             // A page that never becomes ready must not hold output without bound: keep the newest.
             if (pending.size() > MAX_PENDING) {
@@ -127,33 +131,83 @@ class XtermWebViewRenderer(
     }
 
     override fun reset() {
-        synchronized(lock) { pending.reset() }
+        synchronized(lock) {
+            if (destroyed) return
+            pending.reset()
+        }
         main.post { if (isReady()) webView.evaluateJavascript("troupe.reset()", null) }
     }
 
     override fun focus() {
+        synchronized(lock) {
+            if (destroyed) return
+            if (!ready) pendingFocus = true
+        }
         main.post {
+            if (isDestroyed()) return@post
             webView.requestFocus()
             if (isReady()) webView.evaluateJavascript("troupe.focus()", null)
         }
     }
 
+    /**
+     * Moves DOM focus to xterm's textarea when the Android WebView already holds View focus.
+     * If called before the page signals `onReady()`, remembers the request and applies it on ready.
+     */
+    fun focusDom() {
+        val applyNow = synchronized(lock) {
+            if (destroyed) return
+            if (ready) {
+                true
+            } else {
+                pendingFocus = true
+                false
+            }
+        }
+        if (applyNow) {
+            main.post {
+                if (isReady()) webView.evaluateJavascript("troupe.focus()", null)
+            }
+        }
+    }
+
+    private fun sendEnter() {
+        main.post {
+            val (alive, pageReady) = synchronized(lock) { !destroyed to ready }
+            if (!alive) return@post
+            if (pageReady) {
+                webView.evaluateJavascript("troupe.sendEnter()", null)
+            } else {
+                typed.trySend("\r")
+            }
+        }
+    }
+
     /** Releases the WebView. The renderer is unusable afterwards. */
     fun destroy() {
-        main.removeCallbacks(flush)
+        synchronized(lock) {
+            destroyed = true
+            ready = false
+            pendingFocus = false
+            flushScheduled = false
+            pending.reset()
+        }
+        main.removeCallbacksAndMessages(null)
         if (webView is TroupeTerminalWebView) webView.onEnterKey = null
         typed.close()
         webView.removeJavascriptInterface("TroupeBridge")
         webView.destroy()
     }
 
-    private fun isReady() = synchronized(lock) { ready }
+    private fun isReady() = synchronized(lock) { !destroyed && ready }
+
+    private fun isDestroyed() = synchronized(lock) { destroyed }
 
     private fun flush() {
         val bytes = synchronized(lock) {
             flushScheduled = false
             // Not loaded yet: keep the bytes; onReady flushes them.
-            if (!ready || pending.size() == 0) return
+            if (destroyed || !ready || pending.size() == 0) return
             pending.toByteArray().also { pending.reset() }
         }
         webView.evaluateJavascript("troupe.write('${Base64.encodeToString(bytes, Base64.NO_WRAP)}')", null)
@@ -178,11 +232,19 @@ class XtermWebViewRenderer(
 
         @JavascriptInterface
         fun onReady() {
-            synchronized(lock) { ready = true }
+            val shouldFocus = synchronized(lock) {
+                if (destroyed) return
+                ready = true
+                pendingFocus.also { pendingFocus = false }
+            }
             main.post {
+                if (!isReady()) return@post
                 val size = currentFontSizePx
                 if (size != 14) {
                     webView.evaluateJavascript("troupe.setFontSize($size)", null)
+                }
+                if (shouldFocus || webView.hasFocus()) {
+                    webView.evaluateJavascript("troupe.focus()", null)
                 }
                 flush()
             }
@@ -197,50 +259,75 @@ class XtermWebViewRenderer(
 }
 
 /**
- * Custom [WebView] fixing troupe-android #16 (Android soft keyboard Enter key dropped by xterm's
- * hidden `<textarea>` on Gboard / Samsung Keyboard). Intercepts IME Enter actions and newline
- * commits at the [android.view.inputmethod.InputConnection] boundary and forwards `\r` directly.
+ * Custom [WebView] fixing troupe-android #16 (Android soft keyboard, Pinyin IME, and hardware/`adb
+ * input keyevent` Enter dropped by xterm's hidden `<textarea>`). Intercepts Enter at both
+ * [dispatchKeyEvent] and the [android.view.inputmethod.InputConnection] boundary, commits any
+ * active composing span first, and forwards `\r` through xterm on the Blink main thread.
  */
 class TroupeTerminalWebView(context: android.content.Context) : WebView(context) {
     var onEnterKey: (() -> Unit)? = null
+    private var activeInputConnection: java.lang.ref.WeakReference<android.view.inputmethod.InputConnection>? = null
+
+    init {
+        isFocusable = true
+        isFocusableInTouchMode = true
+    }
+
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        val handled = TerminalEnterHandler.handleKeyEvent(
+            action = event.action,
+            keyCode = event.keyCode,
+            repeatCount = event.repeatCount,
+            isAltPressed = event.isAltPressed,
+            isCtrlPressed = event.isCtrlPressed,
+            isMetaPressed = event.isMetaPressed,
+            finishComposing = { activeInputConnection?.get()?.finishComposingText() },
+            onEnter = { onEnterKey?.invoke() },
+        )
+        return handled || super.dispatchKeyEvent(event)
+    }
 
     override fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo): android.view.inputmethod.InputConnection? {
         val base = super.onCreateInputConnection(outAttrs) ?: return null
         outAttrs.imeOptions = (outAttrs.imeOptions and android.view.inputmethod.EditorInfo.IME_MASK_ACTION.inv()) or
             android.view.inputmethod.EditorInfo.IME_ACTION_SEND or
             android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
-        return object : android.view.inputmethod.InputConnectionWrapper(base, true) {
+        return wrapInputConnection(base).also { activeInputConnection = java.lang.ref.WeakReference(it) }
+    }
+
+    internal fun wrapInputConnection(base: android.view.inputmethod.InputConnection): android.view.inputmethod.InputConnection =
+        object : android.view.inputmethod.InputConnectionWrapper(base, true) {
             override fun performEditorAction(editorAction: Int): Boolean {
-                if (editorAction == android.view.inputmethod.EditorInfo.IME_ACTION_SEND ||
-                    editorAction == android.view.inputmethod.EditorInfo.IME_ACTION_DONE ||
-                    editorAction == android.view.inputmethod.EditorInfo.IME_ACTION_GO ||
-                    editorAction == android.view.inputmethod.EditorInfo.IME_ACTION_UNSPECIFIED
-                ) {
-                    onEnterKey?.invoke()
-                    return true
-                }
-                return super.performEditorAction(editorAction)
+                val handled = TerminalEnterHandler.handleEditorAction(
+                    editorAction = editorAction,
+                    finishComposing = { finishComposingText() },
+                    onEnter = { onEnterKey?.invoke() },
+                )
+                return handled || super.performEditorAction(editorAction)
             }
 
             override fun sendKeyEvent(event: android.view.KeyEvent): Boolean {
-                if (event.keyCode == android.view.KeyEvent.KEYCODE_ENTER ||
-                    event.keyCode == android.view.KeyEvent.KEYCODE_NUMPAD_ENTER
-                ) {
-                    if (event.action == android.view.KeyEvent.ACTION_DOWN) {
-                        onEnterKey?.invoke()
-                    }
-                    return true
-                }
-                return super.sendKeyEvent(event)
+                val handled = TerminalEnterHandler.handleKeyEvent(
+                    action = event.action,
+                    keyCode = event.keyCode,
+                    repeatCount = event.repeatCount,
+                    isAltPressed = event.isAltPressed,
+                    isCtrlPressed = event.isCtrlPressed,
+                    isMetaPressed = event.isMetaPressed,
+                    finishComposing = { finishComposingText() },
+                    onEnter = { onEnterKey?.invoke() },
+                )
+                return handled || super.sendKeyEvent(event)
             }
 
             override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
-                if (text != null && (text.toString() == "\n" || text.toString() == "\r")) {
-                    onEnterKey?.invoke()
-                    return true
-                }
-                return super.commitText(text, newCursorPosition)
+                val handled = TerminalEnterHandler.handleCommitText(
+                    text = text,
+                    commitChunk = { chunk -> super.commitText(chunk, 1) },
+                    finishComposing = { finishComposingText() },
+                    onEnter = { onEnterKey?.invoke() },
+                )
+                return handled || super.commitText(text, newCursorPosition)
             }
         }
-    }
 }

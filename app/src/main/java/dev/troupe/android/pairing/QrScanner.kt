@@ -69,8 +69,7 @@ fun QrScanner(onResult: (String) -> Unit, onUsePaste: () -> Unit) {
 
     if (granted) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            CameraPreview(onResult)
-            Text(stringResource(R.string.pair_scan_hint), style = MaterialTheme.typography.bodyMedium)
+            CameraPreview(onResult = onResult, onUsePaste = onUsePaste)
         }
         return
     }
@@ -97,12 +96,13 @@ fun QrScanner(onResult: (String) -> Unit, onUsePaste: () -> Unit) {
 
 /** CameraX preview with ML Kit's bundled barcode model, limited to QR codes. */
 @Composable
-private fun CameraPreview(onResult: (String) -> Unit) {
+private fun CameraPreview(onResult: (String) -> Unit, onUsePaste: () -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val latest by rememberUpdatedState(onResult)
     val previewView = remember { PreviewView(context) }
     val description = stringResource(R.string.pair_scan_preview_description)
+    var cameraUnavailable by remember { mutableStateOf(false) }
 
     DisposableEffect(lifecycleOwner) {
         val scanner = BarcodeScanning.getClient(
@@ -110,22 +110,64 @@ private fun CameraPreview(onResult: (String) -> Unit) {
         )
         val executor = ContextCompat.getMainExecutor(context)
         val sightings = QrSightings()
-        val controller = LifecycleCameraController(context).apply {
-            setEnabledUseCases(CameraController.IMAGE_ANALYSIS)
-            setImageAnalysisAnalyzer(
-                executor,
-                MlKitAnalyzer(listOf(scanner), ImageAnalysis.COORDINATE_SYSTEM_ORIGINAL, executor) { result ->
-                    sightings.next(result.getValue(scanner)?.firstNotNullOfOrNull { it.rawValue })?.let { latest(it) }
+        var disposed = false
+        val controller = runCatching {
+            LifecycleCameraController(context).apply {
+                setEnabledUseCases(CameraController.IMAGE_ANALYSIS)
+                setImageAnalysisAnalyzer(
+                    executor,
+                    MlKitAnalyzer(listOf(scanner), ImageAnalysis.COORDINATE_SYSTEM_ORIGINAL, executor) { result ->
+                        sightings.next(result.getValue(scanner)?.firstNotNullOfOrNull { it.rawValue })?.let { latest(it) }
+                    },
+                )
+            }
+        }.onFailure {
+            cameraUnavailable = true
+        }.getOrNull()
+
+        if (controller != null) {
+            controller.initializationFuture.addListener(
+                {
+                    if (disposed) return@addListener
+                    val ok = runCatching {
+                        controller.initializationFuture.get()
+                        val hasBack = controller.hasCamera(androidx.camera.core.CameraSelector.DEFAULT_BACK_CAMERA)
+                        val hasFront = controller.hasCamera(androidx.camera.core.CameraSelector.DEFAULT_FRONT_CAMERA)
+                        if (!hasBack && hasFront) {
+                            controller.cameraSelector = androidx.camera.core.CameraSelector.DEFAULT_FRONT_CAMERA
+                        }
+                        if (hasBack || hasFront) {
+                            controller.bindToLifecycle(lifecycleOwner)
+                            true
+                        } else {
+                            false
+                        }
+                    }.getOrDefault(false)
+                    if (ok) {
+                        previewView.controller = controller
+                    } else {
+                        previewView.controller = null
+                        controller.unbind()
+                        cameraUnavailable = true
+                    }
                 },
+                executor,
             )
-            bindToLifecycle(lifecycleOwner)
         }
-        previewView.controller = controller
         onDispose {
+            disposed = true
             previewView.controller = null
-            controller.unbind()
+            controller?.unbind()
             scanner.close()
         }
+    }
+
+    if (cameraUnavailable) {
+        Text(stringResource(R.string.pair_scan_unavailable), style = MaterialTheme.typography.bodyMedium)
+        OutlinedButton(onClick = onUsePaste, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+            Text(stringResource(R.string.pair_scan_use_paste))
+        }
+        return
     }
 
     AndroidView(
@@ -135,6 +177,7 @@ private fun CameraPreview(onResult: (String) -> Unit) {
             .aspectRatio(1f)
             .semantics { contentDescription = description },
     )
+    Text(stringResource(R.string.pair_scan_hint), style = MaterialTheme.typography.bodyMedium)
 }
 
 /**

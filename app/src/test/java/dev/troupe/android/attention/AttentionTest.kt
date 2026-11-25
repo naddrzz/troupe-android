@@ -17,6 +17,7 @@ import dev.troupe.android.testing.payloadString
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.jsonObject
@@ -68,7 +69,7 @@ class AttentionTest {
 
         eventually { keys() == listOf("req-1") }
         assertEquals(
-            AttentionItem(serverId, "req-1", "s1", projectName = "troupe", sessionTitle = "Fix login", AttentionKind.Permission, since = 2_000_000L),
+            AttentionItem(serverId, "req-1", "s1", projectName = "troupe", sessionTitle = "Fix login", AttentionKind.Permission, since = 2_000_000L, projectId = "p-home"),
             items().single(),
         )
     }
@@ -113,7 +114,7 @@ class AttentionTest {
 
         eventually { keys() == listOf("stopped:s9") }
         assertEquals(
-            AttentionItem(serverId, "stopped:s9", "s9", "zeta", "Crashed run", AttentionKind.Stopped, since = 7_000),
+            AttentionItem(serverId, "stopped:s9", "s9", "zeta", "Crashed run", AttentionKind.Stopped, since = 7_000, projectId = "p-zeta"),
             items().single(),
         )
     }
@@ -289,5 +290,56 @@ class AttentionTest {
         val vm = graph.projectsViewModel(serverId)
 
         eventually { vm.attention.value.map { it.key } == listOf("stopped:s9") }
+    }
+
+    @Test fun aQuestionAnsweredElsewhereLeavesOnReconnectWhenHostSendsPendingQuestions() {
+        chat.sendPendingQuestions = true
+        liveSession()
+        start()
+        chat.append("s1", "question_request", questionRequest("s1", "q-1", "Which branch?"))
+        chat.append("s1", "question_request", questionRequest("s1", "q-2", "Deploy now?"))
+        eventually { keys().toSet() == setOf("q-1", "q-2") }
+
+        chat.answerElsewhere("q-1")
+        chat.closeAll(1011)
+
+        eventually { chat.requests("subscribe").size == 2 && keys() == listOf("q-2") }
+    }
+
+    @Test fun aSecondWatchHubSubscriberCancellingDoesNotUnwatchAttentionMonitor() {
+        start()
+        val conn = runBlocking { graph.chatConnections.connection(serverId) }
+        val received = java.util.concurrent.CopyOnWriteArrayList<dev.troupe.android.core.store.WatchUpdate>()
+        val extraWatcher = CoroutineScope(Dispatchers.IO).launch {
+            conn.watchHub.watch(dev.troupe.android.core.store.WatchHub.CHAT_HISTORY).collect { received += it }
+        }
+        eventually { received.isNotEmpty() }
+
+        // Simulates WorkspaceSessionManager detaching from this server when the user switches servers.
+        runBlocking { extraWatcher.cancelAndJoin() }
+
+        liveSession()
+        chat.historyChanged("s1")
+        eventually { chat.requests("subscribe").size == 1 }
+        assertTrue("chat_history stays watched while AttentionMonitor runs", chat.requests("unwatch").isEmpty())
+        chat.append("s1", "permission_request", permissionRequest("s1", "req-1", "Edit Login.kt"))
+        eventually { keys() == listOf("req-1") }
+    }
+
+    @Test fun updatingTheTokenRebindsAttentionToTheReplacementConnection() {
+        liveSession()
+        start()
+        chat.append("s1", "permission_request", permissionRequest("s1", "req-1", "Edit Login.kt"))
+        eventually { keys() == listOf("req-1") }
+
+        // Rotate the server's token and drop the old socket -> auth fails for good.
+        server.token = "rotated-token-1111111111111111"
+        chat.closeAll(1011)
+        eventually { graph.attention.servers.value[serverId] == ServerAttention(ready = false, items = emptyList()) }
+
+        // Updating the token invalidates the failed connection and AttentionCenter rebinds to the replacement.
+        runBlocking { graph.repository.updateToken(serverId, server.token) }
+
+        eventually { graph.attention.servers.value[serverId]?.ready == true && keys() == listOf("req-1") }
     }
 }

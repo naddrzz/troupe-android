@@ -72,10 +72,16 @@ fun ProjectAndServerSheet(
     onCreateProject: (name: String, path: String, color: String, onDone: (String?) -> Unit) -> Unit,
     onSelectServer: (String) -> Unit,
     onAddServer: () -> Unit,
+    onOpenChat: (sessionId: String, title: String?, projectId: String?) -> Unit = { _, _, _ -> },
+    onShowingProjectsRoot: (Boolean) -> Unit = {},
 ) {
     val stack = rememberSheetStack<ProjectSheetRoute>()
     val palette = TroupeTheme.palette
     val typo = TroupeTheme.typography
+
+    LaunchedEffect(stack.top) {
+        onShowingProjectsRoot(stack.top == null)
+    }
 
     val title = when (stack.top) {
         null -> stringResource(R.string.projects_title)
@@ -98,10 +104,18 @@ fun ProjectAndServerSheet(
                     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         // Active Paired Server row -> pushes Servers switcher
                         state.activeServer?.let { server ->
+                            val otherServersAttention = state.attentionItemsByServer
+                                .filterKeys { it != server.id }
+                                .values
+                                .sumOf { it.size }
                             SheetGroup {
                                 SheetRow(
                                     title = server.name,
-                                    subtitle = server.address.host,
+                                    subtitle = if (server.stayConnected) {
+                                        "${server.address.host} · ${stringResource(R.string.servers_stays_connected)}"
+                                    } else {
+                                        server.address.host
+                                    },
                                     leading = {
                                         Icon(
                                             imageVector = TroupeIcons.Server,
@@ -113,8 +127,14 @@ fun ProjectAndServerSheet(
                                     trailing = {
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
                                         ) {
+                                            if (otherServersAttention > 0) {
+                                                dev.troupe.android.core.ui.CountBadge(
+                                                    count = otherServersAttention,
+                                                    tone = palette.warning,
+                                                )
+                                            }
                                             Text(
                                                 text = stringResource(R.string.shell_switch_server),
                                                 style = typo.labelMedium,
@@ -131,6 +151,20 @@ fun ProjectAndServerSheet(
                                     onClick = { stack.push(ProjectSheetRoute.Servers) },
                                 )
                             }
+                        }
+
+                        // Attention rows directly above the Projects list (#12)
+                        if (state.attentionItems.isNotEmpty()) {
+                            dev.troupe.android.attention.AttentionSection(
+                                items = state.attentionItems,
+                                onOpen = { item ->
+                                    onDismiss()
+                                    onOpenChat(item.sessionId, item.sessionTitle, item.projectId)
+                                },
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .border(0.5.dp, palette.warning.copy(alpha = 0.35f), RoundedCornerShape(12.dp)),
+                            )
                         }
 
                         // Active server's projects
@@ -208,6 +242,7 @@ fun ProjectAndServerSheet(
                     ServersSwitcherContent(
                         servers = state.servers,
                         activeServerId = state.activeServer?.id,
+                        attentionByServer = state.attentionItemsByServer,
                         onSelect = { id ->
                             onSelectServer(id)
                             onDismiss()
@@ -244,6 +279,7 @@ fun ProjectAndServerSheet(
 private fun ServersSwitcherContent(
     servers: List<PairedServer>,
     activeServerId: String?,
+    attentionByServer: Map<String, List<dev.troupe.android.attention.AttentionItem>>,
     onSelect: (String) -> Unit,
     onAddServer: () -> Unit,
 ) {
@@ -252,9 +288,15 @@ private fun ServersSwitcherContent(
         SheetGroup {
             servers.forEachIndexed { idx, server ->
                 if (idx > 0) SheetRowDivider()
+                val attentionCount = attentionByServer[server.id]?.size ?: 0
+                val subtitle = if (server.stayConnected) {
+                    "${server.address.host} · ${stringResource(R.string.servers_stays_connected)}"
+                } else {
+                    server.address.host
+                }
                 SheetRow(
                     title = server.name,
-                    subtitle = server.address.host,
+                    subtitle = subtitle,
                     picked = server.id == activeServerId,
                     leading = {
                         Icon(
@@ -263,6 +305,16 @@ private fun ServersSwitcherContent(
                             tint = if (server.id == activeServerId) palette.brandText else palette.mutedForeground,
                             modifier = Modifier.size(18.dp),
                         )
+                    },
+                    trailing = if (attentionCount > 0) {
+                        {
+                            dev.troupe.android.core.ui.CountBadge(
+                                count = attentionCount,
+                                tone = palette.warning,
+                            )
+                        }
+                    } else {
+                        null
                     },
                     onClick = { onSelect(server.id) },
                 )

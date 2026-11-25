@@ -32,6 +32,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
+import okhttp3.OkHttpClient
 import okio.FileSystem
 import okio.Path.Companion.toOkioPath
 import java.io.Closeable
@@ -43,25 +44,30 @@ import java.io.File
  * Connection lifecycles run on [lifecycleDispatcher] (a test dispatcher for virtual time), without
  * backoff jitter; [network] stands in for the system's network callback.
  */
-class TestGraph(dir: File, lifecycleDispatcher: CoroutineDispatcher = Dispatchers.IO) : Closeable {
+class TestGraph(
+    dir: File,
+    lifecycleDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    client: OkHttpClient? = null,
+) : Closeable {
+    private val ownsClient = client == null
+    private val client: OkHttpClient = client ?: troupeHttpClient()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     val prefsFile = File(dir, "troupe.preferences_pb")
     private val dataStore = DataStoreFactory.create(
         OkioStorage(FileSystem.SYSTEM, PreferencesSerializer) { prefsFile.toOkioPath() },
         scope = scope,
     )
-    private val client = troupeHttpClient()
-    val api = ServerApi(client)
+    val api = ServerApi(this.client)
     private val cipher = XorTokenCipher()
     val repository = PairedServerRepository(dataStore, cipher)
     // One identity for both sockets, like Hilt's @Singleton: the same clientInstanceId on /terminal/ws and /ws.
     private val identity = ClientIdentityStore(dataStore)
-    val sockets = TerminalSocketFactory(client, identity)
+    val sockets = TerminalSocketFactory(this.client, identity)
     val network = FakeNetworkMonitor()
     val viewOnly = ViewOnlyRegistry()
     val connections = TerminalConnections(sockets, repository, api, network, viewOnly, lifecycleDispatcher) { Backoff(jitter = 0.0) }
     val cursors = TerminalCursorStore(dataStore, cipher)
-    val chatConnections = ChatConnections(ChatSocketFactory(client, identity), repository, api, network, viewOnly, lifecycleDispatcher) { Backoff(jitter = 0.0) }
+    val chatConnections = ChatConnections(ChatSocketFactory(this.client, identity), repository, api, network, viewOnly, lifecycleDispatcher) { Backoff(jitter = 0.0) }
     /** Reads [now] for the time a request was first seen. */
     @Volatile var now = 1_000_000L
     val attention = AttentionCenter(chatConnections, repository, api, Dispatchers.IO) { now }
@@ -98,8 +104,10 @@ class TestGraph(dir: File, lifecycleDispatcher: CoroutineDispatcher = Dispatcher
             connections.background.coroutineContext.job.cancelAndJoin()
             scope.coroutineContext.job.cancelAndJoin()
         }
-        client.dispatcher.executorService.shutdown()
-        client.connectionPool.evictAll()
+        if (ownsClient) {
+            client.dispatcher.executorService.shutdown()
+            client.connectionPool.evictAll()
+        }
     }
 }
 

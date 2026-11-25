@@ -55,6 +55,10 @@ class Transcript {
     fun installPermissions(permissions: List<PendingRequest.Permission>, headSeq: Long) =
         requests.installPermissions(permissions, headSeq)
 
+    /** Installs a reply's `pendingQuestions`, taken at [headSeq]. */
+    fun installQuestions(questions: List<PendingRequest.Question>, headSeq: Long) =
+        requests.installQuestions(questions, headSeq)
+
     fun apply(event: ChatFrame.Event) {
         requests.apply(event)
         val p = event.payload

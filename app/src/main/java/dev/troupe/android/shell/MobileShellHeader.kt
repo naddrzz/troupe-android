@@ -50,6 +50,7 @@ fun MobileShellHeader(
     connectionState: ConnectionState,
     viewOnly: Boolean,
     onOpenDrawer: () -> Unit,
+    onOpenAttention: () -> Unit,
     onOpenProjectSheet: () -> Unit,
     onNewChat: () -> Unit,
     onNewTerminal: () -> Unit,
@@ -133,7 +134,7 @@ fun MobileShellHeader(
                 if (showPill) {
                     NeedsYouPill(
                         count = attentionCount,
-                        onClick = onOpenDrawer,
+                        onClick = onOpenAttention,
                     )
                 }
 

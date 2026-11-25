@@ -28,6 +28,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,10 +37,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.troupe.android.R
+import dev.troupe.android.attention.chatName
 import dev.troupe.android.chat.protocol.SessionSummary
 import dev.troupe.android.core.theme.TroupeColors
 import dev.troupe.android.core.theme.TroupeTheme
@@ -73,7 +76,7 @@ fun MobileShellDrawer(
     githubContent: @Composable (onNavigate: () -> Unit) -> Unit,
     onDismiss: () -> Unit,
     onOpenProjects: () -> Unit,
-    onOpenChat: (sessionId: String, title: String?) -> Unit,
+    onOpenChat: (sessionId: String, title: String?, projectId: String?) -> Unit,
     onNewChat: () -> Unit,
     onOpenTerminal: (terminalId: String, title: String?) -> Unit,
     onNewTerminal: () -> Unit,
@@ -85,11 +88,16 @@ fun MobileShellDrawer(
     onOpenSnapshots: () -> Unit,
     onOpenGitHistory: () -> Unit,
     onOpenAutomations: () -> Unit,
+    onSectionChanged: (MobileSection) -> Unit = {},
 ) {
     val palette = TroupeTheme.palette
     val typo = TroupeTheme.typography
     var section by remember(initialSection) { mutableStateOf(initialSection) }
     var query by remember { mutableStateOf("") }
+
+    LaunchedEffect(section) {
+        onSectionChanged(section)
+    }
 
     val activeProject = state.activeProject
     val activeTab = state.workspace.activeTab
@@ -232,11 +240,26 @@ fun MobileShellDrawer(
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (section) {
                     MobileSection.Chats -> {
-                        val projectSessions = state.sessions.filter { s ->
-                            (activeProject == null || s.projectId == activeProject.id || s.projectId == null) &&
-                                (query.isBlank() || (s.title ?: "Untitled chat").contains(query, ignoreCase = true))
+                        val resources = LocalResources.current
+                        val untitledLabel = stringResource(R.string.chats_untitled)
+                        val filteredAttention = if (query.isBlank()) {
+                            state.attentionItems
+                        } else {
+                            state.attentionItems.filter { item ->
+                                val displayed = chatName(item.projectName, item.sessionTitle).let {
+                                    resources.getString(it.res, *it.args.toTypedArray())
+                                }
+                                displayed.contains(query, ignoreCase = true) ||
+                                    item.sessionTitle.orEmpty().contains(query, ignoreCase = true) ||
+                                    item.projectName.orEmpty().contains(query, ignoreCase = true)
+                            }
                         }
-                        if (projectSessions.isEmpty()) {
+                        val projectSessions = state.sessions.filter { s ->
+                            val displayedTitle = s.title?.takeIf { it.isNotBlank() } ?: untitledLabel
+                            (activeProject == null || s.projectId == activeProject.id || s.projectId == null) &&
+                                (query.isBlank() || displayedTitle.contains(query, ignoreCase = true))
+                        }
+                        if (filteredAttention.isEmpty() && projectSessions.isEmpty()) {
                             DrawerEmptyState(
                                 text = if (query.isBlank()) {
                                     stringResource(R.string.shell_empty_chats)
@@ -253,6 +276,21 @@ fun MobileShellDrawer(
                                     vertical = 6.dp,
                                 ),
                             ) {
+                                if (filteredAttention.isNotEmpty()) {
+                                    item(key = "attention_section") {
+                                        dev.troupe.android.attention.AttentionSection(
+                                            items = filteredAttention,
+                                            onOpen = { item ->
+                                                onDismiss()
+                                                onOpenChat(item.sessionId, item.sessionTitle, item.projectId)
+                                            },
+                                            modifier = Modifier
+                                                .padding(bottom = 8.dp)
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .border(0.5.dp, palette.warning.copy(alpha = 0.35f), RoundedCornerShape(12.dp)),
+                                        )
+                                    }
+                                }
                                 items(projectSessions, key = { it.sessionId }) { session ->
                                     ChatRecentsRow(
                                         session = session,
@@ -266,7 +304,7 @@ fun MobileShellDrawer(
                                             },
                                         onClick = {
                                             onDismiss()
-                                            onOpenChat(session.sessionId, session.title)
+                                            onOpenChat(session.sessionId, session.title, session.projectId)
                                         },
                                     )
                                 }

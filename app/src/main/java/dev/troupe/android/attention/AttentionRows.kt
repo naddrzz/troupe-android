@@ -31,7 +31,11 @@ import kotlinx.coroutines.delay
 
 /** The server screen's Attention section: a heading and one row per item, oldest first. Nothing when empty. */
 @Composable
-fun AttentionSection(items: List<AttentionItem>, onOpen: (AttentionItem) -> Unit) {
+fun AttentionSection(
+    items: List<AttentionItem>,
+    onOpen: (AttentionItem) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     if (items.isEmpty()) return
     val palette = LocalTroupePalette.current
     // The ages tick on their own; once a minute is as precise as they read.
@@ -41,7 +45,7 @@ fun AttentionSection(items: List<AttentionItem>, onOpen: (AttentionItem) -> Unit
             value = System.currentTimeMillis()
         }
     }
-    Column(Modifier.fillMaxWidth().background(palette.elevated)) {
+    Column(modifier.fillMaxWidth().background(palette.elevated)) {
         Text(
             stringResource(R.string.attention_needs_attention),
             style = MaterialTheme.typography.labelLarge,
@@ -84,7 +88,7 @@ private fun AttentionRow(item: AttentionItem, now: Long, onClick: () -> Unit) {
     ) {
         Column(Modifier.weight(1f)) {
             Text(kind, style = MaterialTheme.typography.labelMedium, color = palette.warning)
-            Text(name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(name, style = MaterialTheme.typography.bodyMedium, color = palette.foreground, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Text(age, style = MaterialTheme.typography.bodySmall, color = palette.muted)
     }

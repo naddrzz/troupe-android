@@ -95,4 +95,77 @@ class ConnectServerViewModelTest {
             }
         }
     }
+
+    @Test
+    fun publicCleartextLinkAndManualEntryAreRefusedBeforeAnyRequest() = runBlocking {
+        val attemptedUrls = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val recordingClient = dev.troupe.android.core.net.troupeHttpClient().newBuilder()
+            .addInterceptor { chain ->
+                attemptedUrls += chain.request().url.toString()
+                throw java.io.IOException("Unexpected outbound request to ${chain.request().url}")
+            }
+            .build()
+        try {
+            TestGraph(temp.newFolder(), client = recordingClient).use { graph ->
+                val vm = graph.connectServerViewModel()
+                vm.connectLink("http://8.8.8.8:8080/#token=secret")
+                assertEquals(
+                    ConnectUiState.Error(dev.troupe.android.R.string.pair_error_cleartext, "8.8.8.8"),
+                    vm.ui.value,
+                )
+
+                vm.reset()
+                vm.connectManual("http://example.com:8080", "secret", "Public")
+                assertEquals(
+                    ConnectUiState.Error(dev.troupe.android.R.string.pair_error_cleartext, "example.com"),
+                    vm.ui.value,
+                )
+                assertTrue("Expected zero outbound requests, saw $attemptedUrls", attemptedUrls.isEmpty())
+            }
+        } finally {
+            recordingClient.dispatcher.executorService.shutdown()
+            recordingClient.connectionPool.evictAll()
+        }
+    }
+
+    @Test
+    fun protocolMismatchAndUnreachableSurfaceExplicitErrors() = runBlocking {
+        FakeTroupeServer().use { server ->
+            server.protocolVersion = 8
+            TestGraph(temp.newFolder()).use { graph ->
+                val vm = graph.connectServerViewModel()
+                vm.connectLink("${server.address.baseUrl}#token=${server.token}")
+                val protoErr = vm.ui.first { it is ConnectUiState.Error } as ConnectUiState.Error
+                assertEquals(dev.troupe.android.R.string.pair_error_protocol, protoErr.message)
+
+                val addr = "${server.address.baseUrl}#token=${server.token}"
+                server.goOffline()
+                vm.reset()
+                vm.connectLink(addr)
+                val offlineErr = vm.ui.first { it is ConnectUiState.Error } as ConnectUiState.Error
+                assertEquals(dev.troupe.android.R.string.pair_error_unreachable, offlineErr.message)
+            }
+        }
+    }
+
+    @Test
+    fun manualConnectWithCustomNameAndNoisyScannedLinkSucceed() = runBlocking {
+        FakeTroupeServer().use { server ->
+            TestGraph(temp.newFolder()).use { graph ->
+                val vm = graph.connectServerViewModel()
+                vm.connectManual(server.typedAddress, server.token, "Studio Mac")
+                val manual = vm.ui.first { it is ConnectUiState.Connected } as ConnectUiState.Connected
+                val savedManual = graph.repository.server(manual.serverId)!!
+                assertEquals("Studio Mac", savedManual.name)
+                assertEquals(server.token, graph.repository.token(savedManual.id))
+
+                vm.reset()
+                vm.connectLink("  \n${server.address.baseUrl}#token=${server.token}\t  ", customName = "Scanned Box")
+                val scanned = vm.ui.first { it is ConnectUiState.Connected } as ConnectUiState.Connected
+                val savedScanned = graph.repository.server(scanned.serverId)!!
+                assertEquals("Scanned Box", savedScanned.name)
+                assertEquals(server.token, graph.repository.token(savedScanned.id))
+            }
+        }
+    }
 }

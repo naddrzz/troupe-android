@@ -69,4 +69,48 @@ class TroupeServerLinkTest {
         assertEquals("http://192.168.1.12:8080/", parsed.address.baseUrl.toString())
         assertNull(parsed.token)
     }
+
+    @Test
+    fun tableCoversNoiseUrlEncodedTokensAndProxyPathsIntoWsUrl() {
+        data class Case(val raw: String, val baseUrl: String, val wsTerminalUrl: String, val token: String)
+        val cases = listOf(
+            Case(
+                raw = "  https://h.example.com/troupe/#token=abc%2Fd \n",
+                baseUrl = "https://h.example.com/troupe/",
+                wsTerminalUrl = "wss://h.example.com/troupe/terminal/ws",
+                token = "abc/d",
+            ),
+            Case(
+                raw = "\n\nhttps://h.example.com/a/b#token=a+b%3D%3D\r\n",
+                baseUrl = "https://h.example.com/a/b/",
+                wsTerminalUrl = "wss://h.example.com/a/b/terminal/ws",
+                token = "a+b==",
+            ),
+            Case(
+                raw = "\thttp://box.tail1234.ts.net:8080/proxy/#foo=1&token=%20spaced%20\n",
+                baseUrl = "http://box.tail1234.ts.net:8080/proxy/",
+                wsTerminalUrl = "ws://box.tail1234.ts.net:8080/proxy/terminal/ws",
+                token = "spaced",
+            ),
+            Case(
+                raw = "http://100.64.0.7:8080/#token=tok123",
+                baseUrl = "http://100.64.0.7:8080/",
+                wsTerminalUrl = "ws://100.64.0.7:8080/terminal/ws",
+                token = "tok123",
+            ),
+            Case(
+                raw = "http://box.local:8080/#token=tok456",
+                baseUrl = "http://box.local:8080/",
+                wsTerminalUrl = "ws://box.local:8080/terminal/ws",
+                token = "tok456",
+            ),
+        )
+        for (c in cases) {
+            val parsed = TroupeServerLink.parse(c.raw).getOrThrow()
+            assertEquals(c.raw, c.baseUrl, parsed.address.baseUrl.toString())
+            assertEquals(c.raw, c.wsTerminalUrl, parsed.address.wsUrl("terminal/ws"))
+            assertEquals(c.raw, c.token, parsed.token)
+            assertFalse("toString hides token", parsed.toString().contains(c.token))
+        }
+    }
 }

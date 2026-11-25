@@ -38,6 +38,10 @@
       write: function (base64) { term.write(bytes(base64)); },
       reset: function () { term.reset(); },
       focus: function () { term.focus(); },
+      sendEnter: function () {
+        term.focus();
+        term.input('\r', true);
+      },
       setTheme: function (themeJson) {
         var next = JSON.parse(themeJson);
         term.options.theme = next;

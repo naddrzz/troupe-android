@@ -17,21 +17,30 @@ import androidx.datastore.preferences.core.edit
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.troupe.android.R
 import dev.troupe.android.background.finishedContent
+import dev.troupe.android.chat.net.ChatConnectFailed
+import dev.troupe.android.chat.net.ChatConnections
 import dev.troupe.android.core.nav.ChatLink
 import dev.troupe.android.core.nav.Screens
 import dev.troupe.android.core.nav.openChatIntent
+import dev.troupe.android.core.net.ConnectionState
 import dev.troupe.android.lock.LockSettingsStore
 import dev.troupe.android.servers.PairedServerRepository
+import dev.troupe.android.workspace.AppSettingsStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -52,10 +61,12 @@ import javax.inject.Singleton
 class AttentionNotifier @Inject constructor(
     @ApplicationContext private val context: Context,
     private val center: AttentionCenter,
+    private val connections: ChatConnections,
     private val screens: Screens,
     private val lock: LockSettingsStore,
     private val repository: PairedServerRepository,
     private val store: DataStore<Preferences>,
+    private val appSettings: AppSettingsStore,
 ) {
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
@@ -86,9 +97,88 @@ class AttentionNotifier @Inject constructor(
                 .build(),
         )
         scope.launch {
+            val settingsJobs = HashMap<String, Job>()
             repository.servers.collect { servers ->
                 stayConnected = servers.filter { it.stayConnected }.map { it.id }.toSet()
                 if (stayConnected.isNotEmpty() && !canPost()) askOnce()
+                val ids = servers.map { it.id }.toSet()
+                (settingsJobs.keys - ids).forEach { id ->
+                    settingsJobs.remove(id)?.cancel()
+                    appSettings.forget(id)
+                }
+                (ids - settingsJobs.keys).forEach { id ->
+                    settingsJobs[id] = launch {
+                        val retrySignals = Channel<Any>(capacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+                        val connSignalJob = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                            connections.changes
+                                .filter { it.serverId == id }
+                                .collect { retrySignals.trySend(it) }
+                        }
+                        val tokenSignalJob = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                            repository.tokenUpdated
+                                .filter { it.serverId == id }
+                                .collect { retrySignals.trySend(it) }
+                        }
+                        try {
+                            while (isActive) {
+                                val versionBeforeConnect = repository.credentialVersion(id)
+                                val conn = try {
+                                    connections.connection(id)
+                                } catch (_: ChatConnectFailed) {
+                                    // Wait until credentials change or another caller establishes a connection.
+                                    while (
+                                        isActive &&
+                                        repository.server(id) != null &&
+                                        repository.credentialVersion(id) <= versionBeforeConnect
+                                    ) {
+                                        val event = retrySignals.receive()
+                                        if (event is ChatConnections.ConnectionEvent &&
+                                            event.connection != null &&
+                                            connections.isCurrent(id, event.connection)
+                                        ) {
+                                            break
+                                        }
+                                    }
+                                    if (repository.server(id) == null) return@launch
+                                    continue
+                                }
+                                val observer = appSettings.observeServer(id, conn, this)
+                                val lifecycleWatcher = launch {
+                                    launch {
+                                        conn.awaitClosed()
+                                        observer.cancel()
+                                    }
+                                    launch {
+                                        conn.state.first { it is ConnectionState.Failed }
+                                        observer.cancel()
+                                    }
+                                }
+                                observer.join()
+                                lifecycleWatcher.cancel()
+                                if (repository.server(id) == null) return@launch
+                                if (conn.state.value is ConnectionState.Failed) {
+                                    // Wait for an external credential update or connection replacement; ignore our own
+                                    // connection-created event so auth/protocol failures never spin-retry.
+                                    while (
+                                        isActive &&
+                                        repository.server(id) != null &&
+                                        connections.isCurrent(id, conn) &&
+                                        repository.credentialVersion(id) <= conn.credentialVersion
+                                    ) {
+                                        val event = retrySignals.receive()
+                                        if (event is ChatConnections.ConnectionEvent && event.connection === conn) continue
+                                    }
+                                    if (repository.server(id) == null) return@launch
+                                }
+                            }
+                        } finally {
+                            connSignalJob.cancel()
+                            tokenSignalJob.cancel()
+                            retrySignals.close()
+                            if (settingsJobs[id] === coroutineContext[Job]) settingsJobs.remove(id)
+                        }
+                    }
+                }
             }
         }
         scope.launch {
@@ -99,12 +189,35 @@ class AttentionNotifier @Inject constructor(
                     posted.remove(tag(serverId, key))
                     manager.cancel(tag(serverId, key), 0)
                 }
-                changes.added.filter { mayAlert(it, screens.foreground.value, screens.current.value, stayConnected) }.forEach { notify(it) }
+                changes.added.forEach { item ->
+                    if (appSettings.isLoaded(item.serverId)) {
+                        val notifyNeedsYou = appSettings.settingsFor(item.serverId).notifyOnAgentChatNeedsYou
+                        if (mayAlert(item, screens.foreground.value, screens.current.value, stayConnected, notifyNeedsYou)) {
+                            notify(item)
+                        }
+                    } else {
+                        scope.launch {
+                            val notifyNeedsYou = appSettings.awaitSettingsFor(item.serverId).notifyOnAgentChatNeedsYou
+                            val stillPresent = center.servers.value[item.serverId]?.items?.any { it.key == item.key } == true
+                            if (stillPresent && mayAlert(item, screens.foreground.value, screens.current.value, stayConnected, notifyNeedsYou)) {
+                                notify(item)
+                            }
+                        }
+                    }
+                }
             }
         }
         scope.launch {
             center.finished.collect { turn ->
-                if (mayNotifyFinished(turn, screens.foreground.value, stayConnected)) notifyFinished(turn)
+                if (appSettings.isLoaded(turn.serverId)) {
+                    val notifyTurnFinished = appSettings.settingsFor(turn.serverId).notifyOnAgentChatTurnFinished
+                    if (mayNotifyFinished(turn, screens.foreground.value, stayConnected, notifyTurnFinished)) notifyFinished(turn)
+                } else {
+                    scope.launch {
+                        val notifyTurnFinished = appSettings.awaitSettingsFor(turn.serverId).notifyOnAgentChatTurnFinished
+                        if (mayNotifyFinished(turn, screens.foreground.value, stayConnected, notifyTurnFinished)) notifyFinished(turn)
+                    }
+                }
             }
         }
         scope.launch {
@@ -165,6 +278,7 @@ class AttentionNotifier @Inject constructor(
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(content.title.resolve())
             .setContentText(content.text?.resolve())
+            .apply { if (!locked) setSubText(repository.server(turn.serverId)?.name) }
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setPublicVersion(publicVersion(TURNS_CHANNEL, R.string.turn_finished_locked))
             .setAutoCancel(true)

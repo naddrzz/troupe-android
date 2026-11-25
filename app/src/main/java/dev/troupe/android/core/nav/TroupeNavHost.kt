@@ -6,6 +6,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -79,22 +82,23 @@ fun TroupeNavHost(
 
     val nav = rememberNavController()
     val startDestination: Any = if (loadedServers.isEmpty()) ConnectRoute(canNavigateBack = false) else WorkspaceShellRoute
+    var attentionSurfaceVisible by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
 
-    // Report active screen to AttentionNotifier so notifications stay silent for the chat on screen.
-    LaunchedEffect(nav, shellState.activeServer?.id, shellState.workspace.activeTab) {
+    fun currentShellScreen(): Screen {
+        val srvId = shellState.activeServer?.id ?: return Screen.Other
+        if (attentionSurfaceVisible) return Screen.Server(srvId)
+        val tab = shellState.workspace.activeTab
+        return if (tab is WorkspaceTab.AgentChat) Screen.Chat(srvId, tab.sessionId) else Screen.Other
+    }
+
+    // Report active screen to AttentionNotifier so notifications fire while on Terminal/Editor/etc.
+    // and stay silent only for the Agent Chat or Attention list currently on screen.
+    LaunchedEffect(nav, shellState.activeServer?.id, shellState.workspace.activeTab, attentionSurfaceVisible) {
         nav.currentBackStackEntryFlow.collect { entry ->
             val destination = entry.destination
             screens.onScreen(
                 when {
-                    destination.hasRoute<WorkspaceShellRoute>() -> {
-                        val srvId = shellState.activeServer?.id
-                        val activeTab = shellState.workspace.activeTab
-                        when {
-                            srvId != null && activeTab is WorkspaceTab.AgentChat -> Screen.Chat(srvId, activeTab.sessionId)
-                            srvId != null -> Screen.Server(srvId)
-                            else -> Screen.Other
-                        }
-                    }
+                    destination.hasRoute<WorkspaceShellRoute>() -> currentShellScreen()
                     destination.hasRoute<ChatRoute>() -> entry.toRoute<ChatRoute>().let { Screen.Chat(it.serverId, it.sessionId) }
                     else -> Screen.Other
                 },
@@ -104,18 +108,12 @@ fun TroupeNavHost(
 
     val navScope = androidx.compose.runtime.rememberCoroutineScope()
 
-    // Also update Screen.Chat immediately whenever active tab changes inside WorkspaceShellRoute.
-    LaunchedEffect(shellState.activeServer?.id, shellState.workspace.activeTab) {
+    // Also update active screen immediately whenever tab or Attention surface visibility changes.
+    LaunchedEffect(shellState.activeServer?.id, shellState.workspace.activeTab, attentionSurfaceVisible) {
         if (nav.currentBackStackEntry?.destination?.hasRoute<WorkspaceShellRoute>() != true) {
             return@LaunchedEffect
         }
-        val srvId = shellState.activeServer?.id ?: return@LaunchedEffect
-        val tab = shellState.workspace.activeTab
-        if (tab is WorkspaceTab.AgentChat) {
-            screens.onScreen(Screen.Chat(srvId, tab.sessionId))
-        } else {
-            screens.onScreen(Screen.Server(srvId))
-        }
+        screens.onScreen(currentShellScreen())
     }
 
     // Notification deep-link -> switch server, await hydration, & open chat tab directly in MobileWorkspaceShellScreen.
@@ -135,6 +133,7 @@ fun TroupeNavHost(
                 viewModel = shellViewModel,
                 onOpenConnect = { nav.navigate(ConnectRoute(canNavigateBack = loadedServers.isNotEmpty())) },
                 onOpenSettings = { nav.navigate(SettingsRoute) },
+                onAttentionSurfaceVisible = { attentionSurfaceVisible = it },
             )
         }
 

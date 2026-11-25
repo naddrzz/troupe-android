@@ -1,29 +1,36 @@
 package dev.troupe.android.attention
 
 import dev.troupe.android.chat.net.ChatConnectFailed
+import dev.troupe.android.chat.net.ChatConnection
 import dev.troupe.android.chat.net.ChatConnections
 import dev.troupe.android.core.net.ApiResult
+import dev.troupe.android.core.net.ConnectionState
 import dev.troupe.android.core.net.ServerApi
 import dev.troupe.android.servers.PairedServerRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
@@ -86,16 +93,73 @@ class AttentionCenter internal constructor(
     }
 
     private suspend fun watch(serverId: String) {
-        val connection = try {
-            connections.connection(serverId)
-        } catch (e: ChatConnectFailed) {
-            return
-        }
-        val monitor = AttentionMonitor(connection) { projectNames(serverId) }
         val seen = HashMap<String, Long>()
         coroutineScope {
-            launch { monitor.run() }
-            launch {
+            val retrySignals = Channel<Any>(capacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+            val connSignalJob = launch(start = CoroutineStart.UNDISPATCHED) {
+                connections.changes
+                    .filter { it.serverId == serverId }
+                    .collect { retrySignals.trySend(it) }
+            }
+            val tokenSignalJob = launch(start = CoroutineStart.UNDISPATCHED) {
+                repository.tokenUpdated
+                    .filter { it.serverId == serverId }
+                    .collect { retrySignals.trySend(it) }
+            }
+            try {
+                while (isActive) {
+                    val versionBeforeConnect = repository.credentialVersion(serverId)
+                    val connection = try {
+                        connections.connection(serverId)
+                    } catch (_: ChatConnectFailed) {
+                        while (
+                            isActive &&
+                            repository.server(serverId) != null &&
+                            repository.credentialVersion(serverId) <= versionBeforeConnect
+                        ) {
+                            val event = retrySignals.receive()
+                            if (event is ChatConnections.ConnectionEvent &&
+                                event.connection != null &&
+                                connections.isCurrent(serverId, event.connection)
+                            ) {
+                                break
+                            }
+                        }
+                        if (repository.server(serverId) == null) return@coroutineScope
+                        continue
+                    }
+                    watchConnection(serverId, connection, seen)
+                    if (repository.server(serverId) == null) return@coroutineScope
+                    if (connection.state.value is ConnectionState.Failed) {
+                        while (
+                            isActive &&
+                            repository.server(serverId) != null &&
+                            connections.isCurrent(serverId, connection) &&
+                            repository.credentialVersion(serverId) <= connection.credentialVersion
+                        ) {
+                            val event = retrySignals.receive()
+                            if (event is ChatConnections.ConnectionEvent && event.connection === connection) continue
+                        }
+                        if (repository.server(serverId) == null) return@coroutineScope
+                    }
+                }
+            } finally {
+                connSignalJob.cancel()
+                tokenSignalJob.cancel()
+                retrySignals.close()
+            }
+        }
+    }
+
+    private suspend fun watchConnection(
+        serverId: String,
+        connection: ChatConnection,
+        seen: HashMap<String, Long>,
+    ) {
+        val monitor = AttentionMonitor(connection) { projectNames(serverId) }
+        coroutineScope {
+            val monitorJob = launch { monitor.run() }
+            val finishedJob = launch {
                 monitor.finished.collect { sessionId ->
                     val state = monitor.state.value
                     val session = state.index.firstOrNull { it.sessionId == sessionId }
@@ -109,12 +173,19 @@ class AttentionCenter internal constructor(
                     )
                 }
             }
-            combine(monitor.state, connection.pending.bySession, connection.pending.resolved) { state, openChats, resolved ->
-                val items = deriveAttention(serverId, state.index, state.tracked, openChats, resolved, state.projects) { id ->
-                    seen.getOrPut(id) { clock() }
-                }
-                ServerAttention(state.ready, items)
-            }.distinctUntilChanged().collect { attention -> _servers.update { it + (serverId to attention) } }
+            val publishJob = launch {
+                combine(monitor.state, connection.pending.bySession, connection.pending.resolved) { state, openChats, resolved ->
+                    val items = deriveAttention(serverId, state.index, state.tracked, openChats, resolved, state.projects) { id ->
+                        seen.getOrPut(id) { clock() }
+                    }
+                    ServerAttention(state.ready, items)
+                }.distinctUntilChanged().collect { attention -> _servers.update { it + (serverId to attention) } }
+            }
+            // Wait until this connection is stopped/replaced (e.g. token update or resetConnection).
+            connection.awaitClosed()
+            monitorJob.cancel()
+            finishedJob.cancel()
+            publishJob.cancel()
         }
     }
 

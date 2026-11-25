@@ -8,12 +8,20 @@ import dev.troupe.android.core.protocol.TroupeJson
 import dev.troupe.android.pairing.PairingInput
 import dev.troupe.android.pairing.ServerAddress
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
 import java.security.GeneralSecurityException
 import java.util.Base64
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
+
+/** Emitted after a Paired Server's stored credentials are written to disk. */
+data class TokenUpdate(val serverId: String, val version: Long)
 
 /**
  * A Troupe Server the app remembers. Holds no token: that lives encrypted in [PairedServerRepository].
@@ -45,6 +53,17 @@ class PairedServerRepository(
     private val store: DataStore<Preferences>,
     private val cipher: TokenCipher,
 ) {
+    private val credentialVersions = ConcurrentHashMap<String, AtomicLong>()
+    private val _tokenUpdated = MutableSharedFlow<TokenUpdate>(extraBufferCapacity = 32)
+    /** Emits a Paired Server's id and new credential version whenever its credentials are added or updated. */
+    val tokenUpdated: SharedFlow<TokenUpdate> = _tokenUpdated.asSharedFlow()
+
+    /** Monotonic credential version for [serverId], incremented after each persisted credential write. */
+    fun credentialVersion(serverId: String): Long = credentialVersions[serverId]?.get() ?: 0L
+
+    private fun bumpCredentialVersion(serverId: String): Long =
+        credentialVersions.computeIfAbsent(serverId) { AtomicLong(0L) }.incrementAndGet()
+
     val servers: Flow<List<PairedServer>> = store.data.map { prefs ->
         stored(prefs).map { PairedServer(it.id, it.name, ServerAddress.of(it.baseUrl), it.stayConnected, it.hasToken) }
     }
@@ -91,6 +110,8 @@ class PairedServerRepository(
                 prefs[ACTIVE_SERVER_ID] = id
             }
         }
+        val version = bumpCredentialVersion(saved.id)
+        _tokenUpdated.tryEmit(TokenUpdate(saved.id, version))
         return PairedServer(saved.id, saved.name, address, saved.stayConnected, saved.hasToken)
     }
 
@@ -103,9 +124,11 @@ class PairedServerRepository(
     /** Updates a Paired Server's token (used by TokenGateScreen after a mid-session 401/unauthorized). */
     suspend fun updateToken(serverId: String, token: String?) {
         val cleanToken = token?.trim()?.takeIf { it.isNotEmpty() }
+        var updated = false
         store.edit { prefs ->
             val list = stored(prefs)
             if (list.none { it.id == serverId }) return@edit
+            updated = true
             prefs[SERVERS] = TroupeJson.encodeToString(
                 list.map { if (it.id == serverId) it.copy(hasToken = cleanToken != null) else it },
             )
@@ -114,6 +137,10 @@ class PairedServerRepository(
             } else {
                 prefs.remove(tokenKey(serverId))
             }
+        }
+        if (updated) {
+            val version = bumpCredentialVersion(serverId)
+            _tokenUpdated.tryEmit(TokenUpdate(serverId, version))
         }
     }
 
@@ -162,6 +189,7 @@ class PairedServerRepository(
                 if (next != null) prefs[ACTIVE_SERVER_ID] = next else prefs.remove(ACTIVE_SERVER_ID)
             }
         }
+        credentialVersions.remove(id)
     }
 
     private fun stored(prefs: Preferences): List<StoredServer> =
