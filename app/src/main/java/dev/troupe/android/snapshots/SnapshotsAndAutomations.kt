@@ -104,7 +104,7 @@ fun SnapshotsSheet(
     var saving by remember(projectId) { mutableStateOf(false) }
     var nameInput by remember(projectId) { mutableStateOf("") }
 
-    fun persist(next: List<PersistedSnapshotDto>, clearNameOnSuccess: Boolean = false) {
+    fun persist(next: List<PersistedSnapshotDto>, savedNameToClear: String? = null) {
         if (!loadSucceeded || saving) return
         val client = storeClient
         if (client == null) {
@@ -121,7 +121,9 @@ fun SnapshotsSheet(
             when (val res = client.write(PersistenceKeys.snapshots(projectId), encoded, immediate = true)) {
                 is dev.troupe.android.core.store.StoreWriteResult.Ok -> {
                     snapshots = next
-                    if (clearNameOnSuccess) nameInput = ""
+                    if (savedNameToClear != null && nameInput.trim() == savedNameToClear) {
+                        nameInput = ""
+                    }
                 }
                 is dev.troupe.android.core.store.StoreWriteResult.Error -> {
                     error = res.message ?: "Failed to save snapshots."
@@ -185,6 +187,7 @@ fun SnapshotsSheet(
                         value = nameInput,
                         onValueChange = { nameInput = it },
                         placeholder = { Text(stringResource(R.string.snapshots_name_hint)) },
+                        enabled = loadSucceeded && !saving,
                         singleLine = true,
                         textStyle = typo.bodyLarge,
                         modifier = Modifier.weight(1f),
@@ -200,10 +203,11 @@ fun SnapshotsSheet(
                         enabled = loadSucceeded && !saving && nameInput.isNotBlank(),
                         loading = saving,
                         onClick = {
+                            val trimmedName = nameInput.trim()
                             val snap = PersistedSnapshotDto(
                                 id = UUID.randomUUID().toString(),
                                 projectId = projectId,
-                                name = nameInput.trim(),
+                                name = trimmedName,
                                 createdAt = Instant.now().toString(),
                                 terminals = terminals.map {
                                     PersistedTerminalEntry(
@@ -215,7 +219,7 @@ fun SnapshotsSheet(
                                 },
                                 activeTerminalId = terminals.firstOrNull()?.id,
                             )
-                            persist(listOf(snap) + snapshots, clearNameOnSuccess = true)
+                            persist(listOf(snap) + snapshots, savedNameToClear = trimmedName)
                         },
                     )
                 }

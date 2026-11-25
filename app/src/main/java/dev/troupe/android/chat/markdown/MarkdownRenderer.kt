@@ -4,6 +4,9 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,22 +19,26 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -41,6 +48,8 @@ import dev.troupe.android.core.theme.SyntaxPalette
 import dev.troupe.android.core.theme.TroupeTheme
 import dev.troupe.android.core.ui.TroupeIconButton
 import dev.troupe.android.core.ui.TroupeIcons
+
+private const val URL_TAG = "URL"
 
 private sealed interface MarkdownBlock {
     data class Heading(val level: Int, val text: String) : MarkdownBlock
@@ -70,7 +79,7 @@ fun MarkdownText(
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             blocks.forEach { block ->
                 when (block) {
-                    is MarkdownBlock.Heading -> Text(
+                    is MarkdownBlock.Heading -> MarkdownInlineText(
                         text = renderInline(block.text, palette.syntax, palette.mutedSurface, palette.brandText),
                         style = when (block.level) {
                             1 -> typo.titleLarge
@@ -80,7 +89,7 @@ fun MarkdownText(
                         color = palette.syntax.heading,
                     )
 
-                    is MarkdownBlock.Paragraph -> Text(
+                    is MarkdownBlock.Paragraph -> MarkdownInlineText(
                         text = renderInline(block.text, palette.syntax, palette.mutedSurface, palette.brandText),
                         style = typo.bodyMedium,
                         color = textColor,
@@ -91,7 +100,7 @@ fun MarkdownText(
                         modifier = Modifier.padding(start = 4.dp),
                     ) {
                         Text("•", style = typo.bodyMedium, color = palette.mutedForeground)
-                        Text(
+                        MarkdownInlineText(
                             text = renderInline(block.text, palette.syntax, palette.mutedSurface, palette.brandText),
                             style = typo.bodyMedium,
                             color = textColor,
@@ -104,7 +113,7 @@ fun MarkdownText(
                         modifier = Modifier.padding(start = 4.dp),
                     ) {
                         Text("${block.number}.", style = typo.bodyMedium, color = palette.mutedForeground)
-                        Text(
+                        MarkdownInlineText(
                             text = renderInline(block.text, palette.syntax, palette.mutedSurface, palette.brandText),
                             style = typo.bodyMedium,
                             color = textColor,
@@ -119,7 +128,7 @@ fun MarkdownText(
                             .background(palette.mutedSurface.copy(alpha = 0.6f))
                             .padding(horizontal = 10.dp, vertical = 6.dp),
                     ) {
-                        Text(
+                        MarkdownInlineText(
                             text = renderInline(block.text, palette.syntax, palette.mutedSurface, palette.brandText),
                             style = typo.bodyMedium.copy(fontStyle = FontStyle.Italic),
                             color = palette.secondary,
@@ -134,6 +143,47 @@ fun MarkdownText(
             }
         }
     }
+}
+
+/**
+ * Renders annotated Markdown text while preserving [SelectionContainer] long-press text selection:
+ * only a quick single tap on a URL span opens the link; long-presses pass straight to selection.
+ */
+@Composable
+private fun MarkdownInlineText(
+    text: AnnotatedString,
+    style: TextStyle,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    val uriHandler = LocalUriHandler.current
+    var layoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
+    val hasLinks = remember(text) { text.getStringAnnotations(URL_TAG, 0, text.length).isNotEmpty() }
+    Text(
+        text = text,
+        style = style,
+        color = color,
+        onTextLayout = { layoutResult = it },
+        modifier = if (hasLinks) {
+            modifier.pointerInput(text) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val up = waitForUpOrCancellation()
+                    if (up != null && !up.isConsumed &&
+                        (up.uptimeMillis - down.uptimeMillis) < viewConfiguration.longPressTimeoutMillis
+                    ) {
+                        val offset = layoutResult?.getOffsetForPosition(up.position) ?: return@awaitEachGesture
+                        val url = text.getStringAnnotations(URL_TAG, offset, offset).firstOrNull()?.item
+                        if (url != null) {
+                            runCatching { uriHandler.openUri(url) }
+                        }
+                    }
+                }
+            }
+        } else {
+            modifier
+        },
+    )
 }
 
 @Composable
@@ -307,20 +357,17 @@ private fun renderInline(
                         destination.startsWith("http://", ignoreCase = true) ||
                         destination.startsWith("mailto:", ignoreCase = true)
                     if (isSafeWebUrl) {
-                        withLink(
-                            LinkAnnotation.Url(
-                                url = destination,
-                                styles = TextLinkStyles(
-                                    style = SpanStyle(
-                                        color = linkColor,
-                                        fontWeight = FontWeight.Medium,
-                                        textDecoration = TextDecoration.Underline,
-                                    ),
-                                ),
+                        pushStringAnnotation(tag = URL_TAG, annotation = destination)
+                        withStyle(
+                            SpanStyle(
+                                color = linkColor,
+                                fontWeight = FontWeight.Medium,
+                                textDecoration = TextDecoration.Underline,
                             ),
                         ) {
                             append(label)
                         }
+                        pop()
                     } else {
                         withStyle(SpanStyle(color = linkColor, fontWeight = FontWeight.Medium)) {
                             append("$label ($destination)")

@@ -9,17 +9,17 @@ import kotlinx.serialization.json.Json
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * HTTP client for Troupe Server's first-run setup wizard (the setup endpoints, authenticated with
- * the one-time `?setup=<token>` bearer token) and post-setup server reconfigure (`/server/config`,
- * authenticated with the normal web auth bearer token).
- */
 @OptIn(ExperimentalSerializationApi::class)
 private val SetupRequestJson = Json(TroupeJson) {
     explicitNulls = true
     encodeDefaults = true
 }
 
+/**
+ * HTTP client for Troupe Server's first-run setup wizard (the setup endpoints, authenticated with
+ * the one-time `?setup=<token>` bearer token) and post-setup server reconfigure (`/server/config`,
+ * authenticated with the normal web auth bearer token).
+ */
 @Singleton
 class ServerSetupApi @Inject constructor(
     private val api: ServerApi,

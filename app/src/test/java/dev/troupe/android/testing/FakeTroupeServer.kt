@@ -154,6 +154,12 @@ class FakeTroupeServer : Closeable {
                 } else {
                     json(401, """{"success":false,"error":"Unauthorized","code":"UNAUTHORIZED"}""")
                 }
+            "/setup/validate" ->
+                if (request.headers["Authorization"] == "Bearer $setupToken") {
+                    json(200, """{"success":true,"data":{"ok":true,"fieldErrors":{}}}""")
+                } else {
+                    json(401, """{"success":false,"error":"Unauthorized","code":"UNAUTHORIZED"}""")
+                }
             "/setup/apply" ->
                 if (request.headers["Authorization"] == "Bearer $setupToken") {
                     setupRequired = false

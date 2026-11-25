@@ -8,6 +8,7 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -76,19 +77,23 @@ class WatchHub(
     fun watch(watch: String, watchScope: String = ""): Flow<WatchUpdate> {
         val key = Key(watch, watchScope)
         return flow {
-            val (entry, shouldSubscribe, initialReset) = mutex.withLock {
+            val (entry, shouldSubscribe) = mutex.withLock {
                 val e = channels.getOrPut(key) { ChannelEntry(key) }
                 e.refCount++
-                Triple(e, e.refCount == 1, e.lastReset)
+                e to (e.refCount == 1)
             }
             try {
-                if (initialReset != null) {
-                    emit(initialReset)
-                }
-                if (shouldSubscribe) {
-                    scope.launch { sendWatch(key) }
-                }
-                entry.flow.collect { update -> emit(update) }
+                // onSubscription runs AFTER the collector is registered on entry.flow, guaranteeing
+                // zero dropped frames between emitting lastReset / sending watch and collecting deltas.
+                entry.flow.onSubscription {
+                    val snapshot = mutex.withLock { entry.lastReset }
+                    if (snapshot != null) {
+                        emit(snapshot)
+                    }
+                    if (shouldSubscribe) {
+                        scope.launch { sendWatch(key) }
+                    }
+                }.collect { update -> emit(update) }
             } finally {
                 val shouldUnsubscribe = withContext(NonCancellable) {
                     mutex.withLock {

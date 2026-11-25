@@ -91,6 +91,7 @@ fun ChatStartView(
     var worktrees by remember(project?.id) { mutableStateOf<List<WorktreeInfo>>(emptyList()) }
     var creating by remember { mutableStateOf(false) }
     var launchJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var inFlightSession by remember { mutableStateOf<Pair<String, String>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var showNewWorktreeSheet by remember { mutableStateOf(false) }
 
@@ -104,6 +105,29 @@ fun ChatStartView(
         }
     }
 
+    fun cancelLaunch() {
+        launchJob?.cancel()
+        launchJob = null
+        creating = false
+        val active = inFlightSession
+        inFlightSession = null
+        val conn = connection
+        if (active != null && conn != null) {
+            scope.launch {
+                runCatching {
+                    conn.socket.request(
+                        type = "cancel_prompt",
+                        payload = buildJsonObject {
+                            put("agentId", active.second)
+                            put("sessionId", active.first)
+                        },
+                        commandId = null,
+                    )
+                }
+            }
+        }
+    }
+
     fun launchNewChat() {
         val conn = connection ?: return
         val proj = project ?: return
@@ -113,6 +137,7 @@ fun ChatStartView(
         val cwd = activeWorktreePath ?: proj.path.orEmpty()
         creating = true
         error = null
+        inFlightSession = null
         launchJob?.cancel()
         launchJob = scope.launch {
             try {
@@ -138,8 +163,11 @@ fun ChatStartView(
                     creating = false
                     return@launch
                 }
+                inFlightSession = sessionId to agentId
                 val turnId = UUID.randomUUID().toString()
-                val sendReply = conn.socket.request(
+                // Dispatch without waiting for turn completion (which may exceed the 15 s RPC timeout);
+                // ChatPaneV2 streams the live turn and surfaces any server errors.
+                conn.socket.dispatch(
                     type = "send_prompt",
                     payload = buildJsonObject {
                         put("agentId", agentId)
@@ -155,14 +183,10 @@ fun ChatStartView(
                     commandId = turnId,
                 )
                 if (!kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]!!.isActive) return@launch
-                if (!sendReply.ok) {
-                    error = sendReply.message ?: "Server refused the prompt."
-                    creating = false
-                    return@launch
-                }
                 draft = ""
                 creating = false
                 launchJob = null
+                inFlightSession = null
                 onSessionCreated(sessionId, prompt.take(48))
             } catch (_: kotlinx.coroutines.CancellationException) {
                 creating = false
@@ -171,6 +195,7 @@ fun ChatStartView(
                 error = e.message ?: "Could not reach server."
                 creating = false
                 launchJob = null
+                inFlightSession = null
             }
         }
     }
@@ -269,11 +294,7 @@ fun ChatStartView(
             selectedAgentId = selectedAgentId,
             onSelectAgent = { selectedAgentId = it },
             onSend = { launchNewChat() },
-            onCancel = {
-                launchJob?.cancel()
-                launchJob = null
-                creating = false
-            },
+            onCancel = { cancelLaunch() },
             onOpenFiles = onOpenFiles,
         )
     }

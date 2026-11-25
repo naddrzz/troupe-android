@@ -31,7 +31,10 @@ sealed interface ConnectUiState {
         val parsed: ParsedServerLink,
         val manualToken: String? = null,
         val customName: String = "",
-    ) : ConnectUiState
+    ) : ConnectUiState {
+        override fun toString(): String =
+            "NeedsHost(parsed=$parsed, customName=$customName, manualToken=${if (manualToken != null) "<redacted>" else "null"})"
+    }
 
     /**
      * Server answered `/health` OK, but rejected an empty or stale token. Present the

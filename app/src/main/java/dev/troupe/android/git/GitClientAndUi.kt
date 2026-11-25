@@ -280,6 +280,10 @@ fun GitChangesSheet(
                     error = res.message
                     loading = false
                 }
+                ApiResult.Unauthorized -> {
+                    error = "Authentication required. Re-enter your server token."
+                    loading = false
+                }
                 else -> {
                     error = "Could not load git status."
                     loading = false
@@ -343,6 +347,7 @@ fun GitChangesSheet(
                                                 refresh()
                                             }
                                             is ApiResult.ServerError -> error = res.message
+                                            ApiResult.Unauthorized -> error = "Authentication required. Re-enter your server token."
                                             else -> error = "Could not update staging state."
                                         }
                                     }
@@ -363,6 +368,7 @@ fun GitChangesSheet(
                                                     refresh()
                                                 }
                                                 is ApiResult.ServerError -> error = res.message
+                                                ApiResult.Unauthorized -> error = "Authentication required. Re-enter your server token."
                                                 else -> error = "Could not discard changes."
                                             }
                                         }
@@ -395,6 +401,7 @@ fun GitChangesSheet(
                                                     refresh()
                                                 }
                                                 is ApiResult.ServerError -> error = res.message
+                                                ApiResult.Unauthorized -> error = "Authentication required. Re-enter your server token."
                                                 else -> error = "Could not switch to ${branch.name}."
                                             }
                                         }
@@ -439,10 +446,13 @@ fun GitChangesSheet(
                                 loading = busy,
                                 onClick = {
                                     busy = true
+                                    error = null
                                     scope.launch {
                                         when (val r = gitApi.push(server.address, tokenProvider(), cwd)) {
+                                            is ApiResult.Ok -> refresh()
                                             is ApiResult.ServerError -> error = r.message
-                                            else -> refresh()
+                                            ApiResult.Unauthorized -> error = "Authentication required. Re-enter your server token."
+                                            else -> error = "Could not push commits."
                                         }
                                         busy = false
                                     }
@@ -548,6 +558,7 @@ fun GitChangesSheet(
                                                 refresh()
                                             }
                                             is ApiResult.ServerError -> error = r.message
+                                            ApiResult.Unauthorized -> error = "Authentication required. Re-enter your server token."
                                             else -> error = "Commit failed."
                                         }
                                         busy = false

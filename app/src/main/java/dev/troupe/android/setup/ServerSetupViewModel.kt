@@ -1,8 +1,10 @@
 package dev.troupe.android.setup
 
+import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.troupe.android.R
 import dev.troupe.android.core.net.ApiResult
 import dev.troupe.android.core.net.ServerApi
 import dev.troupe.android.core.net.ViewOnlyRegistry
@@ -26,6 +28,7 @@ data class ServerSetupUiState(
     val restarting: Boolean = false,
     val answers: ServerSetupAnswers = ServerSetupAnswers(),
     val fieldErrors: SetupFieldErrors = SetupFieldErrors(),
+    @StringRes val portErrorRes: Int? = null,
     val configError: String? = null,
     val error: String? = null,
     val needsSetupToken: Boolean = false,
@@ -133,7 +136,14 @@ class ServerSetupViewModel @Inject constructor(
     }
 
     fun updateAnswers(transform: (ServerSetupAnswers) -> ServerSetupAnswers) {
-        _ui.update { it.copy(answers = transform(it.answers), fieldErrors = SetupFieldErrors(), error = null) }
+        _ui.update {
+            it.copy(
+                answers = transform(it.answers),
+                fieldErrors = SetupFieldErrors(),
+                portErrorRes = null,
+                error = null,
+            )
+        }
     }
 
     fun apply() {
@@ -142,7 +152,10 @@ class ServerSetupViewModel @Inject constructor(
         if (current.submitting || current.restarting) return
         if (current.answers.port !in 1..65535) {
             _ui.update {
-                it.copy(fieldErrors = SetupFieldErrors(port = "Enter a valid port between 1 and 65535."))
+                it.copy(
+                    fieldErrors = SetupFieldErrors(),
+                    portErrorRes = R.string.setup_port_invalid,
+                )
             }
             return
         }
@@ -153,11 +166,12 @@ class ServerSetupViewModel @Inject constructor(
                     fieldErrors = SetupFieldErrors(
                         host = "Local-only (127.0.0.1) cannot be reached from Android over the network. Choose All interfaces (0.0.0.0).",
                     ),
+                    portErrorRes = null,
                 )
             }
             return
         }
-        _ui.update { it.copy(submitting = true, error = null, fieldErrors = SetupFieldErrors()) }
+        _ui.update { it.copy(submitting = true, error = null, fieldErrors = SetupFieldErrors(), portErrorRes = null) }
 
         viewModelScope.launch {
             val res = when (current.mode) {
@@ -239,14 +253,18 @@ class ServerSetupViewModel @Inject constructor(
             delay(500)
         }
 
+        val priorId = existingServerId
+        val priorStayConnected = priorId?.let { repository.server(it)?.stayConnected } == true
         val saved = repository.upsert(
             name = serverName.ifBlank { nextAddress.host },
             address = nextAddress,
             token = finalToken,
             makeActive = true,
         )
-        val priorId = existingServerId
         if (priorId != null && priorId != saved.id) {
+            if (priorStayConnected) {
+                repository.setStayConnected(saved.id, true)
+            }
             repository.remove(priorId)
         }
         viewOnly.set(saved.id, !allowRemoteWrites)

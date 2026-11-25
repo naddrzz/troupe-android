@@ -124,6 +124,20 @@ class ChatSocket internal constructor(
         return send(current, type, payload, commandId)
     }
 
+    /**
+     * Dispatches a request frame immediately over the authenticated socket without waiting for its
+     * reply (used for `send_prompt` when opening a new chat so long agent turns do not time out
+     * waiting on the turn-completion reply). Throws [ChatDisconnected] if the socket cannot send.
+     */
+    fun dispatch(type: String, payload: JsonObject, commandId: String? = null) {
+        val current = connection?.takeIf { it.authenticated } ?: throw ChatDisconnected()
+        val id = UUID.randomUUID().toString()
+        val frame = TroupeJson.encodeToString(ChatRequest.serializer(), ChatRequest(id, type, payload, commandId))
+        if (!current.webSocket.send(frame)) {
+            throw ChatDisconnected()
+        }
+    }
+
     private suspend fun send(connection: Connection, type: String, payload: JsonObject, commandId: String?): ChatFrame.Reply {
         val socket = connection.webSocket
         val id = UUID.randomUUID().toString()

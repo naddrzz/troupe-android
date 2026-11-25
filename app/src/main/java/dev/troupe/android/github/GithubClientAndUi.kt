@@ -327,12 +327,13 @@ fun GithubItemPane(
     val typo = TroupeTheme.typography
     val scope = rememberCoroutineScope()
 
-    var detail by remember(server.id, cwd, kind, number) { mutableStateOf<GithubItemDetailDto?>(null) }
-    var loading by remember(server.id, cwd, kind, number) { mutableStateOf(true) }
-    var error by remember(server.id, cwd, kind, number) { mutableStateOf<String?>(null) }
-    var actionError by remember(server.id, cwd, kind, number) { mutableStateOf<String?>(null) }
-    var commentText by remember(server.id, cwd, kind, number) { mutableStateOf("") }
-    var sending by remember(server.id, cwd, kind, number) { mutableStateOf(false) }
+    var detail by remember(server.id, cwd, repo, kind, number) { mutableStateOf<GithubItemDetailDto?>(null) }
+    var loading by remember(server.id, cwd, repo, kind, number) { mutableStateOf(true) }
+    var error by remember(server.id, cwd, repo, kind, number) { mutableStateOf<String?>(null) }
+    var actionError by remember(server.id, cwd, repo, kind, number) { mutableStateOf<String?>(null) }
+    var commentText by remember(server.id, cwd, repo, kind, number) { mutableStateOf("") }
+    var sending by remember(server.id, cwd, repo, kind, number) { mutableStateOf(false) }
+    var merging by remember(server.id, cwd, repo, kind, number) { mutableStateOf(false) }
 
     fun load() {
         loading = true
@@ -341,6 +342,7 @@ fun GithubItemPane(
             when (val res = githubApi.getItem(server.address, tokenProvider(), cwd, repo, kind, number)) {
                 is ApiResult.Ok -> {
                     detail = res.value
+                    actionError = null
                     loading = false
                 }
                 is ApiResult.ServerError -> {
@@ -355,7 +357,7 @@ fun GithubItemPane(
         }
     }
 
-    LaunchedEffect(server.id, cwd, kind, number) { load() }
+    LaunchedEffect(server.id, cwd, repo, kind, number) { load() }
 
     Column(
         modifier = modifier
@@ -402,14 +404,20 @@ fun GithubItemPane(
                         TroupeButton(
                             text = stringResource(R.string.github_merge_pr),
                             variant = TroupeButtonVariant.Secondary,
+                            enabled = !merging,
+                            loading = merging,
                             onClick = {
+                                if (merging) return@TroupeButton
+                                merging = true
                                 actionError = null
                                 scope.launch {
                                     when (val res = githubApi.mergePr(server.address, tokenProvider(), cwd, repo, number)) {
                                         is ApiResult.Ok -> load()
                                         is ApiResult.ServerError -> actionError = res.message
+                                        ApiResult.Unauthorized -> actionError = "Authentication required. Re-enter your server token."
                                         else -> actionError = "Could not merge pull request."
                                     }
+                                    merging = false
                                 }
                             },
                         )

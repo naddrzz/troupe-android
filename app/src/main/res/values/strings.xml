@@ -372,7 +372,10 @@
     <string name="settings_terminal_font_size">Font size</string>
     <string name="settings_confirm_terminal_close">Confirm before closing terminal</string>
     <string name="settings_notify_needs_you">Notify when an agent needs you</string>
-    <string name="needs_you_one">1 needs you</string>
-    <string name="needs_you_many">%1$d need you</string>
+    <plurals name="needs_you">
+        <item quantity="one">%1$d needs you</item>
+        <item quantity="other">%1$d need you</item>
+    </plurals>
+    <string name="setup_port_invalid">Enter a port between 1 and 65535.</string>
     <string name="settings_notify_turn_finished">Notify when a turn finishes</string>
 </resources>

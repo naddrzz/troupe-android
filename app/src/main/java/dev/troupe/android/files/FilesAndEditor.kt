@@ -143,6 +143,7 @@ fun MobileFileExplorerSheet(
     var query by remember { mutableStateOf("") }
     var creatingKind by remember { mutableStateOf<String?>(null) } // "file" or "dir"
     var newName by remember { mutableStateOf("") }
+    var createError by remember(currentPath) { mutableStateOf<String?>(null) }
 
     fun load(path: String) {
         loading = true
@@ -201,7 +202,10 @@ fun MobileFileExplorerSheet(
                     TroupeIconButton(
                         icon = TroupeIcons.Plus,
                         contentDescription = stringResource(R.string.files_new_file),
-                        onClick = { creatingKind = if (creatingKind == null) "file" else null },
+                        onClick = {
+                            creatingKind = if (creatingKind == null) "file" else null
+                            createError = null
+                        },
                     )
                 }
             }
@@ -220,19 +224,28 @@ fun MobileFileExplorerSheet(
                         TroupeButton(
                             text = stringResource(R.string.files_new_file),
                             variant = if (creatingKind == "file") TroupeButtonVariant.Secondary else TroupeButtonVariant.Outline,
-                            onClick = { creatingKind = "file" },
+                            onClick = {
+                                creatingKind = "file"
+                                createError = null
+                            },
                             modifier = Modifier.weight(1f),
                         )
                         TroupeButton(
                             text = stringResource(R.string.files_new_folder),
                             variant = if (creatingKind == "dir") TroupeButtonVariant.Secondary else TroupeButtonVariant.Outline,
-                            onClick = { creatingKind = "dir" },
+                            onClick = {
+                                creatingKind = "dir"
+                                createError = null
+                            },
                             modifier = Modifier.weight(1f),
                         )
                     }
                     OutlinedTextField(
                         value = newName,
-                        onValueChange = { newName = it },
+                        onValueChange = {
+                            newName = it
+                            createError = null
+                        },
                         placeholder = { Text(if (creatingKind == "file") "index.ts" else "components") },
                         singleLine = true,
                         textStyle = typo.bodyLarge,
@@ -244,15 +257,19 @@ fun MobileFileExplorerSheet(
                             unfocusedTextColor = palette.foreground,
                         ),
                     )
+                    if (createError != null) {
+                        Text(createError!!, style = typo.bodySmall, color = palette.destructive)
+                    }
                     TroupeButton(
                         text = stringResource(R.string.files_create),
                         enabled = newName.isNotBlank(),
                         onClick = {
                             val cleanName = newName.trim()
                             if (entries.any { it.name == cleanName }) {
-                                error = "An entry named '$cleanName' already exists in this folder."
+                                createError = "An entry named '$cleanName' already exists in this folder."
                                 return@TroupeButton
                             }
+                            createError = null
                             val target = "${currentPath.trimEnd('/')}/$cleanName"
                             val kind = creatingKind
                             scope.launch {
@@ -265,7 +282,7 @@ fun MobileFileExplorerSheet(
                                 if (res is ApiResult.Ok) {
                                     creatingKind = null
                                     newName = ""
-                                    error = null
+                                    createError = null
                                     if (kind == "file") {
                                         onDismiss()
                                         onOpenFile(target)
@@ -273,9 +290,11 @@ fun MobileFileExplorerSheet(
                                         load(currentPath)
                                     }
                                 } else if (res is ApiResult.ServerError) {
-                                    error = res.message
+                                    createError = res.message
+                                } else if (res is ApiResult.Unauthorized) {
+                                    createError = "Authentication required. Re-enter your server token."
                                 } else {
-                                    error = "Could not create $cleanName."
+                                    createError = "Could not create $cleanName."
                                 }
                             }
                         },

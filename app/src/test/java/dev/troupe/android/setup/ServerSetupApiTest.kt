@@ -31,4 +31,24 @@ class ServerSetupApiTest {
             }
         }
     }
+
+    @Test
+    fun applySerializesExplicitNullUpdateChannelAndNonNullChannel() = runBlocking {
+        FakeTroupeServer().use { server ->
+            server.setupRequired = true
+            TestGraph(temp.newFolder()).use { graph ->
+                val offAnswers = ServerSetupAnswers(updateChannel = null)
+                val offRes = graph.setupApi.apply(server.address, server.setupToken, offAnswers)
+                assertTrue(offRes is ApiResult.Ok)
+                val offBody = server.httpRequests.last { it.url.encodedPath == "/setup/apply" }.body?.utf8().orEmpty()
+                assertTrue("Expected explicit null updateChannel in: $offBody", offBody.contains("\"updateChannel\":null"))
+
+                val stableAnswers = ServerSetupAnswers(updateChannel = "stable")
+                val stableRes = graph.setupApi.validate(server.address, server.setupToken, stableAnswers)
+                assertTrue(stableRes is ApiResult.Ok)
+                val stableBody = server.httpRequests.last { it.url.encodedPath == "/setup/validate" }.body?.utf8().orEmpty()
+                assertTrue("Expected string updateChannel in: $stableBody", stableBody.contains("\"updateChannel\":\"stable\""))
+            }
+        }
+    }
 }

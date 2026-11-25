@@ -52,11 +52,18 @@ class WebStoreClient(
     private val casValues = ConcurrentHashMap<String, JsonElement>()
     private val pendingMutex = Mutex()
     private val pendingWrites = LinkedHashMap<String, PendingWrite>()
-    private val failedWrites = LinkedHashMap<String, JsonElement>()
+    private val failedWrites = LinkedHashMap<String, FailedWrite>()
+    private val keyEpochs = HashMap<String, Long>()
+
+    private data class FailedWrite(
+        val data: JsonElement,
+        val epoch: Long,
+    )
 
     private data class PendingWrite(
         val logicalKey: String,
         val data: JsonElement,
+        val epoch: Long,
         val job: Job,
         val waiters: MutableList<kotlinx.coroutines.CompletableDeferred<StoreWriteResult>>,
     )
@@ -105,13 +112,25 @@ class WebStoreClient(
             )
         }
         if (immediate || debounceMs <= 0L) {
-            val existingWaiters = cancelPending(logicalKey)
-            val result = sendWriteAndRecordRetry(logicalKey, data, wrapped)
-            existingWaiters.forEach { it.complete(result) }
-            return result
+            val (epoch, existingWaiters) = pendingMutex.withLock {
+                val nextEpoch = (keyEpochs[logicalKey] ?: 0L) + 1L
+                keyEpochs[logicalKey] = nextEpoch
+                val removed = pendingWrites.remove(logicalKey)
+                removed?.job?.cancel()
+                nextEpoch to removed?.waiters?.toList().orEmpty()
+            }
+            var outcome: StoreWriteResult? = null
+            return try {
+                sendWriteAndRecordRetry(logicalKey, data, wrapped, epoch).also { outcome = it }
+            } finally {
+                val finalOutcome = outcome ?: StoreWriteResult.Error("CANCELLED", "Write cancelled")
+                existingWaiters.forEach { it.complete(finalOutcome) }
+            }
         }
         val waiter = kotlinx.coroutines.CompletableDeferred<StoreWriteResult>()
         pendingMutex.withLock {
+            val nextEpoch = (keyEpochs[logicalKey] ?: 0L) + 1L
+            keyEpochs[logicalKey] = nextEpoch
             val prev = pendingWrites.remove(logicalKey)
             prev?.job?.cancel()
             val waiters = prev?.waiters ?: mutableListOf()
@@ -120,19 +139,32 @@ class WebStoreClient(
                 delay(debounceMs)
                 val ready = pendingMutex.withLock { pendingWrites.remove(logicalKey) }
                 if (ready != null) {
-                    val result = sendWriteAndRecordRetry(ready.logicalKey, ready.data, wrap(ready.data))
-                    ready.waiters.forEach { it.complete(result) }
+                    var outcome: StoreWriteResult? = null
+                    try {
+                        outcome = sendWriteAndRecordRetry(ready.logicalKey, ready.data, wrap(ready.data), ready.epoch)
+                    } catch (t: Throwable) {
+                        outcome = StoreWriteResult.Error("CANCELLED", t.message)
+                        if (t is kotlinx.coroutines.CancellationException) throw t
+                    } finally {
+                        val finalOutcome = outcome ?: StoreWriteResult.Error("CANCELLED", "Write cancelled")
+                        ready.waiters.forEach { it.complete(finalOutcome) }
+                    }
                 }
             }
-            pendingWrites[logicalKey] = PendingWrite(logicalKey, data, job, waiters)
+            pendingWrites[logicalKey] = PendingWrite(logicalKey, data, nextEpoch, job, waiters)
         }
         return waiter.await()
     }
 
     suspend fun delete(logicalKey: String): Boolean {
-        val waiters = cancelPending(logicalKey)
+        val waiters = pendingMutex.withLock {
+            keyEpochs[logicalKey] = (keyEpochs[logicalKey] ?: 0L) + 1L
+            failedWrites.remove(logicalKey)
+            val removed = pendingWrites.remove(logicalKey)
+            removed?.job?.cancel()
+            removed?.waiters?.toList().orEmpty()
+        }
         waiters.forEach { it.complete(StoreWriteResult.Error("CANCELLED", "Deleted before flush")) }
-        pendingMutex.withLock { failedWrites.remove(logicalKey) }
         val hostKey = PersistenceKeys.scopedKey(logicalKey, deviceId)
         val reply = try {
             connection.socket.request("store_delete", buildJsonObject { put("key", hostKey) })
@@ -178,20 +210,23 @@ class WebStoreClient(
             all
         }
         for (item in queued) {
-            val result = sendWriteAndRecordRetry(item.logicalKey, item.data, wrap(item.data))
-            item.waiters.forEach { it.complete(result) }
+            var outcome: StoreWriteResult? = null
+            try {
+                outcome = sendWriteAndRecordRetry(item.logicalKey, item.data, wrap(item.data), item.epoch)
+            } finally {
+                val finalOutcome = outcome ?: StoreWriteResult.Error("CANCELLED", "Flush interrupted")
+                item.waiters.forEach { it.complete(finalOutcome) }
+            }
         }
         retryFailedWrites()
     }
 
     private suspend fun retryFailedWrites() {
         val snapshot = pendingMutex.withLock {
-            val entries = failedWrites.entries.map { it.key to it.value }
-            failedWrites.clear()
-            entries
+            failedWrites.entries.map { it.key to it.value }
         }
-        for ((key, data) in snapshot) {
-            sendWriteAndRecordRetry(key, data, wrap(data))
+        for ((key, failed) in snapshot) {
+            sendWriteAndRecordRetry(key, failed.data, wrap(failed.data), failed.epoch)
         }
     }
 
@@ -199,26 +234,23 @@ class WebStoreClient(
         logicalKey: String,
         data: JsonElement,
         wrapped: JsonObject,
+        epoch: Long,
     ): StoreWriteResult {
         val result = sendWrite(logicalKey, wrapped)
         pendingMutex.withLock {
+            val isLatestEpoch = keyEpochs[logicalKey] == epoch
             if (result is StoreWriteResult.Error && result.code == "WS_ERROR") {
-                if (logicalKey !in pendingWrites) {
-                    failedWrites[logicalKey] = data
+                if (isLatestEpoch && logicalKey !in pendingWrites) {
+                    failedWrites[logicalKey] = FailedWrite(data, epoch)
                 }
             } else {
-                failedWrites.remove(logicalKey)
+                val existing = failedWrites[logicalKey]
+                if (existing != null && existing.epoch <= epoch) {
+                    failedWrites.remove(logicalKey)
+                }
             }
         }
         return result
-    }
-
-    private suspend fun cancelPending(
-        logicalKey: String,
-    ): List<kotlinx.coroutines.CompletableDeferred<StoreWriteResult>> = pendingMutex.withLock {
-        val removed = pendingWrites.remove(logicalKey)
-        removed?.job?.cancel()
-        removed?.waiters?.toList().orEmpty()
     }
 
     private suspend fun sendWrite(logicalKey: String, wrapped: JsonObject): StoreWriteResult {

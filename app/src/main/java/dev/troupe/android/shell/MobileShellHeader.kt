@@ -20,6 +20,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -82,11 +83,7 @@ fun MobileShellHeader(
                         onClick = onOpenDrawer,
                     )
                     if (foldedIntoMenu) {
-                        val attentionDesc = if (attentionCount == 1) {
-                            stringResource(R.string.needs_you_one)
-                        } else {
-                            stringResource(R.string.needs_you_many, attentionCount)
-                        }
+                        val attentionDesc = pluralStringResource(R.plurals.needs_you, attentionCount, attentionCount)
                         Box(
                             modifier = Modifier
                                 .align(Alignment.TopEnd)

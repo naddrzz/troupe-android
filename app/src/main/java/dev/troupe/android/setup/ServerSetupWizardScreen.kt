@@ -272,7 +272,9 @@ private fun SetupFormContent(
         // Port
         val parsedPort = portText.toIntOrNull()
         val portValid = parsedPort != null && parsedPort in 1..65535
-        val portErrorText = ui.fieldErrors.port ?: if (!portValid) "Enter a port between 1 and 65535" else null
+        val portErrorText = ui.fieldErrors.port
+            ?: ui.portErrorRes?.let { stringResource(it) }
+            ?: if (!portValid) stringResource(R.string.setup_port_invalid) else null
         OutlinedTextField(
             value = portText,
             onValueChange = { next ->

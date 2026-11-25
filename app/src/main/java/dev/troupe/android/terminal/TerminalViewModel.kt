@@ -242,6 +242,33 @@ class TerminalViewModel @Inject constructor(
         if (_ui.value !is TerminalUi.Exited) _ui.value = TerminalUi.Live
         live.complete(Unit)
         if (inputJob == null) inputJob = viewModelScope.launch { sendInput() }
+        viewModelScope.launch { seedMetadata(current) }
+    }
+
+    private suspend fun seedMetadata(current: TerminalSocket) {
+        val before = _metadata.value
+        val payload = buildJsonObject { put("terminalId", terminalId) }
+        suspend fun query(type: String): kotlinx.serialization.json.JsonElement? = try {
+            current.request(type, payload).takeIf { it.success }?.data
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        val cwd = (query("get_cwd") as? kotlinx.serialization.json.JsonPrimitive)
+            ?.takeIf { it.isString }?.content
+        val branch = (query("get_git_branch") as? kotlinx.serialization.json.JsonPrimitive)
+            ?.takeIf { it.isString }?.content
+        val exitCode = (query("get_exit_code") as? kotlinx.serialization.json.JsonPrimitive)
+            ?.content?.toIntOrNull()
+        if (cwd != null || branch != null || exitCode != null) {
+            val latest = _metadata.value
+            _metadata.value = TerminalMetadata(
+                cwd = if (latest.cwd == before.cwd) (cwd ?: before.cwd) else latest.cwd,
+                gitBranch = if (latest.gitBranch == before.gitBranch) (branch ?: before.gitBranch) else latest.gitBranch,
+                lastExitCode = if (latest.lastExitCode == before.lastExitCode) (exitCode ?: before.lastExitCode) else latest.lastExitCode,
+            )
+        }
     }
 
     /** A nonzero cursor goes out with its epoch, or with `""` when none is known (which forces a full replay). */
