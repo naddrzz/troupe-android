@@ -14,8 +14,10 @@ import kotlinx.serialization.json.JsonElement
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Interceptor
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -36,7 +38,7 @@ sealed interface ApiResult<out T> {
  */
 fun troupeHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .connectTimeout(5, TimeUnit.SECONDS)
-    .readTimeout(10, TimeUnit.SECONDS)
+    .readTimeout(15, TimeUnit.SECONDS)
     .addInterceptor(CleartextGuard)
     .addNetworkInterceptor(CleartextGuard)
     .build()
@@ -53,27 +55,138 @@ private object CleartextGuard : Interceptor {
     }
 }
 
+private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+
 /**
- * The Troupe Server's HTTP routes. The token travels only in `Authorization: Bearer`; no
- * `Origin` header is sent (the server checks Origin only when present).
+ * The Troupe Server's HTTP routes. The token travels only in `Authorization: Bearer` when non-blank;
+ * no `Origin` header is sent (the server checks Origin only when present).
  */
 class ServerApi @Inject constructor(private val client: OkHttpClient) {
 
-    suspend fun health(address: ServerAddress): ApiResult<Health> =
-        get(address, "health", token = null) { body -> ApiResult.Ok(TroupeJson.decodeFromString(Health.serializer(), body)) }
+    suspend fun health(address: ServerAddress, token: String? = null): ApiResult<Health> =
+        getRaw(address, "health", token = token, Health.serializer())
 
-    suspend fun projects(address: ServerAddress, token: String): ApiResult<ProjectsState> =
-        get(address, "projects", token) { body -> enveloped(body, ProjectsState.serializer()) }
+    suspend fun projects(address: ServerAddress, token: String?): ApiResult<ProjectsState> =
+        getEnveloped(address, "projects", token, ProjectsState.serializer())
 
-    private suspend fun <T> get(
+    suspend fun <T> getRaw(
         address: ServerAddress,
         path: String,
         token: String?,
+        serializer: KSerializer<T>,
+    ): ApiResult<T> = execute(address, "GET", path, token, bodyJson = null) { body ->
+        ApiResult.Ok(TroupeJson.decodeFromString(serializer, body))
+    }
+
+    suspend fun <T> getEnveloped(
+        address: ServerAddress,
+        path: String,
+        token: String?,
+        serializer: KSerializer<T>,
+    ): ApiResult<T> = execute(address, "GET", path, token, bodyJson = null) { body ->
+        enveloped(body, serializer)
+    }
+
+    suspend fun getUnit(
+        address: ServerAddress,
+        path: String,
+        token: String?,
+    ): ApiResult<Unit> = execute(address, "GET", path, token, bodyJson = null) { body ->
+        envelopedUnit(body)
+    }
+
+    suspend fun <T> postEnveloped(
+        address: ServerAddress,
+        path: String,
+        token: String?,
+        bodyJson: String = "{}",
+        serializer: KSerializer<T>,
+    ): ApiResult<T> = execute(address, "POST", path, token, bodyJson = bodyJson) { body ->
+        enveloped(body, serializer)
+    }
+
+    suspend fun postUnit(
+        address: ServerAddress,
+        path: String,
+        token: String?,
+        bodyJson: String = "{}",
+    ): ApiResult<Unit> = execute(address, "POST", path, token, bodyJson = bodyJson) { body ->
+        envelopedUnit(body)
+    }
+
+    suspend fun <T> putEnveloped(
+        address: ServerAddress,
+        path: String,
+        token: String?,
+        bodyJson: String = "{}",
+        serializer: KSerializer<T>,
+    ): ApiResult<T> = execute(address, "PUT", path, token, bodyJson = bodyJson) { body ->
+        enveloped(body, serializer)
+    }
+
+    suspend fun putUnit(
+        address: ServerAddress,
+        path: String,
+        token: String?,
+        bodyJson: String = "{}",
+    ): ApiResult<Unit> = execute(address, "PUT", path, token, bodyJson = bodyJson) { body ->
+        envelopedUnit(body)
+    }
+
+    suspend fun <T> deleteEnveloped(
+        address: ServerAddress,
+        path: String,
+        token: String?,
+        bodyJson: String? = null,
+        serializer: KSerializer<T>,
+    ): ApiResult<T> = execute(address, "DELETE", path, token, bodyJson = bodyJson) { body ->
+        enveloped(body, serializer)
+    }
+
+    suspend fun deleteUnit(
+        address: ServerAddress,
+        path: String,
+        token: String?,
+        bodyJson: String? = null,
+    ): ApiResult<Unit> = execute(address, "DELETE", path, token, bodyJson = bodyJson) { body ->
+        envelopedUnit(body)
+    }
+
+    suspend fun getJsonElement(
+        address: ServerAddress,
+        path: String,
+        token: String?,
+    ): ApiResult<JsonElement> = getEnveloped(address, path, token, JsonElement.serializer())
+
+    suspend fun postJsonElement(
+        address: ServerAddress,
+        path: String,
+        token: String?,
+        bodyJson: String = "{}",
+    ): ApiResult<JsonElement> = postEnveloped(address, path, token, bodyJson, JsonElement.serializer())
+
+    private suspend fun <T> execute(
+        address: ServerAddress,
+        method: String,
+        path: String,
+        token: String?,
+        bodyJson: String?,
         decode: (String) -> ApiResult<T>,
     ): ApiResult<T> {
-        val request = Request.Builder().url(address.httpUrl(path)).get()
-            .apply { if (token != null) header("Authorization", "Bearer $token") }
-            .build()
+        val cleanPath = path.removePrefix("/")
+        val reqBody = bodyJson?.toRequestBody(JSON_MEDIA_TYPE)
+        val builder = Request.Builder().url(address.httpUrl(cleanPath))
+        when (method) {
+            "GET" -> builder.get()
+            "POST" -> builder.post(reqBody ?: "{}".toRequestBody(JSON_MEDIA_TYPE))
+            "PUT" -> builder.put(reqBody ?: "{}".toRequestBody(JSON_MEDIA_TYPE))
+            "DELETE" -> if (reqBody != null) builder.delete(reqBody) else builder.delete()
+            else -> builder.method(method, reqBody)
+        }
+        if (!token.isNullOrBlank()) {
+            builder.header("Authorization", "Bearer $token")
+        }
+        val request = builder.build()
         // Off the caller's (main) thread: reading the body blocks.
         return try {
             withContext(Dispatchers.IO) {
@@ -108,6 +221,16 @@ class ServerApi @Inject constructor(private val client: OkHttpClient) {
         val data = envelope.data
         return when {
             envelope.success && data != null -> ApiResult.Ok(data)
+            envelope.code == "UNAUTHORIZED" -> ApiResult.Unauthorized
+            else -> ApiResult.ServerError(envelope.error ?: "Unknown error", envelope.code)
+        }
+    }
+
+    private fun envelopedUnit(body: String): ApiResult<Unit> {
+        if (body.isBlank()) return ApiResult.Ok(Unit)
+        val envelope = TroupeJson.decodeFromString(HttpEnvelope.serializer(JsonElement.serializer()), body)
+        return when {
+            envelope.success -> ApiResult.Ok(Unit)
             envelope.code == "UNAUTHORIZED" -> ApiResult.Unauthorized
             else -> ApiResult.ServerError(envelope.error ?: "Unknown error", envelope.code)
         }

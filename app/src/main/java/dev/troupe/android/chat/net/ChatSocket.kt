@@ -102,7 +102,7 @@ class ChatSocket internal constructor(
             put("protocolVersion", PROTOCOL_VERSION)
             put("deviceId", id.deviceId)
             put("clientInstanceId", id.clientInstanceId)
-            put("token", token)
+            if (token.isNotBlank()) put("token", token)
         }, commandId = null)
         if (reply.ok) return ConnectionState.Connected
         val reason = when (reply.code) {
@@ -124,6 +124,20 @@ class ChatSocket internal constructor(
         return send(current, type, payload, commandId)
     }
 
+    /**
+     * Dispatches a request frame immediately over the authenticated socket without waiting for its
+     * reply (used for `send_prompt` when opening a new chat so long agent turns do not time out
+     * waiting on the turn-completion reply). Throws [ChatDisconnected] if the socket cannot send.
+     */
+    fun dispatch(type: String, payload: JsonObject, commandId: String? = null) {
+        val current = connection?.takeIf { it.authenticated } ?: throw ChatDisconnected()
+        val id = UUID.randomUUID().toString()
+        val frame = TroupeJson.encodeToString(ChatRequest.serializer(), ChatRequest(id, type, payload, commandId))
+        if (!current.webSocket.send(frame)) {
+            throw ChatDisconnected()
+        }
+    }
+
     private suspend fun send(connection: Connection, type: String, payload: JsonObject, commandId: String?): ChatFrame.Reply {
         val socket = connection.webSocket
         val id = UUID.randomUUID().toString()
@@ -143,6 +157,12 @@ class ChatSocket internal constructor(
         }
     }
 
+    /** Sends a best-effort `{"type":"background"}` or `{"type":"foreground"}` lifecycle hint. */
+    fun sendLifecycle(background: Boolean) {
+        val current = connection?.takeIf { it.authenticated } ?: return
+        current.webSocket.send(if (background) """{"type":"background"}""" else """{"type":"foreground"}""")
+    }
+
     private fun failPending() {
         pending.values.forEach { it.completeExceptionally(ChatDisconnected()) }
         pending.clear()
@@ -159,6 +179,7 @@ class ChatSocket internal constructor(
             _activity.tryEmit(Unit)
             when (val frame = parseChatFrame(text)) {
                 is ChatFrame.Reply -> pending[frame.id]?.complete(frame)
+                is ChatFrame.EventsBatch -> if (current) frame.events.forEach { _frames.tryEmit(it) }
                 is ChatFrame.Event, is ChatFrame.Gap, is ChatFrame.Watch -> if (current) _frames.tryEmit(frame)
                 ChatFrame.Heartbeat, is ChatFrame.Unknown -> Unit
             }

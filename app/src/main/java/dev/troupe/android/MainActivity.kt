@@ -58,6 +58,8 @@ class MainActivity : FragmentActivity() {
     @Inject lateinit var screens: Screens
     @Inject lateinit var notifier: AttentionNotifier
     @Inject lateinit var background: BackgroundConnection
+    @Inject lateinit var appSettingsStore: dev.troupe.android.workspace.AppSettingsStore
+    @Inject lateinit var workspaceSessionManager: dev.troupe.android.workspace.WorkspaceSessionManager
     /** The Agent Chat a tapped notification leads to, until the navigation has opened it. */
     private val link = MutableStateFlow<ChatLink?>(null)
 
@@ -84,8 +86,12 @@ class MainActivity : FragmentActivity() {
             }
         }
         setContent {
+            val appSettings by appSettingsStore.settings.collectAsStateWithLifecycle()
             CompositionLocalProvider(LocalAuthenticator provides authenticator) {
-                TroupeTheme {
+                TroupeTheme(
+                    themeId = appSettings.colorTheme,
+                    appearanceMode = appSettings.resolvedAppearance(),
+                ) {
                     val state by lock.state.collectAsStateWithLifecycle()
                     val hidden = state.gate != Gate.Unlocked
                     val focus = LocalFocusManager.current
@@ -115,12 +121,14 @@ class MainActivity : FragmentActivity() {
     override fun onStart() {
         super.onStart()
         screens.onForeground(true)
+        workspaceSessionManager.onAppForeground()
     }
 
     override fun onStop() {
         super.onStop()
         if (isChangingConfigurations) return
         screens.onForeground(false)
+        workspaceSessionManager.onAppBackground()
         background.onAppHidden()
     }
 

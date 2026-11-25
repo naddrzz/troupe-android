@@ -130,6 +130,16 @@ class ChatConnections internal constructor(
         }
     }
 
+    /** Drops an existing connection so the next [connection] call authenticates with the updated token. */
+    suspend fun resetConnection(serverId: String) = mutex.withLock {
+        open.remove(serverId)?.stop()
+    }
+
+    /** Forwards Android app foreground/background transitions to every active `/ws` connection. */
+    fun notifyLifecycle(background: Boolean) {
+        open.values.forEach { it.socket.sendLifecycle(background) }
+    }
+
     /** Drops every connection; for tests that end. */
     internal fun closeAll() {
         open.values.forEach { it.stop() }

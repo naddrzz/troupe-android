@@ -66,7 +66,11 @@ class TestGraph(dir: File, lifecycleDispatcher: CoroutineDispatcher = Dispatcher
     @Volatile var now = 1_000_000L
     val attention = AttentionCenter(chatConnections, repository, api, Dispatchers.IO) { now }
 
+    val setupApi = dev.troupe.android.setup.ServerSetupApi(api)
+
     fun pairViewModel() = PairViewModel(api, sockets, repository, viewOnly)
+
+    fun connectServerViewModel() = dev.troupe.android.pairing.ConnectServerViewModel(api, sockets, repository, viewOnly)
 
     fun projectsViewModel(serverId: String) =
         ProjectsViewModel(SavedStateHandle(mapOf("serverId" to serverId)), api, repository, connections, attention)

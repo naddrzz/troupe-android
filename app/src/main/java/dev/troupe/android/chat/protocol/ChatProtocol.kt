@@ -54,6 +54,9 @@ sealed interface ChatFrame {
         val delta: JsonElement?,
     ) : ChatFrame
 
+    /** A batch of session log events `{type: "events", events: [...]}`. */
+    data class EventsBatch(val events: List<Event>) : ChatFrame
+
     /** Anything this app does not understand yet. Never a crash. */
     data class Unknown(val raw: String) : ChatFrame
 }
@@ -79,6 +82,9 @@ private fun parse(text: String): ChatFrame? {
     return when {
         type == "heartbeat" -> ChatFrame.Heartbeat
         type == "gap" -> ChatFrame.Gap(obj.getValue("sid").jsonPrimitive.content)
+        type == "events" -> ChatFrame.EventsBatch(
+            obj["events"]?.jsonArray.orEmpty().mapNotNull(::parseChatEvent),
+        )
         type == "watch" -> {
             val revision = obj.getValue("revision").jsonObject
             ChatFrame.Watch(

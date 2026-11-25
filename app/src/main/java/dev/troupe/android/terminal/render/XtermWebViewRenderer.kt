@@ -37,7 +37,8 @@ import java.io.ByteArrayOutputStream
 @SuppressLint("SetJavaScriptEnabled")
 class XtermWebViewRenderer(
     val webView: WebView,
-    private val palette: AnsiPalette = AnsiPalette.Termul,
+    initialPalette: AnsiPalette = AnsiPalette.Termul,
+    initialFontSizePx: Int = 14,
     private val onGone: () -> Unit = {},
 ) : TerminalRenderer {
     private val typed = Channel<String>(Channel.UNLIMITED)
@@ -51,9 +52,14 @@ class XtermWebViewRenderer(
     private val pending = ByteArrayOutputStream() // guarded by lock
     private var flushScheduled = false // guarded by lock
     private var ready = false // guarded by lock
+    @Volatile private var palette: AnsiPalette = initialPalette
+    @Volatile private var currentFontSizePx: Int = initialFontSizePx
     private val flush = Runnable { flush() }
 
     init {
+        if (webView is TroupeTerminalWebView) {
+            webView.onEnterKey = { typed.trySend("\r") }
+        }
         val assets = WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(webView.context))
             .build()
@@ -83,6 +89,26 @@ class XtermWebViewRenderer(
         }
         webView.addJavascriptInterface(Bridge(), "TroupeBridge")
         webView.loadUrl(PAGE)
+    }
+
+    /** Dynamically updates xterm's ANSI palette whenever the user switches Troupe themes. */
+    fun updateTheme(next: AnsiPalette) {
+        if (palette == next) return
+        palette = next
+        val json = TroupeJson.encodeToString(AnsiPalette.serializer(), next)
+        val escaped = json.replace("\\", "\\\\").replace("'", "\\'")
+        main.post {
+            webView.setBackgroundColor(android.graphics.Color.parseColor(next.background))
+            if (isReady()) webView.evaluateJavascript("troupe.setTheme('$escaped')", null)
+        }
+    }
+
+    /** Dynamically updates xterm's font size from `settings/app` (`terminalFontSize`). */
+    fun updateFontSize(fontSizePx: Int) {
+        currentFontSizePx = fontSizePx
+        main.post {
+            if (isReady()) webView.evaluateJavascript("troupe.setFontSize($fontSizePx)", null)
+        }
     }
 
     override fun write(bytes: ByteArray) {
@@ -115,6 +141,7 @@ class XtermWebViewRenderer(
     /** Releases the WebView. The renderer is unusable afterwards. */
     fun destroy() {
         main.removeCallbacks(flush)
+        if (webView is TroupeTerminalWebView) webView.onEnterKey = null
         typed.close()
         webView.removeJavascriptInterface("TroupeBridge")
         webView.destroy()
@@ -152,7 +179,13 @@ class XtermWebViewRenderer(
         @JavascriptInterface
         fun onReady() {
             synchronized(lock) { ready = true }
-            main.post(flush)
+            main.post {
+                val size = currentFontSizePx
+                if (size != 14) {
+                    webView.evaluateJavascript("troupe.setFontSize($size)", null)
+                }
+                flush()
+            }
         }
     }
 
@@ -160,5 +193,54 @@ class XtermWebViewRenderer(
         const val PAGE = "https://appassets.androidplatform.net/assets/terminal/index.html"
         const val FRAME_MS = 16L
         const val MAX_PENDING = 4 shl 20
+    }
+}
+
+/**
+ * Custom [WebView] fixing troupe-android #16 (Android soft keyboard Enter key dropped by xterm's
+ * hidden `<textarea>` on Gboard / Samsung Keyboard). Intercepts IME Enter actions and newline
+ * commits at the [android.view.inputmethod.InputConnection] boundary and forwards `\r` directly.
+ */
+class TroupeTerminalWebView(context: android.content.Context) : WebView(context) {
+    var onEnterKey: (() -> Unit)? = null
+
+    override fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo): android.view.inputmethod.InputConnection? {
+        val base = super.onCreateInputConnection(outAttrs) ?: return null
+        outAttrs.imeOptions = (outAttrs.imeOptions and android.view.inputmethod.EditorInfo.IME_MASK_ACTION.inv()) or
+            android.view.inputmethod.EditorInfo.IME_ACTION_SEND or
+            android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
+        return object : android.view.inputmethod.InputConnectionWrapper(base, true) {
+            override fun performEditorAction(editorAction: Int): Boolean {
+                if (editorAction == android.view.inputmethod.EditorInfo.IME_ACTION_SEND ||
+                    editorAction == android.view.inputmethod.EditorInfo.IME_ACTION_DONE ||
+                    editorAction == android.view.inputmethod.EditorInfo.IME_ACTION_GO ||
+                    editorAction == android.view.inputmethod.EditorInfo.IME_ACTION_UNSPECIFIED
+                ) {
+                    onEnterKey?.invoke()
+                    return true
+                }
+                return super.performEditorAction(editorAction)
+            }
+
+            override fun sendKeyEvent(event: android.view.KeyEvent): Boolean {
+                if (event.keyCode == android.view.KeyEvent.KEYCODE_ENTER ||
+                    event.keyCode == android.view.KeyEvent.KEYCODE_NUMPAD_ENTER
+                ) {
+                    if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+                        onEnterKey?.invoke()
+                    }
+                    return true
+                }
+                return super.sendKeyEvent(event)
+            }
+
+            override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                if (text != null && (text.toString() == "\n" || text.toString() == "\r")) {
+                    onEnterKey?.invoke()
+                    return true
+                }
+                return super.commitText(text, newCursorPosition)
+            }
+        }
     }
 }

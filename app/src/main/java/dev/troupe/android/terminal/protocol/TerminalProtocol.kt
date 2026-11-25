@@ -56,6 +56,15 @@ sealed interface TerminalFrame {
     /** The `exit` event: the process ended, with [exitCode] or (killed by a signal) none. */
     data class Exit(val terminalId: String, val exitCode: Int?) : TerminalFrame
 
+    /** Terminal working directory changed (`cwd_changed`). */
+    data class CwdChanged(val terminalId: String, val cwd: String) : TerminalFrame
+
+    /** Terminal git branch changed (`git_branch_changed`). */
+    data class GitBranchChanged(val terminalId: String, val branch: String?) : TerminalFrame
+
+    /** Last command exit code changed (`exit_code_changed`). */
+    data class ExitCodeChanged(val terminalId: String, val exitCode: Int?) : TerminalFrame
+
     /** Anything this app does not understand yet. Never a crash. */
     data class Unknown(val raw: String) : TerminalFrame
 }
@@ -101,8 +110,16 @@ private fun parse(text: String): TerminalFrame? {
             lastSeq = obj.getValue("lastSeq").jsonPrimitive.long,
         )
         // Event payload keys are snake_case, unlike the rest of the protocol.
-        "event" -> obj.getValue("payload").jsonObject.takeIf { it["type"]?.jsonPrimitive?.contentOrNull == "exit" }?.let {
-            TerminalFrame.Exit(it.getValue("terminal_id").jsonPrimitive.content, it["exit_code"]?.jsonPrimitive?.intOrNull)
+        "event" -> {
+            val payload = obj.getValue("payload").jsonObject
+            val tid = payload["terminal_id"]?.jsonPrimitive?.contentOrNull ?: return null
+            when (payload["type"]?.jsonPrimitive?.contentOrNull) {
+                "exit" -> TerminalFrame.Exit(tid, payload["exit_code"]?.jsonPrimitive?.intOrNull)
+                "cwd_changed" -> TerminalFrame.CwdChanged(tid, payload["cwd"]?.jsonPrimitive?.contentOrNull.orEmpty())
+                "git_branch_changed" -> TerminalFrame.GitBranchChanged(tid, payload["branch"]?.jsonPrimitive?.contentOrNull)
+                "exit_code_changed" -> TerminalFrame.ExitCodeChanged(tid, payload["exit_code"]?.jsonPrimitive?.intOrNull)
+                else -> null
+            }
         }
         else -> null
     }

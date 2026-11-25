@@ -38,6 +38,12 @@ import kotlinx.serialization.json.put
 import java.io.IOException
 import javax.inject.Inject
 
+data class TerminalMetadata(
+    val cwd: String? = null,
+    val gitBranch: String? = null,
+    val lastExitCode: Int? = null,
+)
+
 sealed interface TerminalUi {
     data object Connecting : TerminalUi
     data object Live : TerminalUi
@@ -68,6 +74,8 @@ class TerminalViewModel @Inject constructor(
     private val terminalId: String = checkNotNull(savedState["terminalId"])
     private val _ui = MutableStateFlow<TerminalUi>(TerminalUi.Connecting)
     val ui: StateFlow<TerminalUi> = _ui.asStateFlow()
+    private val _metadata = MutableStateFlow(TerminalMetadata())
+    val metadata: StateFlow<TerminalMetadata> = _metadata.asStateFlow()
     private val _connection = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     /** The Paired Server's connection, for the header. */
     val connection: StateFlow<ConnectionState> = _connection.asStateFlow()
@@ -234,6 +242,33 @@ class TerminalViewModel @Inject constructor(
         if (_ui.value !is TerminalUi.Exited) _ui.value = TerminalUi.Live
         live.complete(Unit)
         if (inputJob == null) inputJob = viewModelScope.launch { sendInput() }
+        viewModelScope.launch { seedMetadata(current) }
+    }
+
+    private suspend fun seedMetadata(current: TerminalSocket) {
+        val before = _metadata.value
+        val payload = buildJsonObject { put("terminalId", terminalId) }
+        suspend fun query(type: String): kotlinx.serialization.json.JsonElement? = try {
+            current.request(type, payload).takeIf { it.success }?.data
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        val cwd = (query("get_cwd") as? kotlinx.serialization.json.JsonPrimitive)
+            ?.takeIf { it.isString }?.content
+        val branch = (query("get_git_branch") as? kotlinx.serialization.json.JsonPrimitive)
+            ?.takeIf { it.isString }?.content
+        val exitCode = (query("get_exit_code") as? kotlinx.serialization.json.JsonPrimitive)
+            ?.content?.toIntOrNull()
+        if (cwd != null || branch != null || exitCode != null) {
+            val latest = _metadata.value
+            _metadata.value = TerminalMetadata(
+                cwd = if (latest.cwd == before.cwd) (cwd ?: before.cwd) else latest.cwd,
+                gitBranch = if (latest.gitBranch == before.gitBranch) (branch ?: before.gitBranch) else latest.gitBranch,
+                lastExitCode = if (latest.lastExitCode == before.lastExitCode) (exitCode ?: before.lastExitCode) else latest.lastExitCode,
+            )
+        }
     }
 
     /** A nonzero cursor goes out with its epoch, or with `""` when none is known (which forces a full replay). */
@@ -261,6 +296,15 @@ class TerminalViewModel @Inject constructor(
             }
             is TerminalFrame.Gap -> if (frame.terminalId == terminalId && !awaitingReplay) reattach()
             is TerminalFrame.Exit -> if (frame.terminalId == terminalId) _ui.value = TerminalUi.Exited(frame.exitCode)
+            is TerminalFrame.CwdChanged -> if (frame.terminalId == terminalId) {
+                _metadata.value = _metadata.value.copy(cwd = frame.cwd)
+            }
+            is TerminalFrame.GitBranchChanged -> if (frame.terminalId == terminalId) {
+                _metadata.value = _metadata.value.copy(gitBranch = frame.branch)
+            }
+            is TerminalFrame.ExitCodeChanged -> if (frame.terminalId == terminalId) {
+                _metadata.value = _metadata.value.copy(lastExitCode = frame.exitCode)
+            }
             else -> Unit
         }
     }

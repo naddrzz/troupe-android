@@ -116,7 +116,7 @@ class TerminalSocket internal constructor(
             put("protocolVersion", PROTOCOL_VERSION)
             put("deviceId", id.deviceId)
             put("clientInstanceId", id.clientInstanceId)
-            put("token", token)
+            if (token.isNotBlank()) put("token", token)
         }, commandId = null)
         if (reply.success) return ConnectionState.Connected
         val reason = when (reply.code) {

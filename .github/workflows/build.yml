@@ -30,9 +30,29 @@ jobs:
       # The runner image ships the Android SDK (ANDROID_HOME, licenses accepted); Gradle fetches missing platforms.
       - uses: gradle/actions/setup-gradle@v5
 
-      # The integration test needs a real Troupe Server in Docker, so CI runs only the unit tests.
-      - name: Unit tests and debug build
-        run: ./gradlew testDebugUnitTest assembleDebug
+      # All build, test, lint, and debug APK verification runs in GitHub Actions CI.
+      # Live integration tests need a real Troupe Server in Docker, so CI runs unit tests + androidTest compilation + lint + debug APK.
+      - name: Unit tests, androidTest compile, lint, and debug APK
+        run: ./gradlew --continue testDebugUnitTest compileDebugAndroidTestKotlin lintDebug assembleDebug
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: troupe-android-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload test and lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-and-lint-reports
+          path: |
+            app/build/reports/tests/testDebugUnitTest/
+            app/build/reports/lint-results-debug.html
+          retention-days: 7
+          if-no-files-found: ignore
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
