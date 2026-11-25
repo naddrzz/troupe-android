@@ -158,8 +158,8 @@ class ChatRequestsTest {
         chat.append("s1", "permission_request", permissionRequest("s1", "req-2", "Run tests"))
         eventually { ids(vm) == listOf("req-1", "req-2") }
 
-        chat.closeAll(1011)
         chat.answerElsewhere("req-1")
+        chat.closeAll(1011)
 
         eventually { chat.requests("subscribe").size == 2 && ids(vm) == listOf("req-2") }
     }
@@ -171,10 +171,23 @@ class ChatRequestsTest {
         chat.append("s1", "question_request", questionRequest("s1", "q-2", "Run lint?"))
         eventually { ids(vm) == listOf("q-1", "q-2") }
 
-        chat.closeAll(1011)
         chat.answerElsewhere("q-1")
+        chat.closeAll(1011)
 
         eventually { chat.requests("subscribe").size == 2 && ids(vm) == listOf("q-2") }
+    }
+
+    @Test fun aReconnectPreservesOldestFirstOrderAcrossQuestionsAndPermissions() {
+        chat.sendPendingQuestions = true
+        val vm = open()
+        chat.append("s1", "question_request", questionRequest("s1", "q-1", "Which branch?"))
+        chat.append("s1", "permission_request", permissionRequest("s1", "req-1", "Edit Login.kt"))
+        eventually { ids(vm) == listOf("q-1", "req-1") }
+
+        chat.closeAll(1011)
+
+        eventually { chat.requests("subscribe").size == 2 }
+        assertEquals(listOf("q-1", "req-1"), ids(vm))
     }
 
     @Test fun onAViewOnlyServerTheCardsShowButSendNoAnswer() {

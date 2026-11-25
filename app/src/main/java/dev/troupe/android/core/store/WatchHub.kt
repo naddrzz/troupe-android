@@ -155,6 +155,7 @@ class WatchHub(
     private suspend fun triggerResync(key: Key) {
         val active = mutex.withLock {
             val entry = channels[key] ?: return@withLock false
+            if (entry.hostEpoch == null) return@withLock false
             entry.hostEpoch = null
             entry.lastN = 0
             entry.lastReset = null

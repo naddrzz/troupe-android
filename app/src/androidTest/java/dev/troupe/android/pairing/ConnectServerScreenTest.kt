@@ -92,7 +92,7 @@ class ConnectServerScreenTest {
         compose.onNodeWithText("Use https:// for 8.8.8.8", substring = true).assertIsDisplayed()
     }
 
-    @Test fun scanQrSheetShowsCameraRationaleWhenPermissionNotGranted() {
+    @Test fun scanQrSheetShowsRationaleOrScannerUi() {
         val viewModel = connectViewModel()
         compose.setContent {
             TroupeTheme {
@@ -113,6 +113,19 @@ class ConnectServerScreenTest {
             compose.onNodeWithText(context.getString(R.string.pair_scan_rationale)).assertIsDisplayed()
             compose.onNodeWithText(context.getString(R.string.pair_scan_allow)).assertIsDisplayed()
             compose.onNodeWithText(context.getString(R.string.pair_scan_use_paste)).assertIsDisplayed()
+        } else {
+            val hint = context.getString(R.string.pair_scan_hint)
+            val unavailable = context.getString(R.string.pair_scan_unavailable)
+            compose.waitUntil(timeoutMillis = 5_000) {
+                compose.onAllNodesWithText(hint).fetchSemanticsNodes().isNotEmpty() ||
+                    compose.onAllNodesWithText(unavailable).fetchSemanticsNodes().isNotEmpty()
+            }
+            if (compose.onAllNodesWithText(unavailable).fetchSemanticsNodes().isNotEmpty()) {
+                compose.onNodeWithText(unavailable).assertIsDisplayed()
+                compose.onNodeWithText(context.getString(R.string.pair_scan_use_paste)).assertIsDisplayed()
+            } else {
+                compose.onNodeWithText(hint).assertIsDisplayed()
+            }
         }
     }
 }

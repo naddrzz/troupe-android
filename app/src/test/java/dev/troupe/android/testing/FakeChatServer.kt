@@ -218,7 +218,7 @@ class FakeChatServer internal constructor(
                 !authed -> reply(id, Err("unauthorized", "Unauthorized"))
                 type in unanswered -> Unit
                 type == "watch" -> watch(id, payload)
-                type == "unwatch" -> reply(id, JsonObject(emptyMap()))
+                type == "unwatch" -> unwatch(id, payload)
                 type == "list_persisted_sessions" -> reply(id, JsonArray(history))
                 type == "subscribe" -> subscribe(id, payload)
                 type == "recover_session_snapshot" -> snapshot(id, payload)
@@ -258,6 +258,13 @@ class FakeChatServer internal constructor(
                 put("scope", "")
                 put("revision", buildJsonObject { put("hostEpoch", hostEpoch); put("n", 1) })
             })
+        }
+
+        private fun unwatch(id: String, payload: JsonObject) = synchronized(lock) {
+            if (payload["watch"]?.jsonPrimitive?.contentOrNull == "chat_history") {
+                watchN = 0
+            }
+            reply(id, JsonObject(emptyMap()))
         }
 
         private fun subscribe(id: String, payload: JsonObject) = synchronized(lock) {

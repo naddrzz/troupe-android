@@ -110,6 +110,7 @@ private fun CameraPreview(onResult: (String) -> Unit, onUsePaste: () -> Unit) {
         )
         val executor = ContextCompat.getMainExecutor(context)
         val sightings = QrSightings()
+        var disposed = false
         val controller = runCatching {
             LifecycleCameraController(context).apply {
                 setEnabledUseCases(CameraController.IMAGE_ANALYSIS)
@@ -124,8 +125,33 @@ private fun CameraPreview(onResult: (String) -> Unit, onUsePaste: () -> Unit) {
         }.onFailure {
             cameraUnavailable = true
         }.getOrNull()
-        previewView.controller = controller
+
+        if (controller != null) {
+            controller.initializationFuture.addListener(
+                {
+                    if (disposed) return@addListener
+                    val ok = runCatching {
+                        controller.initializationFuture.get()
+                        val hasBack = controller.hasCamera(androidx.camera.core.CameraSelector.DEFAULT_BACK_CAMERA)
+                        val hasFront = controller.hasCamera(androidx.camera.core.CameraSelector.DEFAULT_FRONT_CAMERA)
+                        if (!hasBack && hasFront) {
+                            controller.cameraSelector = androidx.camera.core.CameraSelector.DEFAULT_FRONT_CAMERA
+                        }
+                        hasBack || hasFront
+                    }.getOrDefault(false)
+                    if (ok) {
+                        previewView.controller = controller
+                    } else {
+                        previewView.controller = null
+                        controller.unbind()
+                        cameraUnavailable = true
+                    }
+                },
+                executor,
+            )
+        }
         onDispose {
+            disposed = true
             previewView.controller = null
             controller?.unbind()
             scanner.close()

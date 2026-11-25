@@ -18,6 +18,7 @@ data class AttentionItem(
     val sessionTitle: String?,
     val kind: AttentionKind,
     val since: Long,
+    val projectId: String? = null,
 )
 
 /** A turn that ended in [sessionId]: `prompt_complete`, whatever its stop reason. */
@@ -51,6 +52,7 @@ internal fun deriveAttention(
         sessionTitle = session.title?.takeIf(String::isNotBlank),
         kind = kind,
         since = since,
+        projectId = session.projectId,
     )
     val requests = (openChats[session.sessionId] ?: tracked[session.sessionId]).orEmpty()
         .filter { it.id !in resolved }

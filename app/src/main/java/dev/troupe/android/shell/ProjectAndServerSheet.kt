@@ -72,11 +72,16 @@ fun ProjectAndServerSheet(
     onCreateProject: (name: String, path: String, color: String, onDone: (String?) -> Unit) -> Unit,
     onSelectServer: (String) -> Unit,
     onAddServer: () -> Unit,
-    onOpenChat: (sessionId: String, title: String?) -> Unit = { _, _ -> },
+    onOpenChat: (sessionId: String, title: String?, projectId: String?) -> Unit = { _, _, _ -> },
+    onShowingProjectsRoot: (Boolean) -> Unit = {},
 ) {
     val stack = rememberSheetStack<ProjectSheetRoute>()
     val palette = TroupeTheme.palette
     val typo = TroupeTheme.typography
+
+    LaunchedEffect(stack.top) {
+        onShowingProjectsRoot(stack.top == null)
+    }
 
     val title = when (stack.top) {
         null -> stringResource(R.string.projects_title)
@@ -154,7 +159,7 @@ fun ProjectAndServerSheet(
                                 items = state.attentionItems,
                                 onOpen = { item ->
                                     onDismiss()
-                                    onOpenChat(item.sessionId, item.sessionTitle)
+                                    onOpenChat(item.sessionId, item.sessionTitle, item.projectId)
                                 },
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(12.dp))

@@ -25,7 +25,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.time.Duration.Companion.seconds
@@ -86,7 +85,8 @@ class ChatConnections internal constructor(
     private val open = ConcurrentHashMap<String, ChatConnection>()
     private val pending = ConcurrentHashMap<String, PendingRequests>()
     private val lifecycles = CoroutineScope(SupervisorJob() + dispatcher)
-    private val backgrounded = AtomicBoolean(false)
+    private val lifecycleLock = Any()
+    private var backgrounded = false
 
     init {
         lifecycles.launch { network.available.collect { open.values.forEach { it.retry() } } }
@@ -121,7 +121,11 @@ class ChatConnections internal constructor(
         val socket = sockets.create(server.address, token)
         val lifecycle = ConnectionLifecycle(
             socket,
-            healthy = { api.health(server.address, token.ifBlank { null }) is ApiResult.Ok },
+            // Unauthorized proves the server is reachable; let reconnect run so auth failure surfaces.
+            healthy = {
+                val res = api.health(server.address, token.ifBlank { null })
+                res is ApiResult.Ok || res is ApiResult.Unauthorized
+            },
             scope = lifecycles,
             heartbeat = 10.seconds,
             backoff = newBackoff(),
@@ -130,7 +134,9 @@ class ChatConnections internal constructor(
         val watchHub = WatchHub(socket, lifecycle.generation, connectionScope)
         val healthWatch = lifecycles.launch {
             lifecycle.generation.filter { it > 0 }.collectLatest {
-                if (backgrounded.get()) socket.sendLifecycle(background = true)
+                synchronized(lifecycleLock) {
+                    if (backgrounded) socket.sendLifecycle(background = true)
+                }
                 (api.health(server.address, token.ifBlank { null }) as? ApiResult.Ok)?.let {
                     viewOnly.set(serverId, !it.value.allowRemoteWrites)
                 }
@@ -149,8 +155,10 @@ class ChatConnections internal constructor(
 
     /** Forwards Android app foreground/background transitions to every active `/ws` connection. */
     fun notifyLifecycle(background: Boolean) {
-        backgrounded.set(background)
-        open.values.forEach { it.socket.sendLifecycle(background) }
+        synchronized(lifecycleLock) {
+            backgrounded = background
+            open.values.forEach { it.socket.sendLifecycle(background) }
+        }
     }
 
     /** Drops every connection; for tests that end. */

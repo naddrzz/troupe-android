@@ -102,6 +102,18 @@ class TerminalEnterHandlerTest {
         assertFalse(
             TerminalEnterHandler.handleKeyEvent(
                 action = KeyEvent.ACTION_DOWN,
+                keyCode = KeyEvent.KEYCODE_ENTER,
+                repeatCount = 0,
+                isAltPressed = false,
+                isCtrlPressed = false,
+                isMetaPressed = true,
+                finishComposing = { events += "finish" },
+                onEnter = { events += "enter" },
+            ),
+        )
+        assertFalse(
+            TerminalEnterHandler.handleKeyEvent(
+                action = KeyEvent.ACTION_DOWN,
                 keyCode = KeyEvent.KEYCODE_A,
                 repeatCount = 0,
                 isAltPressed = false,
@@ -115,8 +127,8 @@ class TerminalEnterHandlerTest {
     }
 
     @Suppress("DEPRECATION")
-    @Test fun actionMultipleDeliversEnterAtLeastOnce() {
-        val events = mutableListOf<String>()
+    @Test fun actionMultipleDeliversEnterAtLeastOnceAndHonorsRepeatCount() {
+        val single = mutableListOf<String>()
         assertTrue(
             TerminalEnterHandler.handleKeyEvent(
                 action = KeyEvent.ACTION_MULTIPLE,
@@ -125,11 +137,26 @@ class TerminalEnterHandlerTest {
                 isAltPressed = false,
                 isCtrlPressed = false,
                 isMetaPressed = false,
-                finishComposing = { events += "finish" },
-                onEnter = { events += "enter" },
+                finishComposing = { single += "finish" },
+                onEnter = { single += "enter" },
             ),
         )
-        assertEquals(listOf("finish", "enter"), events)
+        assertEquals(listOf("finish", "enter"), single)
+
+        val repeated = mutableListOf<String>()
+        assertTrue(
+            TerminalEnterHandler.handleKeyEvent(
+                action = KeyEvent.ACTION_MULTIPLE,
+                keyCode = KeyEvent.KEYCODE_ENTER,
+                repeatCount = 3,
+                isAltPressed = false,
+                isCtrlPressed = false,
+                isMetaPressed = false,
+                finishComposing = { repeated += "finish" },
+                onEnter = { repeated += "enter" },
+            ),
+        )
+        assertEquals(listOf("finish", "enter", "enter", "enter"), repeated)
     }
 
     @Test fun commitTextHandlesSingleNewlineMixedTextAndMultipleLines() {

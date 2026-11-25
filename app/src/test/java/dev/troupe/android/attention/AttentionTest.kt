@@ -17,6 +17,7 @@ import dev.troupe.android.testing.payloadString
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.jsonObject
@@ -68,7 +69,7 @@ class AttentionTest {
 
         eventually { keys() == listOf("req-1") }
         assertEquals(
-            AttentionItem(serverId, "req-1", "s1", projectName = "troupe", sessionTitle = "Fix login", AttentionKind.Permission, since = 2_000_000L),
+            AttentionItem(serverId, "req-1", "s1", projectName = "troupe", sessionTitle = "Fix login", AttentionKind.Permission, since = 2_000_000L, projectId = "p-home"),
             items().single(),
         )
     }
@@ -113,7 +114,7 @@ class AttentionTest {
 
         eventually { keys() == listOf("stopped:s9") }
         assertEquals(
-            AttentionItem(serverId, "stopped:s9", "s9", "zeta", "Crashed run", AttentionKind.Stopped, since = 7_000),
+            AttentionItem(serverId, "stopped:s9", "s9", "zeta", "Crashed run", AttentionKind.Stopped, since = 7_000, projectId = "p-zeta"),
             items().single(),
         )
     }
@@ -315,13 +316,12 @@ class AttentionTest {
         eventually { received.isNotEmpty() }
 
         // Simulates WorkspaceSessionManager detaching from this server when the user switches servers.
-        extraWatcher.cancel()
-        Thread.sleep(100)
-        assertTrue("chat_history stays watched while AttentionMonitor runs", chat.requests("unwatch").isEmpty())
+        runBlocking { extraWatcher.cancelAndJoin() }
 
         liveSession()
         chat.historyChanged("s1")
         eventually { chat.requests("subscribe").size == 1 }
+        assertTrue("chat_history stays watched while AttentionMonitor runs", chat.requests("unwatch").isEmpty())
         chat.append("s1", "permission_request", permissionRequest("s1", "req-1", "Edit Login.kt"))
         eventually { keys() == listOf("req-1") }
     }

@@ -64,15 +64,24 @@ fun MobileWorkspaceShellScreen(
     val backStack = rememberOverlayBackStack()
     var drawerOpen by remember { mutableStateOf(false) }
     var drawerSectionOverride by remember { mutableStateOf<dev.troupe.android.workspace.MobileSection?>(null) }
+    var drawerCurrentSection by remember { mutableStateOf(dev.troupe.android.workspace.MobileSection.Chats) }
     var projectSheetOpen by remember { mutableStateOf(false) }
+    var projectSheetOnRoot by remember { mutableStateOf(true) }
     var moreSheetOpen by remember { mutableStateOf(false) }
     var gitSheetOpen by remember { mutableStateOf(false) }
     var filesSheetOpen by remember { mutableStateOf(false) }
     var snapshotsSheetOpen by remember { mutableStateOf(false) }
     var paletteSheetOpen by remember { mutableStateOf(false) }
 
-    androidx.compose.runtime.LaunchedEffect(drawerOpen, projectSheetOpen) {
-        onAttentionSurfaceVisible(drawerOpen || projectSheetOpen)
+    val server = state.activeServer
+    val tokenGateVisible = state.tokenGateRequired && server != null
+    val attentionSurfaceVisible = !tokenGateVisible && (
+        (drawerOpen && drawerCurrentSection == dev.troupe.android.workspace.MobileSection.Chats) ||
+            (projectSheetOpen && projectSheetOnRoot)
+        )
+
+    androidx.compose.runtime.LaunchedEffect(attentionSurfaceVisible) {
+        onAttentionSurfaceVisible(attentionSurfaceVisible)
     }
     androidx.compose.runtime.DisposableEffect(Unit) {
         onDispose { onAttentionSurfaceVisible(false) }
@@ -87,8 +96,7 @@ fun MobileWorkspaceShellScreen(
     backStack.Register("palette", paletteSheetOpen) { paletteSheetOpen = false }
 
     // Mid-session 401 / unauthorized -> surface 1:1 TokenGateScreen immediately
-    val server = state.activeServer
-    if (state.tokenGateRequired && server != null) {
+    if (tokenGateVisible && server != null) {
         TokenGateScreen(
             serverHost = server.address.host,
             rejected = state.tokenGateRejected,
@@ -148,14 +156,20 @@ fun MobileWorkspaceShellScreen(
                 connectionState = state.connectionState,
                 viewOnly = state.viewOnly,
                 onOpenDrawer = {
+                    val initial = activeTab.mobileSection()
                     drawerSectionOverride = null
+                    drawerCurrentSection = initial
                     drawerOpen = true
                 },
                 onOpenAttention = {
                     drawerSectionOverride = dev.troupe.android.workspace.MobileSection.Chats
+                    drawerCurrentSection = dev.troupe.android.workspace.MobileSection.Chats
                     drawerOpen = true
                 },
-                onOpenProjectSheet = { projectSheetOpen = true },
+                onOpenProjectSheet = {
+                    projectSheetOnRoot = true
+                    projectSheetOpen = true
+                },
                 onNewChat = { viewModel.session.startNewChat() },
                 onNewTerminal = { viewModel.session.spawnTerminal() },
                 onOpenMore = { moreSheetOpen = true },
@@ -285,8 +299,11 @@ fun MobileWorkspaceShellScreen(
                     )
                 },
                 onDismiss = { drawerOpen = false },
-                onOpenProjects = { projectSheetOpen = true },
-                onOpenChat = { sid, title -> viewModel.session.openChat(sid, title) },
+                onOpenProjects = {
+                    projectSheetOnRoot = true
+                    projectSheetOpen = true
+                },
+                onOpenChat = { sid, title, projectId -> viewModel.session.openChat(sid, title, projectId) },
                 onNewChat = { viewModel.session.startNewChat() },
                 onOpenTerminal = { tid, label ->
                     viewModel.session.openTab(
@@ -316,6 +333,7 @@ fun MobileWorkspaceShellScreen(
                         viewModel.session.openTab(WorkspaceTab.Automations(WorkspaceTabIds.automations(activeProject.id), activeProject.id))
                     }
                 },
+                onSectionChanged = { drawerCurrentSection = it },
             )
         }
     }
@@ -332,7 +350,8 @@ fun MobileWorkspaceShellScreen(
             onCreateProject = viewModel.session::createProject,
             onSelectServer = viewModel.session::selectServer,
             onAddServer = onOpenConnect,
-            onOpenChat = { sid, title -> viewModel.session.openChat(sid, title) },
+            onOpenChat = { sid, title, projectId -> viewModel.session.openChat(sid, title, projectId) },
+            onShowingProjectsRoot = { projectSheetOnRoot = it },
         )
     }
 
@@ -429,7 +448,10 @@ fun MobileWorkspaceShellScreen(
                     viewModel.session.openTab(WorkspaceTab.Automations(WorkspaceTabIds.automations(activeProject.id), activeProject.id))
                 }
             },
-            onOpenProjects = { projectSheetOpen = true },
+            onOpenProjects = {
+                projectSheetOnRoot = true
+                projectSheetOpen = true
+            },
             onOpenSettings = onOpenSettings,
             onOpenChat = { sid, title -> viewModel.session.openChat(sid, title) },
             onOpenTerminal = { tid, label ->

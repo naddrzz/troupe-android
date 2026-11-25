@@ -32,6 +32,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
+import okhttp3.OkHttpClient
 import okio.FileSystem
 import okio.Path.Companion.toOkioPath
 import java.io.Closeable
@@ -43,14 +44,17 @@ import java.io.File
  * Connection lifecycles run on [lifecycleDispatcher] (a test dispatcher for virtual time), without
  * backoff jitter; [network] stands in for the system's network callback.
  */
-class TestGraph(dir: File, lifecycleDispatcher: CoroutineDispatcher = Dispatchers.IO) : Closeable {
+class TestGraph(
+    dir: File,
+    lifecycleDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val client: OkHttpClient = troupeHttpClient(),
+) : Closeable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     val prefsFile = File(dir, "troupe.preferences_pb")
     private val dataStore = DataStoreFactory.create(
         OkioStorage(FileSystem.SYSTEM, PreferencesSerializer) { prefsFile.toOkioPath() },
         scope = scope,
     )
-    private val client = troupeHttpClient()
     val api = ServerApi(client)
     private val cipher = XorTokenCipher()
     val repository = PairedServerRepository(dataStore, cipher)

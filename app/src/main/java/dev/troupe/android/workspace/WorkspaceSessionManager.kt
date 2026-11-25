@@ -137,6 +137,7 @@ class WorkspaceSessionManager @Inject constructor(
     @Volatile private var activeConnection: ChatConnection? = null
     @Volatile private var activeWatchHub: WatchHub? = null
     @Volatile private var activeStoreClient: WebStoreClient? = null
+    @Volatile private var explicitProjectSelection: Boolean = false
     private var sessionJob: Job? = null
     private var terminalsWatchJob: Job? = null
     private var started = false
@@ -160,14 +161,30 @@ class WorkspaceSessionManager @Inject constructor(
             combine(repository.servers, repository.activeServerId) { servers, activeId ->
                 servers to servers.firstOrNull { it.id == activeId }
             }.distinctUntilChanged().collect { (servers, active) ->
-                val previousId = _state.value.activeServer?.id
+                val prevState = _state.value
+                val previousId = prevState.activeServer?.id
+                val currentServerIds = servers.map { it.id }.toSet()
+                prevState.servers.forEach { old ->
+                    if (old.id !in currentServerIds) appSettingsStore.forget(old.id)
+                }
+                val switchingServer = active != null && previousId != null && previousId != active.id
                 _state.update { cur ->
-                    cur.copy(
-                        servers = servers,
-                        activeServer = active,
-                        attentionItems = active?.id?.let { cur.attentionItemsByServer[it] }.orEmpty(),
-                        loading = active != null && previousId != active.id,
-                    )
+                    if (switchingServer) {
+                        WorkspaceShellState(
+                            loading = true,
+                            activeServer = active,
+                            servers = servers,
+                            attentionItems = cur.attentionItemsByServer[active.id].orEmpty(),
+                            attentionItemsByServer = cur.attentionItemsByServer,
+                        )
+                    } else {
+                        cur.copy(
+                            servers = servers,
+                            activeServer = active,
+                            attentionItems = active?.id?.let { cur.attentionItemsByServer[it] }.orEmpty(),
+                            loading = active != null && previousId != active.id,
+                        )
+                    }
                 }
                 if (active == null) {
                     detachActiveSession()
@@ -228,6 +245,7 @@ class WorkspaceSessionManager @Inject constructor(
     fun selectProject(projectId: String) {
         val current = _state.value
         if (current.activeProjectId == projectId) return
+        explicitProjectSelection = true
         current.activeProjectId?.let { oldId ->
             parkedWorkspaces[oldId] = current.workspace
         }
@@ -283,17 +301,21 @@ class WorkspaceSessionManager @Inject constructor(
         }
     }
 
-    fun openChat(sessionId: String, title: String? = null) {
-        val summary = _state.value.sessions.firstOrNull { it.sessionId == sessionId }
-        val resolvedProject = summary?.projectId
-        if (resolvedProject != null && resolvedProject != _state.value.activeProjectId && _state.value.projects.any { it.id == resolvedProject }) {
-            selectProject(resolvedProject)
+    fun openChat(sessionId: String, title: String? = null, projectId: String? = null) {
+        val cur = _state.value
+        val summary = cur.sessions.firstOrNull { it.sessionId == sessionId }
+        val attentionItem = cur.attentionItems.firstOrNull { it.sessionId == sessionId }
+        val resolvedProject = projectId ?: summary?.projectId ?: attentionItem?.projectId
+        if (resolvedProject != null && resolvedProject != cur.activeProjectId) {
+            if (cur.projects.isEmpty() || cur.projects.any { it.id == resolvedProject && !it.isArchived }) {
+                selectProject(resolvedProject)
+            }
         }
         openTab(
             WorkspaceTab.AgentChat(
                 id = WorkspaceTabIds.chat(sessionId),
                 sessionId = sessionId,
-                title = title ?: summary?.title,
+                title = title ?: summary?.title ?: attentionItem?.sessionTitle,
             ),
         )
     }
@@ -506,6 +528,7 @@ class WorkspaceSessionManager @Inject constructor(
         activeConnection = null
         activeWatchHub = null
         activeStoreClient = null
+        explicitProjectSelection = false
         hydratedServerId.value = null
         parkedWorkspaces.clear()
         hydratedProjects.clear()
@@ -513,6 +536,7 @@ class WorkspaceSessionManager @Inject constructor(
             WorkspaceShellState(
                 loading = false,
                 servers = it.servers,
+                attentionItemsByServer = it.attentionItemsByServer,
             )
         }
     }
@@ -521,6 +545,7 @@ class WorkspaceSessionManager @Inject constructor(
         activeStoreClient?.flushAll()
         sessionJob?.cancel()
         terminalsWatchJob?.cancel()
+        explicitProjectSelection = false
         hydratedServerId.value = null
         parkedWorkspaces.clear()
         hydratedProjects.clear()
@@ -549,7 +574,7 @@ class WorkspaceSessionManager @Inject constructor(
             val store = WebStoreClient(conn, hub, deviceId, this)
             activeWatchHub = hub
             activeStoreClient = store
-            appSettingsStore.attach(store, this)
+            appSettingsStore.attach(server.id, store, this)
 
             // Track connection state & mid-session 401 -> TokenGateScreen
             launch {
@@ -656,6 +681,9 @@ class WorkspaceSessionManager @Inject constructor(
         }
         val currentProjects = _state.value.projects.filterNot { it.isArchived }
         val resolvedId = when {
+            explicitProjectSelection && _state.value.activeProjectId != null &&
+                (currentProjects.isEmpty() || currentProjects.any { it.id == _state.value.activeProjectId }) ->
+                _state.value.activeProjectId
             savedProjectId != null && currentProjects.any { it.id == savedProjectId } -> savedProjectId
             _state.value.activeProjectId != null && currentProjects.any { it.id == _state.value.activeProjectId } -> _state.value.activeProjectId
             _state.value.defaultProjectId != null -> _state.value.defaultProjectId

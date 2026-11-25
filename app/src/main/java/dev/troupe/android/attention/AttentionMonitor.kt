@@ -46,8 +46,11 @@ internal data class MonitorState(
 /**
  * Watches one Paired Server's `/ws` for Attention, Agent Chats open or not:
  *
- * - Shares the connection's ref-counted [WatchHub] for `chat_history`, so switching servers in
- *   the Workspace Shell never sends `unwatch` behind this monitor's back.
+ * - Holds a ref-counted [WatchHub] subscription for `chat_history` so switching servers in the
+ *   Workspace Shell never sends `unwatch` behind this monitor's back, while routing BOTH session
+ *   events and `chat_history` watch frames through a single `socket.frames` collector so wire
+ *   ordering (e.g. `prompt_complete` arriving right before a `chat_history` delta) is strictly
+ *   preserved.
  * - Each live Session (`status: active`, or a turn open) is subscribed once per connection
  *   generation. A Session with no open turn subscribes live-only (no replay); one with an open
  *   turn replays its log once, so a question asked before the app connected is seen. Later
@@ -80,7 +83,7 @@ internal class AttentionMonitor(
 
     private sealed interface Input {
         data class Frame(val frame: ChatFrame) : Input
-        data class Watch(val update: WatchUpdate) : Input
+        data class CachedReset(val update: WatchUpdate) : Input
         data class Connected(val generation: Int) : Input
         data object Failed : Input
     }
@@ -88,19 +91,26 @@ internal class AttentionMonitor(
     private val inbox = Channel<Input>(Channel.UNLIMITED)
     private val sessions = HashMap<String, Tracked>()
     private var currentGeneration = 0
+    /** `(hostEpoch, n)` of the last `chat_history` watch frame applied. */
+    private var revision: Pair<String, Long>? = null
 
     suspend fun run(): Unit = coroutineScope {
-        // Collect before watching: session events and watch frames route sequentially through inbox.
+        // Single collector on socket.frames preserves exact WebSocket wire order between session
+        // events (e.g. prompt_complete) and chat_history watch frames.
         launch(start = CoroutineStart.UNDISPATCHED) {
             connection.socket.frames.collect { frame ->
-                if (frame is ChatFrame.Event || frame is ChatFrame.Gap) {
+                if (frame is ChatFrame.Event || frame is ChatFrame.Gap ||
+                    (frame is ChatFrame.Watch && frame.watch == WatchHub.CHAT_HISTORY)
+                ) {
                     inbox.send(Input.Frame(frame))
                 }
             }
         }
+        // Hold a ref-counted lease on WatchHub so WorkspaceSessionManager never sends `unwatch`
+        // for chat_history, and pick up any cached reset if WatchHub already subscribed earlier.
         launch(start = CoroutineStart.UNDISPATCHED) {
             connection.watchHub.watch(WatchHub.CHAT_HISTORY).collect { update ->
-                inbox.send(Input.Watch(update))
+                if (update.reset) inbox.send(Input.CachedReset(update))
             }
         }
         launch { connection.generation.collect { if (it > 0) inbox.send(Input.Connected(it)) } }
@@ -113,10 +123,21 @@ internal class AttentionMonitor(
                 }
                 Input.Failed -> {
                     sessions.clear()
+                    revision = null
                     _state.value = MonitorState()
                 }
-                is Input.Watch -> onWatchUpdate(input.update)
+                is Input.CachedReset -> {
+                    // Only apply cached snapshot when we joined after the wire reset already passed.
+                    if (revision == null) {
+                        revision = input.update.hostEpoch to input.update.n
+                        if (_state.value.projects.isEmpty()) {
+                            projectNames()?.let { names -> _state.update { it.copy(projects = names) } }
+                        }
+                        install(input.update.state)
+                    }
+                }
                 is Input.Frame -> when (val frame = input.frame) {
+                    is ChatFrame.Watch -> onWatchFrame(frame)
                     is ChatFrame.Event -> onEvent(frame)
                     is ChatFrame.Gap -> sessions[frame.sid]?.let { recover(frame.sid, it) }
                     else -> Unit
@@ -125,20 +146,25 @@ internal class AttentionMonitor(
         }
     }
 
-    private suspend fun onWatchUpdate(update: WatchUpdate) {
+    private suspend fun onWatchFrame(frame: ChatFrame.Watch) {
         val gen = maxOf(currentGeneration, connection.generation.value)
         if (gen > 0) currentGeneration = gen
+        val last = revision
         when {
-            update.reset -> {
+            frame.reset -> {
+                revision = frame.hostEpoch to frame.n
                 if (_state.value.projects.isEmpty()) {
                     projectNames()?.let { names -> _state.update { it.copy(projects = names) } }
                 }
-                install(update.state)
+                install(frame.state)
             }
-            (update.delta as? JsonObject)?.containsKey("resync") == true -> {
+            last == null || last.first != frame.hostEpoch || frame.n != last.second + 1 ||
+                (frame.delta as? JsonObject)?.containsKey("resync") == true -> {
+                revision = null
                 connection.watchHub.resync(WatchHub.CHAT_HISTORY)
             }
             else -> {
+                revision = frame.hostEpoch to frame.n
                 val reply = request("list_persisted_sessions", JsonObject(emptyMap())) ?: return
                 when {
                     reply.ok -> install(reply.payload)

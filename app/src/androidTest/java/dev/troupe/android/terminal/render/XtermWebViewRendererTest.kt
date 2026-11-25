@@ -1,10 +1,10 @@
 package dev.troupe.android.terminal.render
 
 import android.view.KeyEvent
-import android.view.View
-import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
+import androidx.activity.ComponentActivity
+import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.flow.first
@@ -25,23 +25,33 @@ import java.util.concurrent.TimeUnit
 @RunWith(AndroidJUnit4::class)
 class XtermWebViewRendererTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
+    private lateinit var scenario: ActivityScenario<ComponentActivity>
     private lateinit var webView: TroupeTerminalWebView
     private lateinit var renderer: XtermWebViewRenderer
 
     @Before fun setUp() {
-        instrumentation.runOnMainSync {
-            webView = TroupeTerminalWebView(instrumentation.targetContext)
-            val width = View.MeasureSpec.makeMeasureSpec(1080, View.MeasureSpec.EXACTLY)
-            val height = View.MeasureSpec.makeMeasureSpec(1200, View.MeasureSpec.EXACTLY)
-            webView.measure(width, height)
-            webView.layout(0, 0, 1080, 1200)
+        scenario = ActivityScenario.launch(ComponentActivity::class.java)
+        scenario.onActivity { activity ->
+            webView = TroupeTerminalWebView(activity)
+            activity.setContentView(webView)
             renderer = XtermWebViewRenderer(webView)
+            webView.requestFocus()
+            renderer.focus()
         }
         awaitJs("typeof troupe", "\"object\"")
+        instrumentation.waitForIdleSync()
     }
 
     @After fun tearDown() {
-        instrumentation.runOnMainSync { renderer.destroy() }
+        if (::scenario.isInitialized) {
+            try {
+                if (::renderer.isInitialized) {
+                    scenario.onActivity { renderer.destroy() }
+                }
+            } finally {
+                scenario.close()
+            }
+        }
     }
 
     @Test fun eAcuteSplitAcrossTwoWritesRendersAsOneCharacter() {
@@ -108,8 +118,9 @@ class XtermWebViewRendererTest {
     }
 
     private fun inputConnection(): InputConnection =
-        webView.onCreateInputConnection(EditorInfo())
-            ?: webView.wrapInputConnection(BaseInputConnection(webView, false))
+        checkNotNull(webView.onCreateInputConnection(EditorInfo())) {
+            "Expected attached focused TroupeTerminalWebView to provide a production InputConnection"
+        }
 
     private fun js(script: String): String {
         val result = CompletableFuture<String>()

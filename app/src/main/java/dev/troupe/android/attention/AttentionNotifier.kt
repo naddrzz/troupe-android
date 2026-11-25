@@ -17,6 +17,8 @@ import androidx.datastore.preferences.core.edit
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.troupe.android.R
 import dev.troupe.android.background.finishedContent
+import dev.troupe.android.chat.net.ChatConnectFailed
+import dev.troupe.android.chat.net.ChatConnections
 import dev.troupe.android.core.nav.ChatLink
 import dev.troupe.android.core.nav.Screens
 import dev.troupe.android.core.nav.openChatIntent
@@ -25,6 +27,7 @@ import dev.troupe.android.servers.PairedServerRepository
 import dev.troupe.android.workspace.AppSettingsStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -53,6 +56,7 @@ import javax.inject.Singleton
 class AttentionNotifier @Inject constructor(
     @ApplicationContext private val context: Context,
     private val center: AttentionCenter,
+    private val connections: ChatConnections,
     private val screens: Screens,
     private val lock: LockSettingsStore,
     private val repository: PairedServerRepository,
@@ -88,9 +92,27 @@ class AttentionNotifier @Inject constructor(
                 .build(),
         )
         scope.launch {
+            val settingsJobs = HashMap<String, Job>()
             repository.servers.collect { servers ->
                 stayConnected = servers.filter { it.stayConnected }.map { it.id }.toSet()
                 if (stayConnected.isNotEmpty() && !canPost()) askOnce()
+                val ids = servers.map { it.id }.toSet()
+                (settingsJobs.keys - ids).forEach { id ->
+                    settingsJobs.remove(id)?.cancel()
+                    appSettings.forget(id)
+                }
+                (ids - settingsJobs.keys).forEach { id ->
+                    settingsJobs[id] = launch {
+                        try {
+                            val conn = connections.connection(id)
+                            appSettings.observeServer(id, conn, this).join()
+                        } catch (_: ChatConnectFailed) {
+                            // Server token unreadable or unrecoverable; defaults apply until re-paired.
+                        } finally {
+                            if (settingsJobs[id] === coroutineContext[Job]) settingsJobs.remove(id)
+                        }
+                    }
+                }
             }
         }
         scope.launch {
@@ -101,15 +123,17 @@ class AttentionNotifier @Inject constructor(
                     posted.remove(tag(serverId, key))
                     manager.cancel(tag(serverId, key), 0)
                 }
-                val notifyNeedsYou = appSettings.settings.value.notifyOnAgentChatNeedsYou
                 changes.added
-                    .filter { mayAlert(it, screens.foreground.value, screens.current.value, stayConnected, notifyNeedsYou) }
+                    .filter { item ->
+                        val notifyNeedsYou = appSettings.settingsFor(item.serverId).notifyOnAgentChatNeedsYou
+                        mayAlert(item, screens.foreground.value, screens.current.value, stayConnected, notifyNeedsYou)
+                    }
                     .forEach { notify(it) }
             }
         }
         scope.launch {
             center.finished.collect { turn ->
-                val notifyTurnFinished = appSettings.settings.value.notifyOnAgentChatTurnFinished
+                val notifyTurnFinished = appSettings.settingsFor(turn.serverId).notifyOnAgentChatTurnFinished
                 if (mayNotifyFinished(turn, screens.foreground.value, stayConnected, notifyTurnFinished)) notifyFinished(turn)
             }
         }
