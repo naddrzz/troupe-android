@@ -68,6 +68,12 @@ class FakeTroupeServer : Closeable {
 
     /** `false`: `/health` answers 503, like a server that is stopping or not ready yet. */
     @Volatile var healthy: Boolean = true
+    /** `true`: `/health` returns `setupRequired: true` and setup endpoints are active. */
+    @Volatile var setupRequired: Boolean = false
+    /** One-time setup token accepted by setup routes. */
+    @Volatile var setupToken: String = "setup-token-123"
+    /** Optional handler for arbitrary extra HTTP routes in tests. */
+    var onHttpRoute: ((RecordedRequest) -> MockResponse?)? = null
 
     /** Pushes a server frame (`data`, `replay`, …) to every authenticated `/terminal/ws` connection. */
     fun sendTerminalFrame(frame: JsonObject) = terminalSockets.forEach { it.send(frame.toString()) }
@@ -133,17 +139,34 @@ class FakeTroupeServer : Closeable {
         }
         if (path == "/ws") return MockResponse.Builder().webSocketUpgrade(chat.listener()).build()
         httpRequests += request
+        onHttpRoute?.invoke(request)?.let { return it }
         return when (path) {
             "/health" -> if (healthy) json(200, healthBody()) else json(503, """{"success":false,"error":"Service unavailable","code":"UNAVAILABLE"}""")
             "/projects" ->
-                if (request.headers["Authorization"] == "Bearer $token") json(200, projectsBody)
+                if (token.isEmpty() || request.headers["Authorization"] == "Bearer $token") json(200, projectsBody)
                 else json(401, """{"success":false,"error":"Unauthorized","code":"UNAUTHORIZED"}""")
+            "/setup/status" ->
+                if (request.headers["Authorization"] == "Bearer $setupToken") {
+                    json(
+                        200,
+                        """{"success":true,"data":{"setupRequired":true,"defaults":{"host":"0.0.0.0","port":${server.port},"sessionsDir":"/tmp/sessions","projectsFile":"/tmp/projects.json","allowRemoteWrites":true,"updateChannel":"stable","updateIntervalSecs":21600}}}""",
+                    )
+                } else {
+                    json(401, """{"success":false,"error":"Unauthorized","code":"UNAUTHORIZED"}""")
+                }
+            "/setup/apply" ->
+                if (request.headers["Authorization"] == "Bearer $setupToken") {
+                    setupRequired = false
+                    json(200, """{"success":true,"data":{"ok":true,"host":"0.0.0.0","port":${server.port},"webAuthToken":"$token"}}""")
+                } else {
+                    json(401, """{"success":false,"error":"Unauthorized","code":"UNAUTHORIZED"}""")
+                }
             else -> json(404, """{"success":false,"error":"Not found","code":"NOT_FOUND"}""")
         }
     }
 
     private fun healthBody() =
-        """{"status":"ok","allowRemoteWrites":$allowRemoteWrites,"caseInsensitivePaths":false,"setupRequired":false}"""
+        """{"status":"ok","allowRemoteWrites":$allowRemoteWrites,"caseInsensitivePaths":false,"setupRequired":$setupRequired}"""
 
     private fun json(code: Int, body: String) =
         MockResponse.Builder().code(code).setHeader("Content-Type", "application/json").body(body).build()
@@ -204,7 +227,9 @@ class FakeTroupeServer : Closeable {
                     return Refusal("INVALID_CLIENT_IDENTITY", "$field must be a non-empty string")
                 }
             }
-            if (payload["token"]?.jsonPrimitive?.content != token) return Refusal("UNAUTHORIZED", "Unauthorized")
+            if (token.isNotEmpty() && payload["token"]?.jsonPrimitive?.content != token) {
+                return Refusal("UNAUTHORIZED", "Unauthorized")
+            }
             authed = true
             terminalSockets += socket
             return JsonObject(emptyMap())

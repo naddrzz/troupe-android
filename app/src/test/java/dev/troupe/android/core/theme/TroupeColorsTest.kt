@@ -10,7 +10,7 @@ class TroupeColorsTest {
         assertEquals(Color(0xFF08090A), p.background)
         assertEquals(Color(0xFF0F1011), p.card)
         assertEquals(Color(0xFF161718), p.elevated)
-        assertEquals(Color(0xFF23252A), p.border)
+        assertEquals(OklchColor.parseHexColor(OklchColor.holdHue("#08090a", OklchColor.hexToOklch("#23252a").l)), p.border)
         assertEquals(Color(0xFFE5E5E6), p.foreground)
         assertEquals(Color(0xFFD0D6E0), p.secondary)
         assertEquals(Color(0xFF8A8F98), p.muted)

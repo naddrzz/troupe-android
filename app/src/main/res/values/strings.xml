@@ -208,4 +208,169 @@
     <string name="key_page_up_description">Page up</string>
     <string name="key_page_down">PgDn</string>
     <string name="key_page_down_description">Page down</string>
+
+    <!-- Connect / Paste-Link V2 -->
+    <string name="connect_title">Connect to Troupe</string>
+    <string name="connect_subtitle">Paste any link from your Troupe Server or desktop remote access to get started.</string>
+    <string name="connect_link_label">Troupe Server link</string>
+    <string name="connect_link_hint">https://…/#token=… or http://192.168.1.5:8080</string>
+    <string name="connect_paste_and_connect">Paste &amp; Connect</string>
+    <string name="connect_submit">Connect</string>
+    <string name="connect_continue">Continue</string>
+    <string name="connect_scan_qr">Scan QR</string>
+    <string name="connect_manual">Manual</string>
+    <string name="connect_token_optional_label">Token (optional for local servers)</string>
+    <string name="connect_wildcard_notice">This link uses 0.0.0.0. Enter your computer\'s LAN or Tailscale IP address so your phone can reach it.</string>
+    <string name="connect_wildcard_host_label">Server IP or hostname</string>
+    <string name="connect_wildcard_host_hint">192.168.1.50 or my-mac.ts.net</string>
+
+    <!-- Token Gate -->
+    <string name="token_gate_title">Authentication required</string>
+    <string name="token_gate_subtitle">Enter the access token for %1$s to continue.</string>
+    <string name="token_gate_placeholder">Paste token or full link</string>
+    <string name="token_gate_rejected">That token was rejected by the server. Check the token and try again.</string>
+    <string name="token_gate_paste">Paste</string>
+    <string name="token_gate_unlock">Unlock</string>
+    <string name="token_gate_switch_server">Use a different server</string>
+
+    <!-- First-run Server Setup Wizard -->
+    <string name="setup_title">Set up Troupe Server</string>
+    <string name="setup_reconfigure_title">Server configuration</string>
+    <string name="setup_loading">Checking server setup…</string>
+    <string name="setup_restarting">Restarting server…</string>
+    <string name="setup_restarting_body">Applying your configuration and waiting for Troupe Server to come back online.</string>
+    <string name="setup_token_title">Enter setup token</string>
+    <string name="setup_token_body">Paste the one-time setup token shown in your Troupe Server terminal (?setup=…).</string>
+    <string name="setup_token_label">Setup token</string>
+    <string name="setup_token_continue">Continue</string>
+    <string name="setup_bind_label">Network access</string>
+    <string name="setup_bind_all">All devices</string>
+    <string name="setup_bind_local">Local only</string>
+    <string name="setup_port_label">Port</string>
+    <string name="setup_sessions_dir_label">Sessions directory</string>
+    <string name="setup_projects_file_label">Projects file</string>
+    <string name="setup_allow_remote_writes">Allow remote writes</string>
+    <string name="setup_allow_remote_writes_body">Let your phone prompt agents, run terminal commands, and edit files.</string>
+    <string name="setup_update_channel_label">Update channel</string>
+    <string name="setup_channel_stable">Stable</string>
+    <string name="setup_channel_insider">Insider</string>
+    <string name="setup_channel_nightly">Nightly</string>
+    <string name="setup_channel_off">Off</string>
+    <string name="setup_apply_action">Finish setup</string>
+    <string name="setup_save_and_restart">Save &amp; restart</string>
+
+    <!-- Mobile Workspace Shell V2 -->
+    <string name="shell_open_menu">Open menu</string>
+    <string name="shell_close_menu">Close menu</string>
+    <string name="shell_new_chat">New chat</string>
+    <string name="shell_more_actions">More actions</string>
+    <string name="shell_no_project">No project</string>
+    <string name="shell_section_editors">Editors</string>
+    <string name="shell_section_github">GitHub</string>
+    <string name="shell_search_chats">Search chats…</string>
+    <string name="shell_search_terminals">Search terminals…</string>
+    <string name="shell_search_editors">Search open files…</string>
+    <string name="shell_empty_chats">No chats yet. Start a new chat below.</string>
+    <string name="shell_empty_editors">No open files yet. Tap Browse files to open one.</string>
+    <string name="shell_search_no_results">No matches found.</string>
+    <string name="shell_browse_files">Browse files</string>
+    <string name="shell_snapshots">Snapshots</string>
+    <string name="shell_git_history">Git history</string>
+    <string name="shell_git_changes">Git changes</string>
+    <string name="shell_files">Files</string>
+    <string name="shell_automations">Automations</string>
+    <string name="shell_command_palette">Command palette</string>
+    <string name="shell_reload_chat">Reload this chat</string>
+    <string name="shell_close_chat">Close chat</string>
+    <string name="shell_close_tab">Close tab</string>
+    <string name="shell_switch_server">Switch</string>
+    <string name="shell_add_project">Add project</string>
+    <string name="shell_set_default">Set default</string>
+    <string name="shell_project_path_label">Folder path on server</string>
+    <string name="shell_browse_folders">Server folders</string>
+    <string name="shell_create_project">Add project</string>
+    <string name="palette_search_hint">Search actions, chats, terminals…</string>
+
+    <!-- Chat V2, Composer V2, Worktrees -->
+    <string name="chat_start_question">What should we do?</string>
+    <string name="chat_start_question_project">What should we do in %1$s?</string>
+    <string name="chat_copy_code">Copy code</string>
+    <string name="chat_agent_working">Working…</string>
+    <string name="composer_add">Add attachment or trigger</string>
+    <string name="composer_add_title">Add to prompt</string>
+    <string name="composer_default_agent">Agent</string>
+    <string name="composer_choose_agent">Choose agent</string>
+    <string name="composer_search_agents">Search agents…</string>
+    <string name="composer_mention_file">Mention</string>
+    <string name="composer_slash_command">Commands</string>
+    <string name="composer_mention_row">Mention file or folder</string>
+    <string name="composer_mention_row_sub">Insert @ to reference workspace files</string>
+    <string name="composer_commands_row">Slash command</string>
+    <string name="composer_commands_row_sub">Insert / for agent skills and commands</string>
+    <string name="worktree_local">Local</string>
+    <string name="worktree_badge">Worktree</string>
+    <string name="worktree_new">New worktree</string>
+    <string name="worktree_create_title">Create worktree</string>
+    <string name="worktree_branch_label">New branch name</string>
+    <string name="worktree_base_branch_label">Base branch (optional)</string>
+    <string name="worktree_create_action">Create worktree</string>
+
+    <!-- Terminal V2 -->
+    <string name="terminal_toggle_keys">Show or hide shortcut keys</string>
+    <string name="terminal_rename">Rename terminal</string>
+    <string name="terminal_restart">Restart terminal</string>
+    <string name="terminal_last_exit_code">Last exit code %1$d</string>
+
+    <!-- Files & Editor -->
+    <string name="files_filter_placeholder">Filter files…</string>
+    <string name="files_new_file">New file</string>
+    <string name="files_new_folder">New folder</string>
+    <string name="files_create">Create</string>
+    <string name="files_empty_folder">This folder is empty.</string>
+    <string name="editor_preview">Preview</string>
+    <string name="editor_source">Source</string>
+
+    <!-- Git Changes & History -->
+    <string name="git_branches">Branches</string>
+    <string name="git_push">Push</string>
+    <string name="git_stage">Stage</string>
+    <string name="git_unstage">Unstage</string>
+    <string name="git_discard">Discard</string>
+    <string name="git_staged">Staged</string>
+    <string name="git_changes">Changes</string>
+    <string name="git_commit_summary">Commit summary</string>
+    <string name="git_commit_action">Commit</string>
+    <string name="git_clean_working_tree">Working tree is clean.</string>
+    <string name="git_history_empty">No commits found.</string>
+
+    <!-- GitHub -->
+    <string name="github_no_project">Open a project to see its issues and pull requests.</string>
+    <string name="github_filter_all">All</string>
+    <string name="github_filter_issues">Issues</string>
+    <string name="github_filter_prs">PRs</string>
+    <string name="github_empty">No open issues or pull requests.</string>
+    <string name="github_merge_pr">Squash &amp; merge</string>
+    <string name="github_comments">Comments (%1$d)</string>
+    <string name="github_add_comment">Add a comment…</string>
+
+    <!-- Snapshots & Automations -->
+    <string name="snapshots_name_hint">Snapshot name…</string>
+    <string name="snapshots_save">Save</string>
+    <string name="snapshots_restore">Restore</string>
+    <string name="snapshots_empty">No snapshots saved for this project yet.</string>
+    <string name="automations_empty">No automations configured for this project yet.</string>
+    <string name="automations_run">Run</string>
+
+    <!-- Settings V2 -->
+    <string name="settings_cat_appearance">Appearance &amp; theme</string>
+    <string name="settings_cat_terminal">Terminal</string>
+    <string name="settings_cat_notifications">Notifications</string>
+    <string name="settings_cat_notifications_sub">Turn completions and attention alerts</string>
+    <string name="settings_cat_security">Security &amp; app lock</string>
+    <string name="settings_appearance_mode">Appearance</string>
+    <string name="settings_color_theme">Color theme</string>
+    <string name="settings_terminal_font_size">Font size</string>
+    <string name="settings_confirm_terminal_close">Confirm before closing terminal</string>
+    <string name="settings_notify_needs_you">Notify when an agent needs you</string>
+    <string name="settings_notify_turn_finished">Notify when a turn finishes</string>
 </resources>

@@ -1,39 +1,89 @@
 package dev.troupe.android.core.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.ui.graphics.Color
+import androidx.compose.runtime.ReadOnlyComposable
 
-/** Dark by default (termul's look); light follows the system setting. */
+object TroupeTheme {
+    val palette: TroupePalette
+        @Composable
+        @ReadOnlyComposable
+        get() = LocalTroupePalette.current
+
+    val typography: Typography
+        @Composable
+        @ReadOnlyComposable
+        get() = MaterialTheme.typography
+}
+
+/**
+ * Troupe V2 theme: maps any of the 20 bundled [TroupePalette] themes onto Material 3
+ * and exposes the full semantic palette via [LocalTroupePalette].
+ */
 @Composable
-fun TroupeTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
-    val p = if (darkTheme) TroupeColors.Dark else TroupeColors.Light
-    val base = if (darkTheme) darkColorScheme() else lightColorScheme()
-    val scheme = base.copy(
-        primary = p.brand,
-        onPrimary = Color.White,
-        secondary = p.secondary,
-        background = p.background,
-        onBackground = p.foreground,
-        surface = p.background,
-        onSurface = p.foreground,
-        surfaceVariant = p.card,
-        onSurfaceVariant = p.muted,
-        surfaceContainerLowest = p.background,
-        surfaceContainerLow = p.card,
-        surfaceContainer = p.card,
-        surfaceContainerHigh = p.elevated,
-        surfaceContainerHighest = p.elevated,
-        outline = p.border,
-        outlineVariant = p.border,
-        error = p.error,
-        onError = Color.White,
-    )
-    CompositionLocalProvider(LocalTroupePalette provides p) {
-        MaterialTheme(colorScheme = scheme, typography = TroupeTypography, content = content)
+fun TroupeTheme(
+    themeId: String? = null,
+    appearanceMode: AppearanceMode = AppearanceMode.System,
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    content: @Composable () -> Unit,
+) {
+    val palette = if (themeId == null && appearanceMode == AppearanceMode.System) {
+        if (darkTheme) TroupeColors.Dark else TroupeColors.Light
+    } else {
+        BundledThemes.resolve(themeId, appearanceMode, darkTheme)
+    }
+    val colors: ColorScheme = if (palette.isDark) {
+        darkColorScheme(
+            primary = palette.brand,
+            onPrimary = palette.brandForeground,
+            secondary = palette.secondarySurface,
+            onSecondary = palette.foreground,
+            background = palette.background,
+            onBackground = palette.foreground,
+            surface = palette.card,
+            onSurface = palette.foreground,
+            surfaceVariant = palette.mutedSurface,
+            onSurfaceVariant = palette.muted,
+            surfaceContainerLowest = palette.background,
+            surfaceContainerLow = palette.card,
+            surfaceContainer = palette.popover,
+            surfaceContainerHigh = palette.mutedSurface,
+            surfaceContainerHighest = palette.secondarySurface,
+            outline = palette.fieldBorder,
+            outlineVariant = palette.border,
+            error = palette.error,
+            onError = palette.brandForeground,
+        )
+    } else {
+        lightColorScheme(
+            primary = palette.brand,
+            onPrimary = palette.brandForeground,
+            secondary = palette.secondarySurface,
+            onSecondary = palette.foreground,
+            background = palette.background,
+            onBackground = palette.foreground,
+            surface = palette.card,
+            onSurface = palette.foreground,
+            surfaceVariant = palette.mutedSurface,
+            onSurfaceVariant = palette.muted,
+            surfaceContainerLowest = palette.background,
+            surfaceContainerLow = palette.card,
+            surfaceContainer = palette.popover,
+            surfaceContainerHigh = palette.mutedSurface,
+            surfaceContainerHighest = palette.secondarySurface,
+            outline = palette.fieldBorder,
+            outlineVariant = palette.border,
+            error = palette.error,
+            onError = palette.brandForeground,
+        )
+    }
+    CompositionLocalProvider(LocalTroupePalette provides palette) {
+        MaterialTheme(colorScheme = colors, typography = TroupeTypography, content = content)
     }
 }

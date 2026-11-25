@@ -102,7 +102,7 @@ class ChatSocket internal constructor(
             put("protocolVersion", PROTOCOL_VERSION)
             put("deviceId", id.deviceId)
             put("clientInstanceId", id.clientInstanceId)
-            put("token", token)
+            if (token.isNotBlank()) put("token", token)
         }, commandId = null)
         if (reply.ok) return ConnectionState.Connected
         val reason = when (reply.code) {
@@ -143,6 +143,12 @@ class ChatSocket internal constructor(
         }
     }
 
+    /** Sends a best-effort `{"type":"background"}` or `{"type":"foreground"}` lifecycle hint. */
+    fun sendLifecycle(background: Boolean) {
+        val current = connection?.takeIf { it.authenticated } ?: return
+        current.webSocket.send(if (background) """{"type":"background"}""" else """{"type":"foreground"}""")
+    }
+
     private fun failPending() {
         pending.values.forEach { it.completeExceptionally(ChatDisconnected()) }
         pending.clear()
@@ -159,6 +165,7 @@ class ChatSocket internal constructor(
             _activity.tryEmit(Unit)
             when (val frame = parseChatFrame(text)) {
                 is ChatFrame.Reply -> pending[frame.id]?.complete(frame)
+                is ChatFrame.EventsBatch -> if (current) frame.events.forEach { _frames.tryEmit(it) }
                 is ChatFrame.Event, is ChatFrame.Gap, is ChatFrame.Watch -> if (current) _frames.tryEmit(frame)
                 ChatFrame.Heartbeat, is ChatFrame.Unknown -> Unit
             }

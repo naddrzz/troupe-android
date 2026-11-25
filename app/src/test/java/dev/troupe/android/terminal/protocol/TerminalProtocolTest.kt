@@ -53,8 +53,23 @@ class TerminalProtocolTest {
         parseTerminalFrame("""{"type":"event","payload":{"type":"exit","terminal_id":"t1","exit_code":null,"signal":9}}"""),
     )
 
+    @Test fun v2MetadataEventsAreParsed() {
+        assertEquals(
+            TerminalFrame.CwdChanged("t1", "/workspace"),
+            parseTerminalFrame("""{"type":"event","payload":{"type":"cwd_changed","terminal_id":"t1","cwd":"/workspace"}}"""),
+        )
+        assertEquals(
+            TerminalFrame.GitBranchChanged("t1", "main"),
+            parseTerminalFrame("""{"type":"event","payload":{"type":"git_branch_changed","terminal_id":"t1","branch":"main"}}"""),
+        )
+        assertEquals(
+            TerminalFrame.ExitCodeChanged("t1", 127),
+            parseTerminalFrame("""{"type":"event","payload":{"type":"exit_code_changed","terminal_id":"t1","exit_code":127}}"""),
+        )
+    }
+
     @Test fun otherEventsAreUnknown() = assertTrue(
-        parseTerminalFrame("""{"type":"event","payload":{"type":"cwd_changed","terminal_id":"t1","cwd":"/"}}""") is TerminalFrame.Unknown,
+        parseTerminalFrame("""{"type":"event","payload":{"type":"future_terminal_event","terminal_id":"t1"}}""") is TerminalFrame.Unknown,
     )
 
     @Test fun listPreservedReplyDecodesAndHidesClaims() {

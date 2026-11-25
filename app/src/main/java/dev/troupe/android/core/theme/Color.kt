@@ -3,61 +3,82 @@ package dev.troupe.android.core.theme
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import dev.troupe.android.terminal.render.AnsiPalette
 
-/** termul's design tokens, named after its chrome roles. */
+/**
+ * Troupe V2 semantic design tokens, matching `DESIGN.md` and `docs/design/colors.md`.
+ * Retains the MVP field names (`background`, `card`, `elevated`, `border`, `foreground`,
+ * `secondary`, `muted`, `brand`, `brandText`, `success`, `warning`, `error`, `info`) while adding
+ * the full V2 surface, control, diff, syntax, and terminal token set.
+ */
 @Immutable
 data class TroupePalette(
+    val id: String,
+    val name: String,
+    val familyId: String,
+    val isDark: Boolean,
     val background: Color,
     val card: Color,
     val elevated: Color,
+    val popover: Color,
+    val sidebarBackground: Color,
+    val secondarySurface: Color,
+    val mutedSurface: Color,
     val border: Color,
+    val input: Color,
+    val fieldBorder: Color,
+    val popoverEdge: Color,
     val foreground: Color,
     val secondary: Color,
     val muted: Color,
+    val disabledForeground: Color,
     val brand: Color,
+    val brandHover: Color,
+    val brandActive: Color,
+    val brandForeground: Color,
     val brandText: Color,
     val success: Color,
+    val successFill: Color,
     val warning: Color,
+    val warningForeground: Color,
     val error: Color,
+    val destructiveFill: Color,
     val info: Color,
-)
+    val connection: Color,
+    val diffAdded: Color,
+    val diffAddedForeground: Color,
+    val diffModified: Color,
+    val overlay: Color,
+    val controlFill: Color,
+    val keycapFill: Color,
+    val focusRing: Color,
+    val terminal: AnsiPalette,
+    val syntax: SyntaxPalette,
+) {
+    /** Neutral hover/press wash on page or card (`3%` foreground). */
+    val rowHover: Color get() = foreground.copy(alpha = 0.03f)
+    /** Neutral press wash on popovers/sheets (`6%` foreground). */
+    val popoverHover: Color get() = foreground.copy(alpha = 0.06f)
+    /** Picked/selected row fill (`10%` foreground — stronger than hover, no tick on single-pick). */
+    val pickedFill: Color get() = foreground.copy(alpha = 0.10f)
+    /** Subtle hairline divider (`border` at 60%). */
+    val hairline: Color get() = border.copy(alpha = 0.60f)
+    /** Semantic aliases matching Troupe CSS token names. */
+    val surfaceElevated: Color get() = elevated
+    val mutedForeground: Color get() = muted
+    val accent: Color get() = brand
+    val accentForeground: Color get() = brandForeground
+    val destructive: Color get() = error
+    val borderSubtle: Color get() = hairline
+    val ring: Color get() = focusRing
+    val warningTint: Color get() = warning.copy(alpha = 0.14f)
+}
 
 object TroupeColors {
-    val Dark = TroupePalette(
-        background = Color(0xFF08090A),
-        card = Color(0xFF0F1011),
-        elevated = Color(0xFF161718),
-        border = Color(0xFF23252A),
-        foreground = Color(0xFFE5E5E6),
-        secondary = Color(0xFFD0D6E0),
-        muted = Color(0xFF8A8F98),
-        brand = Color(0xFF0D74CE),
-        brandText = Color(0xFF3B9EFF),
-        success = Color(0xFF22C55E),
-        warning = Color(0xFFEAB308),
-        error = Color(0xFFEF4444),
-        info = Color(0xFF38BDF8),
-    )
+    val Dark: TroupePalette by lazy { BundledThemes.byId("termul") }
+    val Light: TroupePalette by lazy { BundledThemes.byId("termul-light") }
 
-    /** From termul's `termul-light-chrome.ts`; the brand blue doubles as the link color in light. */
-    val Light = TroupePalette(
-        background = Color(0xFFFCFCFC),
-        card = Color(0xFFFFFFFF),
-        elevated = Color(0xFFFFFFFF),
-        border = Color(0xFFEDEDED),
-        foreground = Color(0xFF202020),
-        secondary = Color(0xFF646464),
-        muted = Color(0xFF646464),
-        brand = Color(0xFF0D74CE),
-        brandText = Color(0xFF0D74CE),
-        success = Color(0xFF22C55E),
-        // Warning is text (Reconnecting, View only, Attention); the dark theme's yellow is ~1.9:1 on white, this is ~4.8:1.
-        warning = Color(0xFFA16207),
-        error = Color(0xFFEF4444),
-        info = Color(0xFF38BDF8),
-    )
-
-    /** termul's Project colors (`--project-*`, OKLCH converted to sRGB). Unknown names fall back to gray. */
+    /** Troupe's Project colors (`--project-*`, OKLCH converted to sRGB). Unknown names fall back to gray. */
     fun project(name: String?): Color = when (name) {
         "blue" -> Color(0xFF3C83F6)
         "purple" -> Color(0xFF9234EA)
@@ -69,6 +90,10 @@ object TroupeColors {
         "orange" -> Color(0xFFF97415)
         else -> Color(0xFF6B7280)
     }
+
+    val projectColorNames: List<String> = listOf(
+        "blue", "purple", "green", "yellow", "red", "cyan", "pink", "orange", "gray",
+    )
 }
 
 val LocalTroupePalette = staticCompositionLocalOf { TroupeColors.Dark }

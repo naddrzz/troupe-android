@@ -1,4 +1,4 @@
-// Glue between xterm.js and XtermWebViewRenderer. Output arrives as Base64 and is written to
+// Glue between xterm.js 6.1 and XtermWebViewRenderer. Output arrives as Base64 and is written to
 // xterm as raw bytes, so xterm itself decodes UTF-8 across writes.
 (function () {
   'use strict';
@@ -7,7 +7,7 @@
   document.body.style.background = theme.background;
 
   var term = new Terminal({
-    fontFamily: '"Paper Mono", monospace',
+    fontFamily: '"Paper Mono", "Termul Symbols", monospace',
     fontSize: 14,
     lineHeight: 1.2,
     cursorBlink: true,
@@ -37,11 +37,25 @@
       term: term,
       write: function (base64) { term.write(bytes(base64)); },
       reset: function () { term.reset(); },
-      focus: function () { term.focus(); }
+      focus: function () { term.focus(); },
+      setTheme: function (themeJson) {
+        var next = JSON.parse(themeJson);
+        term.options.theme = next;
+        document.body.style.background = next.background;
+      },
+      setFontSize: function (px) {
+        if (typeof px === 'number' && px >= 10 && px <= 28) {
+          term.options.fontSize = px;
+          fit.fit();
+        }
+      }
     };
     bridge.onReady();
   }
 
-  // Measure cells with the real font, not a fallback.
-  document.fonts.load('14px "Paper Mono"').then(start, start);
+  // Measure cells with the real monospace + Powerline/Nerd symbol font, not a fallback.
+  Promise.all([
+    document.fonts.load('14px "Paper Mono"'),
+    document.fonts.load('14px "Termul Symbols"')
+  ]).then(start, start);
 })();
