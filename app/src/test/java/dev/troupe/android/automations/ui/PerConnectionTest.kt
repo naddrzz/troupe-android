@@ -1,5 +1,7 @@
 package dev.troupe.android.automations.ui
 
+import dev.troupe.android.pairing.ServerAddress
+import dev.troupe.android.servers.PairedServer
 import dev.troupe.android.testing.eventually
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -10,6 +12,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotSame
@@ -105,6 +108,25 @@ class PerConnectionTest {
         servers.value = null
         eventually { current.value == null }
         assertTrue(built.all { it.closed })
+    }
+
+    @Test fun renamingTheServerKeepsTheResultButANewAddressRebuilds() {
+        val box = PairedServer("s1", "Box", ServerAddress("http://127.0.0.1:1/".toHttpUrl()))
+        val paired = MutableStateFlow<PairedServer?>(box)
+        val current = perConnection(paired.connectionKeys(), hubs, close = { b: Built -> b.closed = true }) { key, hub ->
+            Built(key.id, hub).also { built += it }
+        }.stateIn(scope, SharingStarted.Eagerly, null)
+        hubs.value = Hub()
+        eventually { current.value != null }
+
+        paired.value = box.copy(name = "Renamed", stayConnected = true, hasToken = false)
+        Thread.sleep(300)
+        assertEquals("a rename rebuilt the result", 1, built.size)
+        assertEquals(false, current.value?.closed)
+
+        paired.value = box.copy(address = ServerAddress("http://127.0.0.1:2/".toHttpUrl()))
+        eventually { built.size == 2 }
+        assertTrue(built.first().closed)
     }
 
     @Test fun endingCollectionClosesTheLast() {

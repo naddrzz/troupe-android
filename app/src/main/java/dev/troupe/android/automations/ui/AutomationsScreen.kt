@@ -17,27 +17,28 @@ import dev.troupe.android.core.theme.TroupeTheme
 
 /**
  * The Automations tab of a project: switches between the list, an automation's detail and one of its runs, and
- * handles back. Shows the loading view until the server's connection has produced a controller.
+ * handles back. Shows the loading view until the server's connection has produced a controller. [covered] is true
+ * while something the shell draws over the tab (the drawer) hides it.
  */
 @Composable
-fun AutomationsScreen(projectId: String, viewOnly: Boolean, modifier: Modifier = Modifier) {
+fun AutomationsScreen(projectId: String, viewOnly: Boolean, modifier: Modifier = Modifier, covered: Boolean = false) {
     val viewModel = hiltViewModel<AutomationsViewModel>()
     val controller by viewModel.controllerFor(projectId).collectAsStateWithLifecycle()
     val current = controller
     if (current == null) {
         Box(modifier.fillMaxSize().background(TroupeTheme.palette.background)) { AutomationLoadingView() }
     } else {
-        AutomationsRoutes(current, viewOnly, modifier)
+        AutomationsRoutes(current, viewOnly, covered, modifier)
     }
 }
 
 @Composable
-private fun AutomationsRoutes(controller: AutomationsController, viewOnly: Boolean, modifier: Modifier) {
+private fun AutomationsRoutes(controller: AutomationsController, viewOnly: Boolean, covered: Boolean, modifier: Modifier) {
     val ui by controller.ui.collectAsStateWithLifecycle()
     SideEffect { controller.setViewOnly(viewOnly) }
-    // Composed only while this tab shows, so resumed here means the user can see it.
-    LifecycleResumeEffect(controller) {
-        controller.setVisible(true)
+    // Composed only while this tab shows, so resumed and not covered here means the user can see it.
+    LifecycleResumeEffect(controller, covered) {
+        controller.setVisible(!covered)
         onPauseOrDispose { controller.setVisible(false) }
     }
     BackHandler(enabled = ui.route != Route.Overview) { controller.back() }

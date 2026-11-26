@@ -322,7 +322,8 @@ fun MobileWorkspaceShellScreen(
                         )
                     }
                     activeTab is WorkspaceTab.Automations -> {
-                        AutomationsScreen(projectId = activeTab.projectId, viewOnly = state.viewOnly)
+                        // The full-screen drawer is drawn over the tab without pausing it.
+                        AutomationsScreen(projectId = activeTab.projectId, viewOnly = state.viewOnly, covered = drawerOpen)
                     }
                     !showLauncher -> {
                         NoProjectsView(
