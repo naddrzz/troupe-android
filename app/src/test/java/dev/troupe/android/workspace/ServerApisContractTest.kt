@@ -4,7 +4,6 @@ import dev.troupe.android.core.net.ApiResult
 import dev.troupe.android.files.FilesApi
 import dev.troupe.android.git.GitApi
 import dev.troupe.android.github.GithubApi
-import dev.troupe.android.snapshots.AutomationsApi
 import dev.troupe.android.testing.FakeTroupeServer
 import dev.troupe.android.testing.TestGraph
 import dev.troupe.android.worktree.WorktreeApi
@@ -139,7 +138,7 @@ class ServerApisContractTest {
     }
 
     @Test
-    fun worktreeAndAutomationsMatchServerRoutes() = runBlocking {
+    fun worktreeMatchesServerRoutes() = runBlocking {
         FakeTroupeServer().use { server ->
             val captured = mutableListOf<Pair<String, String>>()
             server.onHttpRoute = { req ->
@@ -152,11 +151,6 @@ class ServerApisContractTest {
                     "/worktree/create" -> jsonOk(
                         """{"success":true,"data":{"name":"feat-wt","branch":"feat/wt","path":"/repo-wt","headCommit":"abc123"}}""",
                     )
-                    "/api/automations" -> jsonOk(
-                        """{"success":true,"data":[{"id":"auto-1","name":"Nightly Check","enabled":true}]}""",
-                    )
-                    "/api/automations/auto-1/run" -> jsonOk("""{"success":true,"data":null}""")
-                    "/api/automations/auto-1/enabled" -> jsonOk("""{"success":true,"data":null}""")
                     else -> null
                 }
             }
@@ -171,13 +165,6 @@ class ServerApisContractTest {
                 assertEquals("feat-wt", createJson["name"]?.jsonPrimitive?.content)
                 assertEquals("feat/wt", createJson["branch"]?.jsonPrimitive?.content)
                 assertEquals("main", createJson["startRef"]?.jsonPrimitive?.content)
-
-                val autos = AutomationsApi(graph.api)
-                val listed = autos.list(server.address, server.token, "p1") as ApiResult.Ok
-                assertEquals(listOf("Nightly Check"), listed.value.map { it.name })
-                assertTrue(captured.any { it.first == "/api/automations?project_id=p1" })
-                assertTrue(autos.trigger(server.address, server.token, "auto-1") is ApiResult.Ok)
-                assertTrue(autos.setEnabled(server.address, server.token, "auto-1", false) is ApiResult.Ok)
             }
         }
     }

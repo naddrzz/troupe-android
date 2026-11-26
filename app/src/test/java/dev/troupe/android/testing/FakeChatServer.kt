@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicInteger
 /**
  * The fake Troupe Server's `/ws`, the way termul-server speaks it (`web-protocol.types.ts`,
  * `ws/subscribe.rs`, `ws/sessions.rs`, `ws/watch.rs`): `auth_required`, `authenticate`, the
- * `chat_history` watch and `list_persisted_sessions`, session logs with `subscribe` by
+ * `chat_history` watch, the `agents` watch (empty state, deltas from [agentEvent]) and `list_persisted_sessions`, session logs with `subscribe` by
  * `(logEpoch, lastSeq)` and `recover_session_snapshot`, plus `gap` and `heartbeat` frames, and
  * prompt turns (`send_prompt` deduped by `turnId`, `cancel_prompt`) of one agent, [AGENT_ID], and
  * its permission requests and questions (`respond_permission`, `answer_question`, first answer
@@ -67,6 +67,8 @@ class FakeChatServer internal constructor(
     @Volatile var unanswered: Set<String> = emptySet()
     /** true: include authoritative `pendingQuestions` on subscribe/snapshot replies (newer Troupe Server). */
     @Volatile var sendPendingQuestions: Boolean = false
+    /** Runs on the connection's thread before a `watch` request is answered; blocking it holds the snapshot back. */
+    @Volatile var beforeWatch: (watch: String) -> Unit = {}
     val sessions: MutableMap<String, Session> = ConcurrentHashMap()
     /** Every request frame the app sent on `/ws`, parsed. */
     val requests: MutableList<JsonObject> = CopyOnWriteArrayList()
@@ -142,15 +144,28 @@ class FakeChatServer internal constructor(
 
     /** The index changed for [changed]: a `{changed}` delta to every watcher. [lost]: the delta is dropped but keeps its `n`. */
     fun historyChanged(vararg changed: String, lost: Boolean = false) = synchronized(lock) {
-        connections.filter { it.watchN > 0 }.forEach { connection ->
-            connection.watchN++
+        connections.filter { it.watching(HISTORY) }.forEach { connection ->
+            val n = connection.nextRevision(HISTORY)
             if (!lost) {
-                connection.send(watchFrame(connection.watchN, delta = buildJsonObject {
+                connection.send(watchFrame(HISTORY, n, delta = buildJsonObject {
                     put("changed", JsonArray(changed.map { JsonPrimitive(it) }))
                 }))
             }
         }
     }
+
+    /** A `{event, payload}` delta of the `agents` watch to every connection watching it. */
+    fun agentEvent(event: String, payload: JsonObject) = synchronized(lock) {
+        connections.filter { it.watching(AGENTS) }.forEach { connection ->
+            connection.send(watchFrame(AGENTS, connection.nextRevision(AGENTS), delta = buildJsonObject {
+                put("event", event)
+                put("payload", payload)
+            }))
+        }
+    }
+
+    /** Whether some open connection holds a [watch] watch. */
+    fun watching(watch: String): Boolean = connections.any { it.watching(watch) }
 
     /** Closes every authenticated connection with [code]: 1001 is a deliberate stop, 1011 a crash. */
     fun closeAll(code: Int) = connections.toList().forEach {
@@ -163,9 +178,9 @@ class FakeChatServer internal constructor(
         return Connection()
     }
 
-    private fun watchFrame(n: Int, state: JsonElement? = null, delta: JsonElement? = null) = buildJsonObject {
+    private fun watchFrame(watch: String, n: Int, state: JsonElement? = null, delta: JsonElement? = null) = buildJsonObject {
         put("type", "watch")
-        put("watch", "chat_history")
+        put("watch", watch)
         put("scope", "")
         put("revision", buildJsonObject {
             put("hostEpoch", hostEpoch)
@@ -182,7 +197,12 @@ class FakeChatServer internal constructor(
         lateinit var socket: WebSocket
         private var authed = false
         val subscribed: MutableSet<String> = ConcurrentHashMap.newKeySet()
-        @Volatile var watchN = 0
+        /** The latest revision `n` sent per watch name; a watch is held while it is above 0. */
+        private val watchN: MutableMap<String, Int> = ConcurrentHashMap()
+
+        fun watching(watch: String) = (watchN[watch] ?: 0) > 0
+
+        fun nextRevision(watch: String): Int = watchN.merge(watch, 1) { a, b -> a + b }!!
 
         fun send(frame: JsonObject) {
             socket.send(frame.toString())
@@ -249,21 +269,29 @@ class FakeChatServer internal constructor(
             }
         }
 
-        private fun watch(id: String, payload: JsonObject) = synchronized(lock) {
-            if (payload["watch"]?.jsonPrimitive?.contentOrNull != "chat_history") return@synchronized reply(id, Err("unsupported", "unknown watch"))
-            watchN = 1
-            send(watchFrame(1, state = JsonArray(history)))
+        private fun watch(id: String, payload: JsonObject) {
+            val watch = payload["watch"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            beforeWatch(watch)
+            watchLocked(id, watch)
+        }
+
+        private fun watchLocked(id: String, watch: String) = synchronized(lock) {
+            val state = when (watch) {
+                HISTORY -> JsonArray(history)
+                AGENTS -> JsonObject(emptyMap())
+                else -> return@synchronized reply(id, Err("unsupported", "unknown watch"))
+            }
+            watchN[watch] = 1
+            send(watchFrame(watch, 1, state = state))
             reply(id, buildJsonObject {
-                put("watch", "chat_history")
+                put("watch", watch)
                 put("scope", "")
                 put("revision", buildJsonObject { put("hostEpoch", hostEpoch); put("n", 1) })
             })
         }
 
         private fun unwatch(id: String, payload: JsonObject) = synchronized(lock) {
-            if (payload["watch"]?.jsonPrimitive?.contentOrNull == "chat_history") {
-                watchN = 0
-            }
+            payload["watch"]?.jsonPrimitive?.contentOrNull?.let { watchN[it] = 0 }
             reply(id, JsonObject(emptyMap()))
         }
 
@@ -391,6 +419,8 @@ class FakeChatServer internal constructor(
     companion object {
         /** The one live agent of every fake session. */
         const val AGENT_ID = "agent-1"
+        private const val HISTORY = "chat_history"
+        private const val AGENTS = "agents"
         /** Requests a view-only connection is refused (`forbidden`). */
         val WRITES = setOf("send_prompt", "cancel_prompt", "respond_permission", "answer_question")
 

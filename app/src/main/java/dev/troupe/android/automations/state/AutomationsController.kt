@@ -1,0 +1,454 @@
+package dev.troupe.android.automations.state
+
+import dev.troupe.android.automations.protocol.Automation
+import dev.troupe.android.automations.protocol.AutomationDetail
+import dev.troupe.android.automations.protocol.AutomationId
+import dev.troupe.android.automations.protocol.AutomationRun
+import dev.troupe.android.automations.protocol.AutomationStep
+import dev.troupe.android.automations.protocol.NodeId
+import dev.troupe.android.automations.protocol.RunId
+import dev.troupe.android.automations.protocol.RunStatus
+import dev.troupe.android.automations.ui.canRunNow
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlin.coroutines.cancellation.CancellationException
+
+enum class ControlAction { Enable, Run, Cancel, Approve, Reject }
+
+/** A mutating control; [target] is the automation id for [ControlAction.Enable] and [ControlAction.Run], else the run id. */
+data class Control(val target: String, val action: ControlAction)
+
+sealed interface Route {
+    data object Overview : Route
+
+    data class Detail(val id: AutomationId) : Route
+
+    data class Run(val id: AutomationId, val runId: RunId) : Route
+}
+
+enum class Notice { ApprovalAlreadyHandled }
+
+/**
+ * What the Automations screens show. [detail] and [runs] are set from the detail route on, [steps] on the run route.
+ * [enabledOverride] is a switch's new value until the server's reload shows it; it wins over the loaded `enabled`.
+ */
+data class AutomationsUi(
+    val route: Route,
+    val list: QueryState<List<Automation>>,
+    val detail: QueryState<AutomationDetail>?,
+    val runs: QueryState<List<AutomationRun>>?,
+    val steps: QueryState<List<AutomationStep>>?,
+    val pending: Set<Control>,
+    val failures: Map<Control, QueryError>,
+    val enabledOverride: Map<AutomationId, Boolean>,
+    val notices: List<Notice>,
+)
+
+/**
+ * The Automations of one project: the list, plus the detail and run the user opened, and the controls. Each route's
+ * queries are opened on entering it and closed on leaving it. A control is disabled while its request is in flight
+ * and keeps its failure until it is used again, the route changes or the user refreshes. After a write the screen
+ * waits for the server's change event, or re-reads once if none arrives within [REREAD_AFTER_MS]; after a failed
+ * write it re-reads at once, since a lost reply may hide a write that was applied. Only while the screen is visible
+ * ([setVisible]) are running steps polled and failures marked seen. Everything runs in a child of [scope]; [close]
+ * stops it.
+ */
+class AutomationsController(
+    private val repo: AutomationsRepository,
+    private val projectId: String,
+    scope: CoroutineScope,
+) {
+    private val job = SupervisorJob(scope.coroutineContext[Job])
+    private val controllerScope = CoroutineScope(scope.coroutineContext + job)
+
+    /** The open route and its queries. */
+    private data class Open(
+        val route: Route,
+        val detail: HostQuery<AutomationDetail>? = null,
+        val runs: HostQuery<List<AutomationRun>>? = null,
+        val steps: HostQuery<List<AutomationStep>>? = null,
+    ) {
+        val automationId: AutomationId?
+            get() = when (route) {
+                Route.Overview -> null
+                is Route.Detail -> route.id
+                is Route.Run -> route.id
+            }
+
+        fun closeAll() {
+            detail?.close()
+            runs?.close()
+            steps?.close()
+        }
+    }
+
+    private data class Controls(
+        val pending: Set<Control> = emptySet(),
+        val failures: Map<Control, QueryError> = emptyMap(),
+        val enabledOverride: Map<AutomationId, Boolean> = emptyMap(),
+        val notices: List<Notice> = emptyList(),
+    )
+
+    // Guarded by lock: callers, replies and events may run on different threads.
+    private val lock = Any()
+    private var closed = false
+    private var overrideSeq = 0L
+    /** The toggle that set each override, so an older toggle's settling never drops a newer override. */
+    private val overrideOwner = HashMap<AutomationId, Long>()
+
+    private val list = repo.list(projectId)
+    private val current = MutableStateFlow(Open(Route.Overview))
+    private val controls = MutableStateFlow(Controls())
+    private val visible = MutableStateFlow(false)
+    /** True until the screen says otherwise: a view-only session must never mark failures seen. */
+    private val viewOnly = MutableStateFlow(true)
+
+    init {
+        markSeenWhileLooking()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val ui: StateFlow<AutomationsUi> = current
+        .flatMapLatest { o ->
+            combine(list.state, o.detail.stateOrNull(), o.runs.stateOrNull(), o.steps.stateOrNull(), controls) { l, d, r, s, c ->
+                AutomationsUi(o.route, l, d, r, s, c.pending, c.failures, c.enabledOverride, c.notices)
+            }
+        }
+        .stateIn(
+            controllerScope,
+            SharingStarted.Eagerly,
+            AutomationsUi(Route.Overview, list.state.value, null, null, null, emptySet(), emptyMap(), emptyMap(), emptyList()),
+        )
+
+    fun open(id: AutomationId) {
+        synchronized(lock) {
+            if (closed) return
+            val cur = current.value
+            when {
+                cur.route == Route.Detail(id) -> Unit
+                cur.automationId == id -> {
+                    cur.steps?.close()
+                    show(cur.copy(route = Route.Detail(id), steps = null))
+                }
+                else -> {
+                    cur.closeAll()
+                    show(Open(Route.Detail(id), repo.detail(projectId, id), repo.runs(projectId, id)))
+                }
+            }
+        }
+    }
+
+    /** Opens a run of the automation on screen; ignored on the list. */
+    fun openRun(runId: RunId) {
+        synchronized(lock) {
+            if (closed) return
+            val cur = current.value
+            val id = cur.automationId ?: return
+            val runs = cur.runs ?: return
+            if (cur.route == Route.Run(id, runId)) return
+            cur.steps?.close()
+            // A parked run changes only through events; a running one is polled while the screen is visible.
+            val steps = repo.steps(projectId, id, runId) {
+                visible.value && runs.state.value.data?.firstOrNull { it.id == runId }?.let { it.status == RunStatus.Running && it.parked == null } ?: false
+            }
+            show(cur.copy(route = Route.Run(id, runId), steps = steps))
+        }
+    }
+
+    /** Goes one route up; false on the list, where there is nothing to go back to. */
+    fun back(): Boolean {
+        synchronized(lock) {
+            if (closed) return false
+            val cur = current.value
+            return when (val route = cur.route) {
+                Route.Overview -> false
+                is Route.Detail -> {
+                    cur.closeAll()
+                    show(Open(Route.Overview))
+                    true
+                }
+                is Route.Run -> {
+                    cur.steps?.close()
+                    show(cur.copy(route = Route.Detail(route.id), steps = null))
+                    true
+                }
+            }
+        }
+    }
+
+    /** Reloads every open query and drops the controls' failure lines; a failure of a request still in flight shows when it ends. */
+    fun refresh() {
+        controls.update { it.copy(failures = emptyMap()) }
+        reloadAll()
+    }
+
+    /**
+     * Whether the user can see the Automations screen (resumed and on this tab). Hidden, nothing is polled and no
+     * failure is marked seen; becoming visible reloads the open queries once, since polls were skipped meanwhile.
+     */
+    fun setVisible(visible: Boolean) {
+        synchronized(lock) {
+            if (closed) return
+            val was = this.visible.value
+            this.visible.value = visible
+            if (visible && !was) reloadAll()
+        }
+    }
+
+    /** A view-only session sees failures without marking them seen; the server would refuse the request. */
+    fun setViewOnly(viewOnly: Boolean) {
+        this.viewOnly.value = viewOnly
+    }
+
+    /** The switch flips at once and rolls back if the write fails. */
+    fun toggleEnabled(id: AutomationId, enabled: Boolean) {
+        val control = Control(id.value, ControlAction.Enable)
+        val seq = synchronized(lock) {
+            if (!begin(control)) return
+            val seq = ++overrideSeq
+            overrideOwner[id] = seq
+            controls.update { it.copy(enabledOverride = it.enabledOverride + (id to enabled)) }
+            seq
+        }
+        act(
+            control,
+            affected = { listOfNotNull(list, detailOf(id)) },
+            call = { repo.setEnabled(id, enabled) },
+            onFailed = { dropOverride(id, seq) },
+            onOk = {
+                settleOverride(id, seq)
+                false
+            },
+        )
+    }
+
+    /** Refused without a request while the automation needs approval; on success the new run opens if its automation is on screen. */
+    fun runNow(id: AutomationId) {
+        val control = Control(id.value, ControlAction.Run)
+        synchronized(lock) {
+            if (closed || control in controls.value.pending) return
+            // View-only sessions never show the control, so only the approval gate applies here.
+            val automation = known(id)
+            if (automation != null && !canRunNow(automation, viewOnly = false)) {
+                controls.update { it.copy(failures = it.failures + (control to QueryError.NotApproved)) }
+                return
+            }
+            begin(control)
+        }
+        act(
+            control,
+            affected = { listOfNotNull(list, detailOf(id), runsOf(id)) },
+            call = { repo.runNow(id) },
+            onOk = { run ->
+                synchronized(lock) {
+                    val cur = current.value
+                    if (cur.route == Route.Detail(id)) {
+                        // Reloading first marks the runs refreshing, so the run route waits for the new run instead of calling it missing.
+                        cur.runs?.reload()
+                        openRun(run.id)
+                    }
+                }
+                false
+            },
+        )
+    }
+
+    fun cancelRun(runId: RunId) {
+        val control = Control(runId.value, ControlAction.Cancel)
+        if (!begin(control)) return
+        act(control, affected = { runQueries() }, call = { repo.cancelRun(runId) })
+    }
+
+    /** Approve and Reject of one run share their in-flight state: one decision at a time. */
+    fun decide(runId: RunId, nodeId: NodeId, approved: Boolean) {
+        val control = Control(runId.value, if (approved) ControlAction.Approve else ControlAction.Reject)
+        val both = setOf(Control(runId.value, ControlAction.Approve), Control(runId.value, ControlAction.Reject))
+        if (!begin(control, busyIf = both)) return
+        val asked = current.value.route
+        act(
+            control,
+            affected = { runQueries() },
+            call = { repo.decideApproval(runId, nodeId, approved) },
+            onOk = { decided ->
+                if (!decided) {
+                    // A late answer must not leave its notice on whatever screen the user moved on to.
+                    synchronized(lock) {
+                        if (current.value.route == asked) {
+                            controls.update { if (Notice.ApprovalAlreadyHandled in it.notices) it else it.copy(notices = it.notices + Notice.ApprovalAlreadyHandled) }
+                        }
+                    }
+                    runQueries().forEach { it.reload() }
+                }
+                !decided
+            },
+        )
+    }
+
+    fun dismissNotice(n: Notice) {
+        controls.update { it.copy(notices = it.notices - n) }
+    }
+
+    /** Closes every query and stops what is in flight; calling it again does nothing. */
+    fun close() {
+        synchronized(lock) {
+            if (closed) return
+            closed = true
+            list.close()
+            current.value.closeAll()
+        }
+        job.cancel()
+    }
+
+    /**
+     * Every route change goes through here and drops the notices and failure lines: they are about the screen that
+     * raised them, not the next one. A request still in flight records its failure when it ends. Callers hold [lock].
+     */
+    private fun show(next: Open) {
+        controls.update { it.copy(notices = emptyList(), failures = emptyMap()) }
+        current.value = next
+    }
+
+    private fun reloadAll() {
+        val cur = current.value
+        list.reload()
+        cur.detail?.reload()
+        cur.runs?.reload()
+        cur.steps?.reload()
+    }
+
+    /** Claims [control] as in flight and clears its last failure; false when closed or anything in [busyIf] is in flight. */
+    private fun begin(control: Control, busyIf: Set<Control> = setOf(control)): Boolean {
+        synchronized(lock) {
+            if (closed || controls.value.pending.any { it in busyIf }) return false
+            controls.update { it.copy(pending = it.pending + control, failures = it.failures - control) }
+            return true
+        }
+    }
+
+    /**
+     * Sends [call] once. A failure is recorded on [control] and [affected] re-read at once, as the write may have
+     * been applied. On success [onOk] runs and, unless it returns true (it re-read itself), [affected] re-read once
+     * after [REREAD_AFTER_MS] if no change event reloaded them first. An unexpected exception counts as
+     * [QueryError.Invalid]: one escaping this coroutine would crash the app.
+     */
+    private fun <T> act(
+        control: Control,
+        affected: () -> List<HostQuery<*>>,
+        call: suspend () -> Mutation<T>,
+        onFailed: () -> Unit = {},
+        onOk: (T) -> Boolean = { false },
+    ) {
+        controllerScope.launch {
+            try {
+                when (val result = call()) {
+                    is Mutation.Ok -> {
+                        controls.update { it.copy(pending = it.pending - control) }
+                        if (!onOk(result.value)) affected().forEach { it.reloadUnlessEventWithin(REREAD_AFTER_MS) }
+                    }
+                    is Mutation.Failed -> fail(control, result.error, onFailed, affected)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                fail(control, QueryError.Invalid, onFailed, affected)
+            }
+        }
+    }
+
+    private fun fail(control: Control, error: QueryError, onFailed: () -> Unit, affected: () -> List<HostQuery<*>>) {
+        onFailed()
+        controls.update { it.copy(pending = it.pending - control, failures = it.failures + (control to error)) }
+        affected().forEach { it.reload() }
+    }
+
+    /** The open detail as mark-seen sees it: [looking] when the user sees its runs and may mark them. */
+    private data class Unseen(val id: AutomationId, val detail: HostQuery<AutomationDetail>, val count: Int, val looking: Boolean)
+
+    /**
+     * Port of the web's guard: marks an automation's failures seen while the screen is visible, on its Detail route
+     * (not its Run route), in a session that may write, and the detail shows unseen failures. A count already marked
+     * for this opening is not marked again until the detail shows none or another count; a new opening marks afresh.
+     * A failed mark is not remembered, so the next change tries again. Marks run one at a time.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun markSeenWhileLooking() = controllerScope.launch {
+        var marked: Pair<HostQuery<AutomationDetail>, Int>? = null
+        current
+            .flatMapLatest { o ->
+                val id = o.automationId
+                val detail = o.detail
+                if (id == null || detail == null) {
+                    flowOf(null)
+                } else {
+                    combine(detail.state, visible, viewOnly) { s, v, readOnly ->
+                        Unseen(id, detail, s.data?.automation?.unseenFailures ?: 0, v && !readOnly && o.route is Route.Detail)
+                    }
+                }
+            }
+            .collect { u ->
+                if (u == null) return@collect
+                if (u.count == 0 && marked?.first === u.detail) marked = null
+                val key = u.detail to u.count
+                if (u.looking && u.count > 0 && marked != key && markSeen(u.id)) marked = key
+            }
+    }
+
+    /** Not a control: nothing shows a failure, and the next change of what is on screen tries again. */
+    private suspend fun markSeen(id: AutomationId): Boolean = try {
+        repo.markSeen(id) is Mutation.Ok
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        false
+    }
+
+    /**
+     * Keeps the override until the list shows the server's value: a successful reply to a list request begun after the
+     * write. A failed reload keeps the old row, and a reload begun before the write may predate it, so neither settles
+     * it. The write's own re-read (or its change event) begins such a request.
+     */
+    private fun settleOverride(id: AutomationId, seq: Long) {
+        val mark = list.requestMark()
+        controllerScope.launch {
+            list.state.first { it.loaded && !it.refreshing && it.error == null && list.answeredSince(mark) }
+            dropOverride(id, seq)
+        }
+    }
+
+    private fun dropOverride(id: AutomationId, seq: Long) {
+        synchronized(lock) {
+            if (overrideOwner[id] != seq) return
+            overrideOwner.remove(id)
+            controls.update { it.copy(enabledOverride = it.enabledOverride - id) }
+        }
+    }
+
+    /** The automation as last loaded: its detail when open, else its list row. */
+    private fun known(id: AutomationId): Automation? =
+        detailOf(id)?.state?.value?.data?.automation ?: list.state.value.data?.firstOrNull { it.id == id }
+
+    private fun detailOf(id: AutomationId) = current.value.takeIf { it.automationId == id }?.detail
+
+    private fun runsOf(id: AutomationId) = current.value.takeIf { it.automationId == id }?.runs
+
+    private fun runQueries(): List<HostQuery<*>> = current.value.let { listOfNotNull(it.runs, it.steps) }
+
+    private fun <T> HostQuery<T>?.stateOrNull(): Flow<QueryState<T>?> = this?.state ?: flowOf(null)
+
+    private companion object {
+        const val REREAD_AFTER_MS = 1_500L
+    }
+}

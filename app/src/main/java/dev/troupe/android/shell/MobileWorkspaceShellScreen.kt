@@ -37,6 +37,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import dev.troupe.android.R
 import dev.troupe.android.agents.AgentSetupSheet
+import dev.troupe.android.automations.ui.AutomationsScreen
 import dev.troupe.android.chat.ui.ChatStartView
 import dev.troupe.android.chat.ui.EmbeddedChatPane
 import dev.troupe.android.core.theme.AppearanceMode
@@ -52,7 +53,6 @@ import dev.troupe.android.github.GithubItemPane
 import dev.troupe.android.github.MobileGithubDrawerSection
 import dev.troupe.android.onboarding.OnboardingScreen
 import dev.troupe.android.pairing.TokenGateScreen
-import dev.troupe.android.snapshots.AutomationsPane
 import dev.troupe.android.snapshots.SnapshotsSheet
 import dev.troupe.android.terminal.EmbeddedTerminalPane
 import dev.troupe.android.terminal.ui.MobileTerminalActionsSheet
@@ -322,13 +322,8 @@ fun MobileWorkspaceShellScreen(
                         )
                     }
                     activeTab is WorkspaceTab.Automations -> {
-                        AutomationsPane(
-                            server = server,
-                            projectId = activeTab.projectId,
-                            viewOnly = state.viewOnly,
-                            automationsApi = viewModel.automationsApi,
-                            tokenProvider = viewModel.session::currentToken,
-                        )
+                        // The full-screen drawer is drawn over the tab without pausing it.
+                        AutomationsScreen(projectId = activeTab.projectId, viewOnly = state.viewOnly, covered = drawerOpen)
                     }
                     !showLauncher -> {
                         NoProjectsView(

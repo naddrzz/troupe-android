@@ -4,6 +4,8 @@ import androidx.datastore.core.DataStoreFactory
 import androidx.datastore.core.okio.OkioStorage
 import androidx.datastore.preferences.core.PreferencesSerializer
 import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import dev.troupe.android.attention.AttentionCenter
 import dev.troupe.android.chat.ChatViewModel
 import dev.troupe.android.chat.ChatsViewModel
@@ -37,6 +39,7 @@ import okio.FileSystem
 import okio.Path.Companion.toOkioPath
 import java.io.Closeable
 import java.io.File
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * The app's real objects wired the way Hilt wires them, except for the two supporting seams:
@@ -74,29 +77,40 @@ class TestGraph(
 
     val setupApi = dev.troupe.android.setup.ServerSetupApi(api)
 
-    fun pairViewModel() = PairViewModel(api, sockets, repository, viewOnly)
+    /** Every ViewModel handed out; [close] ends their Main-bound scopes while the test's Main dispatcher is still set. */
+    private val viewModels = CopyOnWriteArrayList<ViewModel>()
 
-    fun connectServerViewModel() = dev.troupe.android.pairing.ConnectServerViewModel(api, sockets, repository, viewOnly)
+    private fun <T : ViewModel> T.tracked(): T = also { viewModels += it }
+
+    fun pairViewModel() = PairViewModel(api, sockets, repository, viewOnly).tracked()
+
+    fun connectServerViewModel() = dev.troupe.android.pairing.ConnectServerViewModel(api, sockets, repository, viewOnly).tracked()
 
     fun projectsViewModel(serverId: String) =
-        ProjectsViewModel(SavedStateHandle(mapOf("serverId" to serverId)), api, repository, connections, attention)
+        ProjectsViewModel(SavedStateHandle(mapOf("serverId" to serverId)), api, repository, connections, attention).tracked()
 
     fun terminalsViewModel(serverId: String, projectId: String) =
-        TerminalsViewModel(SavedStateHandle(mapOf("serverId" to serverId, "projectId" to projectId)), connections, cursors)
+        TerminalsViewModel(SavedStateHandle(mapOf("serverId" to serverId, "projectId" to projectId)), connections, cursors).tracked()
 
     fun terminalViewModel(serverId: String, terminalId: String) =
-        TerminalViewModel(SavedStateHandle(mapOf("serverId" to serverId, "terminalId" to terminalId)), connections, cursors)
+        TerminalViewModel(SavedStateHandle(mapOf("serverId" to serverId, "terminalId" to terminalId)), connections, cursors).tracked()
 
     fun chatsViewModel(serverId: String, projectId: String) =
-        ChatsViewModel(SavedStateHandle(mapOf("serverId" to serverId, "projectId" to projectId)), chatConnections)
+        ChatsViewModel(SavedStateHandle(mapOf("serverId" to serverId, "projectId" to projectId)), chatConnections).tracked()
 
     fun chatViewModel(serverId: String, sessionId: String) =
-        ChatViewModel(SavedStateHandle(mapOf("serverId" to serverId, "sessionId" to sessionId)), chatConnections, viewOnly)
+        ChatViewModel(SavedStateHandle(mapOf("serverId" to serverId, "sessionId" to sessionId)), chatConnections, viewOnly).tracked()
 
-    fun serversViewModel() = ServersViewModel(api, sockets, repository)
+    fun serversViewModel() = ServersViewModel(api, sockets, repository).tracked()
 
-    /** Joins the storage scope, so a new graph on the same dir can open the file (an app restart). */
+    /**
+     * Ends the ViewModels' scopes, then joins the storage scope, so a new graph on the same dir can open the file (an app restart).
+     * Cancelling a `viewModelScope` does not call `onCleared()`: what a ViewModel does there (`TerminalViewModel` saving
+     * its cursor and detaching, `ChatViewModel` releasing what is pending) does not happen here, so a test that needs
+     * those effects before reopening the graph must cause them itself.
+     */
     override fun close() {
+        runBlocking { viewModels.forEach { it.viewModelScope.coroutineContext.job.cancelAndJoin() } }
         attention.stop()
         connections.closeAll()
         chatConnections.closeAll()

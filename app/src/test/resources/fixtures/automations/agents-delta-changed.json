@@ -1,0 +1,8 @@
+{
+  "_source": "brief for Task 1 (event name automation_changed in src-tauri/src/automation/model.rs; payload shape AutomationChanged in src/shared/types/automation.types.ts; delta published with scope \"\" by publish_agent_event in src-tauri/src/web/watch/sources.rs)",
+  "event": "automation_changed",
+  "payload": {
+    "project_id": "p1",
+    "automation_id": "a1"
+  }
+}

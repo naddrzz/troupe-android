@@ -14,11 +14,14 @@ import kotlinx.serialization.json.JsonElement
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Interceptor
+import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okio.BufferedSink
 import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -30,7 +33,8 @@ sealed interface ApiResult<out T> {
     data class Ok<T>(val value: T) : ApiResult<T>
     data object Unauthorized : ApiResult<Nothing>
     data class Unreachable(val cause: String) : ApiResult<Nothing>
-    data class ServerError(val message: String, val code: String?) : ApiResult<Nothing>
+    /** [status] is the HTTP status; a 2xx here means the reply did not match the contract. Null for a `success: false` envelope in a 2xx reply. */
+    data class ServerError(val message: String, val code: String?, val status: Int? = null) : ApiResult<Nothing>
 }
 
 /**
@@ -63,6 +67,9 @@ private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
  * no `Origin` header is sent (the server checks Origin only when present).
  */
 class ServerApi @Inject constructor(private val client: OkHttpClient) {
+
+    /** Shares [client]'s pool, interceptors and timeouts; only the silent retry after a connection failure is off. */
+    private val noRetryClient by lazy { client.newBuilder().retryOnConnectionFailure(false).build() }
 
     suspend fun health(address: ServerAddress, token: String? = null): ApiResult<Health> =
         getRaw(address, "health", token = token, Health.serializer())
@@ -102,16 +109,22 @@ class ServerApi @Inject constructor(private val client: OkHttpClient) {
         token: String?,
         bodyJson: String = "{}",
         serializer: KSerializer<T>,
-    ): ApiResult<T> = execute(address, "POST", path, token, bodyJson = bodyJson) { body ->
+        retryOnConnectionFailure: Boolean = true,
+    ): ApiResult<T> = execute(address, "POST", path, token, bodyJson = bodyJson, retryOnConnectionFailure = retryOnConnectionFailure) { body ->
         enveloped(body, serializer)
     }
 
+    /**
+     * [retryOnConnectionFailure] `false`: OkHttp sends the request at most once, neither after a connection failure nor
+     * as a follow-up such as a `503` with `Retry-After: 0` (for a write that must not be repeated).
+     */
     suspend fun postUnit(
         address: ServerAddress,
         path: String,
         token: String?,
         bodyJson: String = "{}",
-    ): ApiResult<Unit> = execute(address, "POST", path, token, bodyJson = bodyJson) { body ->
+        retryOnConnectionFailure: Boolean = true,
+    ): ApiResult<Unit> = execute(address, "POST", path, token, bodyJson = bodyJson, retryOnConnectionFailure = retryOnConnectionFailure) { body ->
         envelopedUnit(body)
     }
 
@@ -172,13 +185,18 @@ class ServerApi @Inject constructor(private val client: OkHttpClient) {
         path: String,
         token: String?,
         bodyJson: String?,
+        retryOnConnectionFailure: Boolean = true,
         decode: (String) -> ApiResult<T>,
     ): ApiResult<T> {
         val cleanPath = path.removePrefix("/")
-        val reqBody = bodyJson?.toRequestBody(JSON_MEDIA_TYPE)
+        // A one-shot body also stops OkHttp's resend on a `503` with `Retry-After: 0`, which ignores retryOnConnectionFailure.
+        val reqBody = bodyJson?.let { json ->
+            json.toRequestBody(JSON_MEDIA_TYPE).let { if (retryOnConnectionFailure) it else OneShotBody(it) }
+        }
         val builder = Request.Builder().url(address.httpUrl(cleanPath))
         when (method) {
             "GET" -> builder.get()
+            // postEnveloped and postUnit always pass a body, so a write sent once is always one-shot.
             "POST" -> builder.post(reqBody ?: "{}".toRequestBody(JSON_MEDIA_TYPE))
             "PUT" -> builder.put(reqBody ?: "{}".toRequestBody(JSON_MEDIA_TYPE))
             "DELETE" -> if (reqBody != null) builder.delete(reqBody) else builder.delete()
@@ -194,7 +212,7 @@ class ServerApi @Inject constructor(private val client: OkHttpClient) {
         // Off the caller's (main) thread: reading the body blocks.
         return try {
             withContext(Dispatchers.IO) {
-                client.newCall(request).await().use { response ->
+                (if (retryOnConnectionFailure) client else noRetryClient).newCall(request).await().use { response ->
                     val body = response.body.string()
                     when {
                         response.code == 401 || response.code == 403 -> ApiResult.Unauthorized
@@ -202,9 +220,9 @@ class ServerApi @Inject constructor(private val client: OkHttpClient) {
                         else -> try {
                             decode(body)
                         } catch (e: SerializationException) {
-                            ApiResult.ServerError("HTTP ${response.code}", null)
+                            ApiResult.ServerError("HTTP ${response.code}", null, response.code)
                         } catch (e: IllegalArgumentException) {
-                            ApiResult.ServerError("HTTP ${response.code}", null)
+                            ApiResult.ServerError("HTTP ${response.code}", null, response.code)
                         }
                     }
                 }
@@ -217,7 +235,7 @@ class ServerApi @Inject constructor(private val client: OkHttpClient) {
     /** A non-2xx reply: the envelope's reason when there is one, else the status. */
     private fun failure(body: String, code: Int): ApiResult.ServerError {
         val envelope = runCatching { TroupeJson.decodeFromString(HttpEnvelope.serializer(JsonElement.serializer()), body) }.getOrNull()
-        return ApiResult.ServerError(envelope?.error ?: "HTTP $code", envelope?.code)
+        return ApiResult.ServerError(envelope?.error ?: "HTTP $code", envelope?.code, code)
     }
 
     private fun <T> enveloped(body: String, serializer: KSerializer<T>): ApiResult<T> {
@@ -225,6 +243,8 @@ class ServerApi @Inject constructor(private val client: OkHttpClient) {
         val data = envelope.data
         return when {
             envelope.success && data != null -> ApiResult.Ok(data)
+            // Caught in execute(), which records the 2xx status: the reply did not match the contract.
+            envelope.success -> throw SerializationException("a successful reply without data")
             envelope.code == "UNAUTHORIZED" -> ApiResult.Unauthorized
             else -> ApiResult.ServerError(envelope.error ?: "Unknown error", envelope.code)
         }
@@ -239,6 +259,17 @@ class ServerApi @Inject constructor(private val client: OkHttpClient) {
             else -> ApiResult.ServerError(envelope.error ?: "Unknown error", envelope.code)
         }
     }
+}
+
+/** [delegate], marked one-shot: OkHttp never transmits it a second time, neither after a connection failure nor as a follow-up. */
+private class OneShotBody(private val delegate: RequestBody) : RequestBody() {
+    override fun contentType(): MediaType? = delegate.contentType()
+
+    override fun contentLength(): Long = delegate.contentLength()
+
+    override fun writeTo(sink: BufferedSink) = delegate.writeTo(sink)
+
+    override fun isOneShot(): Boolean = true
 }
 
 private suspend fun Call.await(): Response = suspendCancellableCoroutine { cont ->
