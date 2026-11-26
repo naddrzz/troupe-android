@@ -134,12 +134,12 @@ class AutomationsController(
                 cur.route == Route.Detail(id) -> Unit
                 cur.automationId == id -> {
                     cur.steps?.close()
-                    current.value = cur.copy(route = Route.Detail(id), steps = null)
+                    show(cur.copy(route = Route.Detail(id), steps = null))
                 }
                 else -> {
                     cur.closeAll()
                     val detail = repo.detail(id)
-                    current.value = Open(Route.Detail(id), detail, repo.runs(id), seen = markSeenOnce(id, detail))
+                    show(Open(Route.Detail(id), detail, repo.runs(id), seen = markSeenOnce(id, detail)))
                 }
             }
         }
@@ -158,7 +158,7 @@ class AutomationsController(
             val steps = repo.steps(id, runId) {
                 runs.state.value.data?.firstOrNull { it.id == runId }?.let { it.status == RunStatus.Running && it.parked == null } ?: false
             }
-            current.value = cur.copy(route = Route.Run(id, runId), steps = steps)
+            show(cur.copy(route = Route.Run(id, runId), steps = steps))
         }
     }
 
@@ -171,12 +171,12 @@ class AutomationsController(
                 Route.Overview -> false
                 is Route.Detail -> {
                     cur.closeAll()
-                    current.value = Open(Route.Overview)
+                    show(Open(Route.Overview))
                     true
                 }
                 is Route.Run -> {
                     cur.steps?.close()
-                    current.value = cur.copy(route = Route.Detail(route.id), steps = null)
+                    show(cur.copy(route = Route.Detail(route.id), steps = null))
                     true
                 }
             }
@@ -248,13 +248,19 @@ class AutomationsController(
         val control = Control(runId.value, if (approved) ControlAction.Approve else ControlAction.Reject)
         val both = setOf(Control(runId.value, ControlAction.Approve), Control(runId.value, ControlAction.Reject))
         if (!begin(control, busyIf = both)) return
+        val asked = current.value.route
         act(
             control,
             affected = { runQueries() },
             call = { repo.decideApproval(runId, nodeId, approved) },
             onOk = { decided ->
                 if (!decided) {
-                    controls.update { if (Notice.ApprovalAlreadyHandled in it.notices) it else it.copy(notices = it.notices + Notice.ApprovalAlreadyHandled) }
+                    // A late answer must not leave its notice on whatever screen the user moved on to.
+                    synchronized(lock) {
+                        if (current.value.route == asked) {
+                            controls.update { if (Notice.ApprovalAlreadyHandled in it.notices) it else it.copy(notices = it.notices + Notice.ApprovalAlreadyHandled) }
+                        }
+                    }
                     runQueries().forEach { it.reload() }
                 }
                 !decided
@@ -275,6 +281,12 @@ class AutomationsController(
             current.value.closeAll()
         }
         job.cancel()
+    }
+
+    /** Every route change goes through here and drops the notices: one is about the run that raised it, not the next screen. Callers hold [lock]. */
+    private fun show(next: Open) {
+        controls.update { it.copy(notices = emptyList()) }
+        current.value = next
     }
 
     /** Claims [control] as in flight and clears its last failure; false when closed or anything in [busyIf] is in flight. */

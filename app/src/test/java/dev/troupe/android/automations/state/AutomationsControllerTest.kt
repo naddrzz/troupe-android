@@ -263,6 +263,57 @@ class AutomationsControllerTest {
         eventually(message = { "ui: $ui" }) { ui.notices.isEmpty() }
     }
 
+    private fun raiseNotice() {
+        routes[approvalPath] = { ok("""{"success":true,"data":false}""") }
+        controller
+        openRun()
+        controller.decide(runId, NodeId("gate"), approved = true)
+        eventually(message = { "ui: $ui" }) { Notice.ApprovalAlreadyHandled in ui.notices && ui.pending.isEmpty() }
+    }
+
+    @Test fun noticeStaysWhileOnTheRunThatRaisedIt() {
+        raiseNotice()
+        Thread.sleep(300)
+        assertEquals(listOf(Notice.ApprovalAlreadyHandled), ui.notices)
+    }
+
+    @Test fun noticeIsDroppedWhenAnotherRunOpens() {
+        raiseNotice()
+
+        controller.openRun(RunId("run-1"))
+
+        eventually(message = { "ui: $ui" }) { ui.route == Route.Run(id, RunId("run-1")) }
+        assertTrue("notices: ${ui.notices}", ui.notices.isEmpty())
+    }
+
+    @Test fun noticeIsDroppedWhenLeavingTheRun() {
+        raiseNotice()
+
+        assertTrue(controller.back())
+
+        eventually(message = { "ui: $ui" }) { ui.route == Route.Detail(id) }
+        assertTrue("notices: ${ui.notices}", ui.notices.isEmpty())
+    }
+
+    @Test fun lateAnswerAfterLeavingTheRunRaisesNoNotice() {
+        val release = CountDownLatch(1)
+        routes[approvalPath] = {
+            release.await(10, TimeUnit.SECONDS)
+            ok("""{"success":true,"data":false}""")
+        }
+        controller
+        openRun()
+        controller.decide(runId, NodeId("gate"), approved = true)
+        eventually(message = { "ui: $ui" }) { hits(approvalPath) == 1 }
+
+        assertTrue(controller.back())
+        release.countDown()
+
+        eventually(message = { "ui: $ui" }) { ui.pending.isEmpty() }
+        Thread.sleep(300)
+        assertTrue("notices: ${ui.notices}", ui.notices.isEmpty())
+    }
+
     @Test fun cancelRunAndDecideSendOnce() {
         val release = CountDownLatch(1)
         routes[cancelPath] = {

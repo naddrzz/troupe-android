@@ -490,7 +490,7 @@
     <string name="automations_output_expanded">Expanded</string>
     <string name="automations_output_collapsed">Collapsed</string>
     <string name="automations_output_loading">Loading output</string>
-    <string name="automations_output_truncated">Showing the first %1$d characters of this output.</string>
+    <string name="automations_output_truncated">This output is long. Only its beginning is shown.</string>
     <string name="automations_approval_card_title">Waiting for your approval</string>
     <string name="automations_approval_card_explainer">Approve to let the run continue. Rejecting, or no decision before it expires, fails this step.</string>
     <string name="automations_approve">Approve</string>

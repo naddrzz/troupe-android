@@ -442,7 +442,7 @@ private fun OutputText(output: JsonElement) {
                 .padding(8.dp),
         )
         if (shown.truncated) {
-            Text(stringResource(R.string.automations_output_truncated, OUTPUT_PREVIEW_CHARS), style = typo.bodySmall, color = palette.mutedForeground)
+            Text(stringResource(R.string.automations_output_truncated), style = typo.bodySmall, color = palette.mutedForeground)
         }
     }
 }
