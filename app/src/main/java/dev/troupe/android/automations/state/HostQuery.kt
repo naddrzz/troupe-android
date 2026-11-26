@@ -58,8 +58,9 @@ class Poll(val everyMs: Long, val active: () -> Boolean)
 /**
  * Port of the web's `useHostQuery`: loads once, then again on every change event that [affects]
  * accepts, on every resync and on [poll] ticks. Only the latest request's reply is kept, and a failed
- * load keeps the last good data. Everything runs in a child of [scope]; [close] (or cancelling
- * [scope]) stops it.
+ * load keeps the last good data. When the watch comes up ([AutomationEvent.Watching]) a load that could
+ * not reach the server is tried once more, so a query opened offline recovers. Everything runs in a
+ * child of [scope]; [close] (or cancelling [scope]) stops it.
  */
 class HostQuery<T>(
     scope: CoroutineScope,
@@ -76,7 +77,12 @@ class HostQuery<T>(
     // Guarded by lock; loads, events, ticks and callers may run on different threads.
     private val lock = Any()
     private var request = 0
-    private var pending = false
+    /** The request whose reply the state shows (successful or not). */
+    private var answered = 0
+    /** Loads on the wire, superseded ones included: the poll waits for all of them. */
+    private var inFlight = 0
+    /** The watch came up while a load was in flight: if that load cannot reach the server, it is tried once more. */
+    private var retryIfUnreachable = false
     private var closed = false
     private var eventReloads = 0
 
@@ -87,6 +93,14 @@ class HostQuery<T>(
                 val hit = when (event) {
                     is AutomationEvent.Changed -> falseOnThrow { affects(event.change) }
                     AutomationEvent.Resync -> true
+                    AutomationEvent.Watching -> synchronized(lock) {
+                        if (inFlight > 0) {
+                            retryIfUnreachable = true
+                            false
+                        } else {
+                            _state.value.error == QueryError.Unreachable
+                        }
+                    }
                 }
                 if (hit) {
                     synchronized(lock) {
@@ -100,7 +114,7 @@ class HostQuery<T>(
             queryScope.launch {
                 while (true) {
                     delay(poll.everyMs)
-                    if (falseOnThrow(poll.active)) synchronized(lock) { if (pending) null else begin() }?.let(::fetch)
+                    if (falseOnThrow(poll.active)) synchronized(lock) { if (inFlight > 0) null else begin() }?.let(::fetch)
                 }
             }
         }
@@ -119,6 +133,12 @@ class HostQuery<T>(
         }
     }
 
+    /** A mark for [answeredSince]: the latest request begun so far. */
+    fun requestMark(): Int = synchronized(lock) { request }
+
+    /** Whether the state now shows the reply to a request begun after [mark], so it cannot predate that moment. */
+    fun answeredSince(mark: Int): Boolean = synchronized(lock) { answered > mark }
+
     fun close() {
         synchronized(lock) {
             closed = true
@@ -136,34 +156,42 @@ class HostQuery<T>(
         false
     }
 
-    /** Claims a new request id, or null once closed. */
+    /** Claims a new request id, counted in flight until its [fetch] ends, or null once closed. */
     private fun begin(): Int? = synchronized(lock) {
         if (closed) return null
-        pending = true
+        inFlight++
         _state.update { if (it.loaded) it.copy(refreshing = true) else it }
         ++request
     }
 
     private fun fetch(id: Int) {
         queryScope.launch {
-            // An exception escaping this supervisor child would crash the app and leave `pending` set for good,
-            // so an unexpected one is reported as a reply the app could not make sense of.
-            val result = try {
-                load()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                QueryResult.Failed(QueryError.Invalid)
-            }
-            synchronized(lock) {
-                if (closed || id != request) return@launch
-                pending = false
-                _state.update { prev ->
-                    when (result) {
-                        is QueryResult.Ok -> QueryState(data = result.value, loaded = true)
-                        is QueryResult.Failed -> prev.copy(error = result.error, loaded = true, refreshing = false)
-                    }
+            try {
+                // An exception escaping this supervisor child would crash the app, so an unexpected one is
+                // reported as a reply the app could not make sense of.
+                val result = try {
+                    load()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    QueryResult.Failed(QueryError.Invalid)
                 }
+                val retry = synchronized(lock) {
+                    if (closed || id != request) return@launch
+                    answered = id
+                    val again = retryIfUnreachable && result == QueryResult.Failed(QueryError.Unreachable)
+                    retryIfUnreachable = false
+                    _state.update { prev ->
+                        when (result) {
+                            is QueryResult.Ok -> QueryState(data = result.value, loaded = true)
+                            is QueryResult.Failed -> prev.copy(error = result.error, loaded = true, refreshing = false)
+                        }
+                    }
+                    again
+                }
+                if (retry) reload()
+            } finally {
+                synchronized(lock) { inFlight-- }
             }
         }
     }

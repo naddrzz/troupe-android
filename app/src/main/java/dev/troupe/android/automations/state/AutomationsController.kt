@@ -68,7 +68,7 @@ data class AutomationsUi(
  */
 class AutomationsController(
     private val repo: AutomationsRepository,
-    projectId: String,
+    private val projectId: String,
     scope: CoroutineScope,
 ) {
     private val job = SupervisorJob(scope.coroutineContext[Job])
@@ -145,7 +145,7 @@ class AutomationsController(
                 }
                 else -> {
                     cur.closeAll()
-                    show(Open(Route.Detail(id), repo.detail(id), repo.runs(id)))
+                    show(Open(Route.Detail(id), repo.detail(projectId, id), repo.runs(projectId, id)))
                 }
             }
         }
@@ -161,7 +161,7 @@ class AutomationsController(
             if (cur.route == Route.Run(id, runId)) return
             cur.steps?.close()
             // A parked run changes only through events; a running one is polled while the screen is visible.
-            val steps = repo.steps(id, runId) {
+            val steps = repo.steps(projectId, id, runId) {
                 visible.value && runs.state.value.data?.firstOrNull { it.id == runId }?.let { it.status == RunStatus.Running && it.parked == null } ?: false
             }
             show(cur.copy(route = Route.Run(id, runId), steps = steps))
@@ -229,7 +229,7 @@ class AutomationsController(
             call = { repo.setEnabled(id, enabled) },
             onFailed = { dropOverride(id, seq) },
             onOk = {
-                settleOverride(id, seq, enabled)
+                settleOverride(id, seq)
                 false
             },
         )
@@ -415,15 +415,15 @@ class AutomationsController(
         false
     }
 
-    /** Keeps the override until a list reply that began after the write shows the server's value. */
-    private fun settleOverride(id: AutomationId, seq: Long, enabled: Boolean) {
-        val before = list.state.value
-        if (before.data?.firstOrNull { it.id == id }?.enabled == enabled) {
-            dropOverride(id, seq)
-            return
-        }
+    /**
+     * Keeps the override until the list shows the server's value: a successful reply to a list request begun after the
+     * write. A failed reload keeps the old row, and a reload begun before the write may predate it, so neither settles
+     * it. The write's own re-read (or its change event) begins such a request.
+     */
+    private fun settleOverride(id: AutomationId, seq: Long) {
+        val mark = list.requestMark()
         controllerScope.launch {
-            list.state.first { it !== before && it.loaded && !it.refreshing }
+            list.state.first { it.loaded && !it.refreshing && it.error == null && list.answeredSince(mark) }
             dropOverride(id, seq)
         }
     }

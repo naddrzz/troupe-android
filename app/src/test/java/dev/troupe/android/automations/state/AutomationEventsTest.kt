@@ -37,18 +37,21 @@ class AutomationEventsTest {
         server.close()
     }
 
-    /** Collects the stream and returns once the host holds an `agents` watch for it. */
+    /**
+     * Collects the stream and returns once the host holds an `agents` watch for it and its first snapshot came in
+     * as [AutomationEvent.Watching] (not a resync); that event is then cleared, so tests see only what follows.
+     */
     private fun startCollecting() {
         val serverId = runBlocking { graph.repository.add("Box", server.pairingInput()).id }
         val hub = runBlocking { graph.chatConnections.connection(serverId) }.watchHub
         collector = CoroutineScope(Dispatchers.IO).launch { AutomationEvents(hub).stream().collect { received += it } }
         eventually { chat.watching("agents") }
+        eventually(message = { "events: $received" }) { received.isNotEmpty() }
+        assertEquals(listOf<AutomationEvent>(AutomationEvent.Watching), received.toList())
+        received.clear()
     }
 
-    private fun change(projectId: String, automationId: String?) = chat.agentEvent("automation_changed", buildJsonObject {
-        put("project_id", projectId)
-        put("automation_id", automationId)
-    })
+    private fun change(projectId: String, automationId: String?) = server.automationChanged(projectId, automationId)
 
     @Test fun changeEventIsEmitted() {
         startCollecting()
@@ -99,7 +102,6 @@ class AutomationEventsTest {
 
     @Test fun reconnectEmitsResync() {
         startCollecting()
-        // Once this change is out, the first snapshot (which is not a resync) has been seen.
         change("p1", "a1")
         eventually { received.size == 1 }
         assertEquals(listOf<AutomationEvent>(AutomationEvent.Changed(AutomationChanged("p1", "a1"))), received.toList())

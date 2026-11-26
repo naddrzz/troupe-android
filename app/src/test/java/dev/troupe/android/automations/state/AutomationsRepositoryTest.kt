@@ -13,8 +13,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import mockwebserver3.MockResponse
 import mockwebserver3.RecordedRequest
 import org.junit.After
@@ -67,21 +65,9 @@ class AutomationsRepositoryTest {
         return result
     }
 
-    private fun hits(path: String) = server.httpRequests.count { it.url.encodedPath == path }
+    private fun hits(path: String) = server.hits(path)
 
-    /**
-     * Returns once the `agents` watch is up and [path] has been requested, and the request count has stopped
-     * moving for half a second, so a spurious resync reload right after subscribing cannot land later.
-     */
-    private fun settle(path: String) {
-        eventually { server.chat.watching("agents") }
-        eventually { hits(path) >= 1 }
-        var last = -1
-        while (hits(path) != last) {
-            last = hits(path)
-            Thread.sleep(500)
-        }
-    }
+    private fun settle(path: String) = server.settle(path)
 
     /**
      * [ignored] must not make [path] reload and [control] must. The server sends events in order, so seeing exactly
@@ -96,22 +82,16 @@ class AutomationsRepositoryTest {
         assertEquals("the ignored event reloaded as well", before + 1, hits(path))
     }
 
-    private fun assertReloads(path: String, event: () -> Unit) {
-        val before = hits(path)
-        event()
-        eventually(message = { "no reload for the event" }) { hits(path) > before }
-    }
-
-    /** A query on automation `a1` of project `p1`, already settled, must ignore `a2` and reload for `a1` and project-wide changes. */
+    /**
+     * A query on automation `a1` of project `p1`, already settled, must ignore `a2` and another project's project-wide
+     * change, and reload for `a1` and its own project's project-wide changes.
+     */
     private fun assertScopedToA1(path: String) {
         assertIgnoredThenReloads(path, ignored = { change("p1", "a2") }, control = { change("p1", "a1") })
-        assertReloads(path) { change("p1", null) }
+        assertIgnoredThenReloads(path, ignored = { change("p2", null) }, control = { change("p1", null) })
     }
 
-    private fun change(projectId: String, automationId: String?) = server.chat.agentEvent("automation_changed", buildJsonObject {
-        put("project_id", projectId)
-        put("automation_id", automationId)
-    })
+    private fun change(projectId: String, automationId: String?) = server.automationChanged(projectId, automationId)
 
     @Test fun listReloadsOnChangeForItsProject() {
         val first = listBody(AutomationFixtures.load("automation.json"))
@@ -135,7 +115,7 @@ class AutomationsRepositoryTest {
         val changed = AtomicBoolean(false)
         route("/api/automations/a1") { reply(200, if (changed.get()) second else first) }
 
-        val query = repository.detail(a1)
+        val query = repository.detail("p1", a1)
         eventually { query.state.value.data?.automation?.name == "Morning digest" }
         eventually { server.chat.watching("agents") }
         changed.set(true)
@@ -196,7 +176,7 @@ class AutomationsRepositoryTest {
 
     @Test fun detailReloadsOnlyForItsAutomationOrAProjectWideChange() {
         route("/api/automations/a1") { reply(200, AutomationFixtures.load("automation-detail.json")) }
-        repository.detail(a1)
+        repository.detail("p1", a1)
         settle("/api/automations/a1")
 
         assertScopedToA1("/api/automations/a1")
@@ -204,7 +184,7 @@ class AutomationsRepositoryTest {
 
     @Test fun runsReloadOnlyForTheirAutomationOrAProjectWideChange() {
         route("/api/automations/a1/runs") { reply(200, AutomationFixtures.load("runs.json")) }
-        repository.runs(a1)
+        repository.runs("p1", a1)
         settle("/api/automations/a1/runs")
 
         assertScopedToA1("/api/automations/a1/runs")
@@ -213,7 +193,7 @@ class AutomationsRepositoryTest {
     @Test fun stepsLoadAndReloadOnlyForTheirAutomationOrAProjectWideChange() {
         val path = "/api/automation-runs/r1/steps"
         route(path) { reply(200, AutomationFixtures.load("steps.json")) }
-        val query = repository.steps(a1, RunId("r1")) { false }
+        val query = repository.steps("p1", a1, RunId("r1")) { false }
         eventually(message = { "state: ${query.state.value}" }) { query.state.value.data?.isNotEmpty() == true }
         settle(path)
 
@@ -225,7 +205,7 @@ class AutomationsRepositoryTest {
         route(path) { reply(200, AutomationFixtures.load("steps.json")) }
         val running = AtomicBoolean(true)
 
-        repository.steps(a1, RunId("r1")) { running.get() }
+        repository.steps("p1", a1, RunId("r1")) { running.get() }
 
         // No event is sent: the count can only grow through the 2 s poll.
         eventually(message = { "polled ${hits(path)} time(s)" }) { hits(path) >= 3 }

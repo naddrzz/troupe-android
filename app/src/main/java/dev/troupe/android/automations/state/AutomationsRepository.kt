@@ -36,23 +36,24 @@ class AutomationsRepository(
         affects = { it.projectId == projectId },
     )
 
-    fun detail(id: AutomationId): HostQuery<AutomationDetail> = HostQuery(
+    /** [projectId] is the automation's project: the watch carries every project's project-wide changes. */
+    fun detail(projectId: String, id: AutomationId): HostQuery<AutomationDetail> = HostQuery(
         scope, events.stream(),
         load = { api.get(address, token(), id).toQuery() },
-        affects = { it.affects(id) },
+        affects = { it.affects(projectId, id) },
     )
 
-    fun runs(id: AutomationId): HostQuery<List<AutomationRun>> = HostQuery(
+    fun runs(projectId: String, id: AutomationId): HostQuery<List<AutomationRun>> = HostQuery(
         scope, events.stream(),
         load = { api.runs(address, token(), id).toQuery() },
-        affects = { it.affects(id) },
+        affects = { it.affects(projectId, id) },
     )
 
     /** Reloads every 2 s while [running]: a step changes without any change event. */
-    fun steps(automationId: AutomationId, runId: RunId, running: () -> Boolean): HostQuery<List<AutomationStep>> = HostQuery(
+    fun steps(projectId: String, automationId: AutomationId, runId: RunId, running: () -> Boolean): HostQuery<List<AutomationStep>> = HostQuery(
         scope, events.stream(),
         load = { api.steps(address, token(), runId).toQuery() },
-        affects = { it.affects(automationId) },
+        affects = { it.affects(projectId, automationId) },
         poll = Poll(STEPS_POLL_MS, running),
     )
 
@@ -69,8 +70,9 @@ class AutomationsRepository(
 
     suspend fun markSeen(id: AutomationId): Mutation<Unit> = api.markSeen(address, token(), id).toMutation()
 
-    /** A project-wide change (no automation id) carries only its project, so it counts for every automation. */
-    private fun AutomationChanged.affects(id: AutomationId) = automationId == null || automationId == id.value
+    /** A project-wide change (no automation id) carries only its project, so it counts for every automation of that project. */
+    private fun AutomationChanged.affects(projectId: String, id: AutomationId) =
+        this.projectId == projectId && (automationId == null || automationId == id.value)
 
     private fun <T> ApiResult<T>.toMutation(): Mutation<T> = when (val result = toQuery()) {
         is QueryResult.Ok -> Mutation.Ok(result.value)

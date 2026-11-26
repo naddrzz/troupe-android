@@ -11,7 +11,11 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 
 /** [HostQuery] against scripted loads and a hand-fed event stream, in virtual time. */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -89,6 +93,49 @@ class HostQueryTest {
         assertEquals(2, query.state.value.data)
     }
 
+    @Test fun watchingRetriesALoadThatCouldNotReachTheServer() = runTest(StandardTestDispatcher()) {
+        val load = FakeLoad(QueryResult.Failed(QueryError.Unreachable), QueryResult.Ok("online"))
+        val query = query(load::load)
+        assertEquals(QueryError.Unreachable, query.state.value.error)
+
+        events.emit(AutomationEvent.Watching)
+        runCurrent()
+
+        assertEquals(2, load.calls)
+        assertEquals(QueryState(data = "online", loaded = true), query.state.value)
+    }
+
+    @Test fun watchingLeavesAGoodOrOtherwiseFailedLoadAlone() = runTest(StandardTestDispatcher()) {
+        val good = CountingLoad()
+        query(good::load)
+        val refused = FakeLoad<String>(QueryResult.Failed(QueryError.Server("boom", null)))
+        query(refused::load)
+
+        events.emit(AutomationEvent.Watching)
+        runCurrent()
+
+        assertEquals(1, good.calls)
+        assertEquals(1, refused.calls)
+    }
+
+    @Test fun watchingDuringALoadRetriesItOnlyIfItCannotReachTheServer() = runTest(StandardTestDispatcher()) {
+        val unreachable = FakeLoad<String>()
+        query(unreachable::load)
+        val good = FakeLoad<String>()
+        query(good::load)
+
+        events.emit(AutomationEvent.Watching)
+        runCurrent()
+        assertEquals(1, unreachable.calls)
+        assertEquals(1, good.calls)
+
+        unreachable.gates[0].complete(QueryResult.Failed(QueryError.Unreachable))
+        good.gates[0].complete(QueryResult.Ok("first"))
+        runCurrent()
+        assertEquals(2, unreachable.calls)
+        assertEquals(1, good.calls)
+    }
+
     @Test fun slowOlderReplyIsDropped() = runTest(StandardTestDispatcher()) {
         val load = FakeLoad(QueryResult.Ok("first"))
         val query = query(load::load)
@@ -150,6 +197,25 @@ class HostQueryTest {
         assertEquals(2, load.calls)
     }
 
+    @Test fun pollWaitsForASupersededLoadToo() = runTest(StandardTestDispatcher()) {
+        val load = FakeLoad<String>()
+        val query = query(load::load, Poll(everyMs = 1_000) { true })
+        query.reload()
+        runCurrent()
+
+        // The newer load answers first; the older one is still on the wire.
+        load.gates[1].complete(QueryResult.Ok("newer"))
+        runCurrent()
+        advanceTimeBy(3_000)
+        assertEquals("polled while a superseded load was in flight", 2, load.calls)
+
+        load.gates[0].complete(QueryResult.Ok("older"))
+        runCurrent()
+        advanceTimeBy(1_001)
+        assertEquals(3, load.calls)
+        assertEquals("newer", query.state.value.data)
+    }
+
     @Test fun reloadUnlessEventWithinSkipsWhenEventArrives() = runTest(StandardTestDispatcher()) {
         val load = CountingLoad()
         val query = query(load::load)
@@ -196,13 +262,16 @@ class HostQueryTest {
     }
 
     @Test fun replyAfterCloseChangesNothing() = runTest(StandardTestDispatcher()) {
-        val load = FakeLoad<String>()
-        val query = query(load::load)
+        // A load that does not stop at cancellation, so its reply really arrives after close().
+        var reply: Continuation<QueryResult<String>>? = null
+        var returned = false
+        val query = query({ suspendCoroutine<QueryResult<String>> { reply = it }.also { returned = true } })
 
         query.close()
-        load.gates[0].complete(QueryResult.Ok("late"))
+        reply!!.resume(QueryResult.Ok("late"))
         runCurrent()
 
+        assertTrue("the late reply never reached the query", returned)
         assertEquals(QueryState<String>(), query.state.value)
     }
 

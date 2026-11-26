@@ -17,6 +17,9 @@ sealed interface AutomationEvent {
 
     /** Updates may have been missed: reload whatever is shown. */
     data object Resync : AutomationEvent
+
+    /** The watch delivered its first snapshot: nothing was missed, but a load that could not reach the server may now. */
+    data object Watching : AutomationEvent
 }
 
 /**
@@ -29,7 +32,7 @@ class AutomationEvents(private val hub: WatchHub) {
         hub.watch(WatchHub.AGENTS).collect { update ->
             val event = if (update.reset) {
                 // The first snapshot is the subscription's start; a later one means the watch was re-established.
-                if (seenSnapshot) AutomationEvent.Resync else null
+                if (seenSnapshot) AutomationEvent.Resync else AutomationEvent.Watching
             } else {
                 (update.delta as? JsonObject)?.let(::parse)
             }

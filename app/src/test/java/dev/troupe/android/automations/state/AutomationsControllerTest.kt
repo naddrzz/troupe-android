@@ -19,11 +19,9 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
 import mockwebserver3.MockResponse
 import mockwebserver3.SocketEffect
 import org.junit.After
@@ -113,25 +111,16 @@ class AutomationsControllerTest {
         return """{"success":true,"data":$run}"""
     }
 
-    private fun hits(path: String) = server.httpRequests.count { it.url.encodedPath == path }
+    private fun hits(path: String) = server.hits(path)
+
+    private fun settle(path: String) = server.settle(path)
+
+    private fun change(projectId: String, automationId: String?) = server.automationChanged(projectId, automationId)
 
     private val ui get() = controller.ui.value
 
-    /** Returns once the `agents` watch is up, [path] was requested, and its count stopped moving for half a second. */
-    private fun settle(path: String) {
-        eventually { server.chat.watching("agents") }
-        eventually { hits(path) >= 1 }
-        var last = -1
-        while (hits(path) != last) {
-            last = hits(path)
-            Thread.sleep(500)
-        }
-    }
-
-    private fun change(projectId: String, automationId: String?) = server.chat.agentEvent("automation_changed", buildJsonObject {
-        put("project_id", projectId)
-        put("automation_id", automationId)
-    })
+    /** The controller is built lazily, after the rules ran (Main dispatcher, temp folder); this builds it and starts its list query. */
+    private fun start() = controller
 
     private fun openRun() {
         controller.open(id)
@@ -148,7 +137,7 @@ class AutomationsControllerTest {
             reply(500, """{"success":false,"error":"boom"}""")
         }
         val control = Control(id.value, ControlAction.Enable)
-        controller
+        start()
         settle(listPath)
 
         controller.toggleEnabled(id, false)
@@ -169,7 +158,7 @@ class AutomationsControllerTest {
             ok(NULL_DATA)
         }
         val control = Control(id.value, ControlAction.Enable)
-        controller
+        start()
         settle(listPath)
 
         controller.toggleEnabled(id, false)
@@ -183,6 +172,77 @@ class AutomationsControllerTest {
         assertNull(ui.failures[control])
     }
 
+    @Test fun toggleEnabledOverrideOutlastsAFailedReload() {
+        val applied = AtomicBoolean(false)
+        val failNext = AtomicBoolean(false)
+        val automation = AutomationFixtures.load("automation.json")
+        routes[listPath] = {
+            if (failNext.getAndSet(false)) {
+                reply(500, """{"success":false,"error":"boom"}""")
+            } else {
+                ok(listBody(if (applied.get()) disabled(automation) else automation))
+            }
+        }
+        routes[enabledPath] = {
+            applied.set(true)
+            failNext.set(true)
+            ok(NULL_DATA)
+        }
+        val control = Control(id.value, ControlAction.Enable)
+        start()
+        settle(listPath)
+
+        controller.toggleEnabled(id, false)
+        eventually(message = { "ui: $ui" }) { control !in ui.pending }
+        change("project-1", "auto-1")
+
+        // The failed reload still shows the old row; the switch keeps the value the server accepted.
+        eventually(message = { "ui: $ui" }) { ui.list.error != null && !ui.list.refreshing }
+        Thread.sleep(300)
+        assertEquals("override dropped by a failed reload", false, ui.enabledOverride[id])
+        assertEquals(true, ui.list.data?.single()?.enabled)
+
+        change("project-1", "auto-1")
+        eventually(message = { "ui: $ui" }) { ui.enabledOverride.isEmpty() && ui.list.data?.single()?.enabled == false }
+    }
+
+    @Test fun toggleEnabledOverrideOutlastsAReloadBegunBeforeTheWrite() {
+        val applied = AtomicBoolean(false)
+        val holdNext = AtomicBoolean(false)
+        val release = CountDownLatch(1)
+        val automation = AutomationFixtures.load("automation.json")
+        routes[listPath] = {
+            // The body is read when the request arrives, so a held reply carries the value from before the write.
+            val body = listBody(if (applied.get()) disabled(automation) else automation)
+            if (holdNext.getAndSet(false)) release.await(10, TimeUnit.SECONDS)
+            ok(body)
+        }
+        routes[enabledPath] = {
+            applied.set(true)
+            ok(NULL_DATA)
+        }
+        val control = Control(id.value, ControlAction.Enable)
+        start()
+        settle(listPath)
+        val listBefore = hits(listPath)
+        holdNext.set(true)
+        controller.refresh()
+        eventually(message = { "the held reload never reached the server" }) { hits(listPath) == listBefore + 1 }
+
+        controller.toggleEnabled(id, false)
+        eventually(message = { "ui: $ui" }) { control !in ui.pending }
+        release.countDown()
+
+        // The reload begun before the write lands with the old row; the switch keeps the value the server accepted.
+        eventually(message = { "ui: $ui" }) { !ui.list.refreshing }
+        Thread.sleep(300)
+        assertEquals(true, ui.list.data?.single()?.enabled)
+        assertEquals("override dropped by a reply that predates the write", false, ui.enabledOverride[id])
+
+        // The write's own re-read settles it.
+        eventually(message = { "ui: $ui" }) { ui.enabledOverride.isEmpty() && ui.list.data?.single()?.enabled == false }
+    }
+
     @Test fun runNowDisablesItsControlWhileInFlight() {
         val release = CountDownLatch(1)
         routes[runPath] = {
@@ -190,7 +250,7 @@ class AutomationsControllerTest {
             ok(runBody())
         }
         val control = Control(id.value, ControlAction.Run)
-        controller
+        start()
         settle(listPath)
 
         controller.runNow(id)
@@ -210,7 +270,7 @@ class AutomationsControllerTest {
         routes[listPath] = { ok(listBody(if (approved.get()) automation else unapproved(automation))) }
         routes[runPath] = { ok(runBody()) }
         val control = Control(id.value, ControlAction.Run)
-        controller
+        start()
         eventually(message = { "ui: $ui" }) { ui.list.data != null }
 
         controller.runNow(id)
@@ -236,7 +296,7 @@ class AutomationsControllerTest {
             }
         }
         val control = Control(id.value, ControlAction.Run)
-        controller
+        start()
         settle(listPath)
         val listBefore = hits(listPath)
 
@@ -255,7 +315,7 @@ class AutomationsControllerTest {
 
     @Test fun decideFalseShowsNoticeAndRereads() {
         routes[approvalPath] = { ok("""{"success":true,"data":false}""") }
-        controller
+        start()
         openRun()
         val stepsBefore = hits(stepsPath)
 
@@ -271,7 +331,7 @@ class AutomationsControllerTest {
 
     private fun raiseNotice() {
         routes[approvalPath] = { ok("""{"success":true,"data":false}""") }
-        controller
+        start()
         openRun()
         controller.decide(runId, NodeId("gate"), approved = true)
         eventually(message = { "ui: $ui" }) { Notice.ApprovalAlreadyHandled in ui.notices && ui.pending.isEmpty() }
@@ -307,7 +367,7 @@ class AutomationsControllerTest {
             release.await(10, TimeUnit.SECONDS)
             ok("""{"success":true,"data":false}""")
         }
-        controller
+        start()
         openRun()
         controller.decide(runId, NodeId("gate"), approved = true)
         eventually(message = { "ui: $ui" }) { hits(approvalPath) == 1 }
@@ -330,7 +390,7 @@ class AutomationsControllerTest {
             release.await(10, TimeUnit.SECONDS)
             ok("""{"success":true,"data":true}""")
         }
-        controller
+        start()
         openRun()
 
         controller.cancelRun(runId)
@@ -534,7 +594,7 @@ class AutomationsControllerTest {
     @Test fun failureLinesClearOnRefreshAndRouteChange() {
         routes[listPath] = { ok(listBody(unapproved(AutomationFixtures.load("automation.json")))) }
         val control = Control(id.value, ControlAction.Run)
-        controller
+        start()
         eventually(message = { "ui: $ui" }) { ui.list.data != null }
 
         controller.runNow(id)
@@ -555,7 +615,7 @@ class AutomationsControllerTest {
             reply(500, """{"success":false,"error":"boom"}""")
         }
         val control = Control(id.value, ControlAction.Enable)
-        controller
+        start()
         settle(listPath)
         controller.toggleEnabled(id, false)
         eventually(message = { "ui: $ui" }) { control in ui.pending }
@@ -599,7 +659,7 @@ class AutomationsControllerTest {
     @Test fun postMutationRereadsOnceWhenNoEventArrives() {
         routes[enabledPath] = { ok(NULL_DATA) }
         val control = Control(id.value, ControlAction.Enable)
-        controller
+        start()
         settle(listPath)
         val listBefore = hits(listPath)
 
