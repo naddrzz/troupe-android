@@ -2,6 +2,7 @@ package dev.troupe.android.automations.ui
 
 import android.content.res.Resources
 import android.text.format.DateUtils
+import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -120,6 +121,7 @@ private fun AutomationCard(
     val typo = TroupeTheme.typography
     val approvalNeeded = needsApproval(automation)
     val showHint = approvalNeeded && !viewOnly
+    val failures = cardFailures(enableFailure, runFailure, viewOnly, approvalHintShown = showHint)
     val (stateLabel, stateColor) = when {
         approvalNeeded -> stringResource(R.string.automations_state_needs_approval) to palette.warning
         enabled -> stringResource(R.string.automations_state_armed) to palette.success
@@ -158,6 +160,7 @@ private fun AutomationCard(
                 )
             }
         }
+        failures.enable?.let { FailureLine(R.string.automations_failure_enable, it) }
         if (!viewOnly) {
             TroupeButton(
                 text = stringResource(R.string.automations_run),
@@ -168,21 +171,17 @@ private fun AutomationCard(
                 onClick = onRun,
             )
         }
+        failures.run?.let { FailureLine(R.string.automations_failure_run, it) }
         if (showHint) {
             Text(stringResource(R.string.automations_approval_hint), style = typo.bodySmall, color = palette.warning)
-        }
-        if (!viewOnly) {
-            enableFailure?.let { FailureLine(it) }
-            // The approval hint above already says it; a second identical line would only repeat it.
-            runFailure?.takeUnless { it == QueryError.NotApproved && showHint }?.let { FailureLine(it) }
         }
     }
 }
 
 @Composable
-private fun FailureLine(error: QueryError) {
+private fun FailureLine(@StringRes action: Int, error: QueryError) {
     Text(
-        text = automationErrorText(error),
+        text = stringResource(action, automationErrorText(error)),
         style = TroupeTheme.typography.bodySmall,
         color = TroupeTheme.palette.destructive,
         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },

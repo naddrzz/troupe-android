@@ -5,6 +5,7 @@ import dev.troupe.android.automations.protocol.AutomationStep
 import dev.troupe.android.automations.protocol.Schedule
 import dev.troupe.android.automations.protocol.StepStatus
 import dev.troupe.android.automations.protocol.Trigger
+import dev.troupe.android.automations.state.QueryError
 
 /** What a trigger reads as; the screens map each variant to a string resource. */
 sealed interface TriggerSummary {
@@ -45,3 +46,17 @@ fun stepTimeLeftMs(step: AutomationStep, nowMs: Long): Long? {
  * update time never reorder rows. The list keeps the server's order.
  */
 fun orderForList(list: List<Automation>): List<Automation> = list
+
+/** The failure lines a list card shows: [enable] under the Switch's row, [run] under the Run button. */
+data class CardFailures(val enable: QueryError?, val run: QueryError?)
+
+/**
+ * Nothing shows to a view-only session, which has no controls. A `NotApproved` Run failure is dropped while the
+ * approval hint is on the card: the hint already says it.
+ */
+fun cardFailures(enable: QueryError?, run: QueryError?, viewOnly: Boolean, approvalHintShown: Boolean): CardFailures =
+    if (viewOnly) {
+        CardFailures(null, null)
+    } else {
+        CardFailures(enable, run?.takeUnless { it == QueryError.NotApproved && approvalHintShown })
+    }

@@ -369,6 +369,8 @@
     <string name="automations_error_unreachable">Could not reach the server</string>
     <string name="automations_error_invalid">This server sent data this app does not understand. Update the app.</string>
     <string name="automations_approval_hint">Approve this revision first. Approving is done from Troupe on a computer until a later update.</string>
+    <string name="automations_failure_enable">Could not change this automation: %1$s</string>
+    <string name="automations_failure_run">Could not run this automation: %1$s</string>
     <string name="automations_state_armed">Armed</string>
     <string name="automations_state_needs_approval">Needs approval</string>
     <string name="automations_state_disabled">Disabled</string>

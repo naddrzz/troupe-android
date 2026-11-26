@@ -10,6 +10,7 @@ import dev.troupe.android.automations.protocol.RunStatus
 import dev.troupe.android.automations.protocol.Schedule
 import dev.troupe.android.automations.protocol.StepStatus
 import dev.troupe.android.automations.protocol.Trigger
+import dev.troupe.android.automations.state.QueryError
 import dev.troupe.android.core.protocol.TroupeJson
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -159,5 +160,35 @@ class AutomationFormatTest {
             named("fresh") { copy(createdAt = 1_000L, updatedAt = 9_000L) },
         )
         assertEquals(listOf("stale", "fresh"), ids(orderForList(list)))
+    }
+
+    private val unreachable = QueryError.Unreachable
+
+    @Test
+    fun cardFailuresKeepEnableAndRunApart() {
+        val failures = cardFailures(QueryError.Unauthorized, unreachable, viewOnly = false, approvalHintShown = false)
+        assertEquals(CardFailures(QueryError.Unauthorized, unreachable), failures)
+    }
+
+    @Test
+    fun cardFailuresAreEmptyWhenViewOnly() {
+        assertEquals(CardFailures(null, null), cardFailures(unreachable, unreachable, viewOnly = true, approvalHintShown = false))
+    }
+
+    @Test
+    fun cardFailuresDropNotApprovedRunFailureWhileTheHintShows() {
+        assertNull(cardFailures(null, QueryError.NotApproved, viewOnly = false, approvalHintShown = true).run)
+        assertEquals(QueryError.NotApproved, cardFailures(null, QueryError.NotApproved, viewOnly = false, approvalHintShown = false).run)
+    }
+
+    @Test
+    fun cardFailuresKeepOtherRunFailuresWhileTheHintShows() {
+        assertEquals(unreachable, cardFailures(null, unreachable, viewOnly = false, approvalHintShown = true).run)
+    }
+
+    @Test
+    fun cardFailuresKeepTheEnableFailureWhenOnlyRunIsNotApproved() {
+        val failures = cardFailures(unreachable, QueryError.NotApproved, viewOnly = false, approvalHintShown = true)
+        assertEquals(CardFailures(unreachable, null), failures)
     }
 }
