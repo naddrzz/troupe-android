@@ -136,7 +136,25 @@ class HostQueryTest {
         assertEquals(1, good.calls)
     }
 
-    @Test fun slowOlderReplyIsDropped() = runTest(StandardTestDispatcher()) {
+    @Test fun watchingReloadsWhenTheLatestLoadFailedEvenIfASupersededOneIsStillOnTheWire() = runTest(StandardTestDispatcher()) {
+        val load = FakeLoad<String>()
+        val query = query(load::load)
+        query.reload()
+        runCurrent()
+        assertEquals(2, load.calls)
+
+        // The latest load cannot reach the server while the superseded one is still waiting.
+        load.gates[1].complete(QueryResult.Failed(QueryError.Unreachable))
+        runCurrent()
+        assertEquals(QueryError.Unreachable, query.state.value.error)
+
+        events.emit(AutomationEvent.Watching)
+        runCurrent()
+
+        assertEquals(3, load.calls)
+    }
+
+    @Test fun slowOlderReplyIsDropped()= runTest(StandardTestDispatcher()) {
         val load = FakeLoad(QueryResult.Ok("first"))
         val query = query(load::load)
 

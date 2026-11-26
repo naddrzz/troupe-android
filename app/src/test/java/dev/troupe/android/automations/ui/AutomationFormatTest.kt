@@ -469,6 +469,19 @@ class AutomationFormatTest {
         assertTrue(preview.text, preview.text.startsWith("[\n    0,\n    1,\n"))
     }
 
+    @Test(timeout = 10_000)
+    fun aHugeStringInsideStructuredOutputIsCutBeforeItIsEncoded() {
+        // Escapes and a long key and value: the cut text must equal the start of the full encoding.
+        val big = "a\"b\n\\".repeat(500_000)
+        val nested = buildJsonObject {
+            put(big.take(5_000), 1)
+            put("stdout", big)
+        }
+        val printed = Json { prettyPrint = true }.encodeToString(JsonElement.serializer(), nested)
+        assertEquals(OutputPreview(printed.take(100), truncated = true), outputPreview(nested, maxChars = 100))
+        assertEquals(OutputPreview(printed.take(6_000), truncated = true), outputPreview(nested, maxChars = 6_000))
+    }
+
     @Test
     fun aDecisionShowsOnlyOnAStepOfAnApprovalNode() {
         val decided = buildJsonObject {

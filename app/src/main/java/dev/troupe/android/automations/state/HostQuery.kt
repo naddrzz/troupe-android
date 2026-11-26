@@ -94,7 +94,8 @@ class HostQuery<T>(
                     is AutomationEvent.Changed -> falseOnThrow { affects(event.change) }
                     AutomationEvent.Resync -> true
                     AutomationEvent.Watching -> synchronized(lock) {
-                        if (inFlight > 0) {
+                        if (answered != request) {
+                            // The latest load is still on the wire: its own reply decides.
                             retryIfUnreachable = true
                             false
                         } else {

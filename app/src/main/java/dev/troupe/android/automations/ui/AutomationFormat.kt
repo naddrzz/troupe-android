@@ -222,16 +222,26 @@ private class BoundedJsonPrinter(private val limit: Int) {
         if (!full) out.append(s, 0, minOf(s.length, limit - out.length))
     }
 
+    /**
+     * [s] quoted and escaped. Only the first `limit - out.length` characters can be kept, and each source character
+     * encodes to at least one, so a longer string is cut before it is encoded; the closing quote then falls past the
+     * limit, exactly where the full encoding would put it.
+     */
+    private fun appendQuoted(s: String) {
+        val room = limit - out.length
+        if (room <= 0) return
+        append(JsonPrimitive(if (s.length > room) s.substring(0, room) else s).toString())
+    }
+
     private fun element(e: JsonElement, depth: Int) {
         when (e) {
             is JsonObject -> container("{", "}", e.entries, depth) { (key, value) ->
-                append(JsonPrimitive(key).toString())
+                appendQuoted(key)
                 append(": ")
                 element(value, depth + 1)
             }
             is JsonArray -> container("[", "]", e, depth) { element(it, depth + 1) }
-            // A primitive (a string quoted and escaped) or null, as the printer writes it.
-            else -> append(e.toString())
+            is JsonPrimitive -> if (e.isString) appendQuoted(e.content) else append(e.toString())
         }
     }
 

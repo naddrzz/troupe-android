@@ -151,9 +151,11 @@ class AutomationsControllerTest {
 
     @Test fun toggleEnabledSuccessWaitsForEventThenSettles() {
         val applied = AtomicBoolean(false)
+        val gate = CountDownLatch(1)
         val automation = AutomationFixtures.load("automation.json")
         routes[listPath] = { ok(listBody(if (applied.get()) disabled(automation) else automation)) }
         routes[enabledPath] = {
+            gate.await(10, TimeUnit.SECONDS)
             applied.set(true)
             ok(NULL_DATA)
         }
@@ -163,6 +165,9 @@ class AutomationsControllerTest {
 
         controller.toggleEnabled(id, false)
 
+        // `ui` can lag behind the controls: see it pending before the write may finish, then see it done.
+        eventually(message = { "ui: $ui" }) { control in ui.pending }
+        gate.countDown()
         eventually(message = { "ui: $ui" }) { control !in ui.pending }
         // The list still holds the old value: the override stands until a reload brings the server's.
         assertEquals(false, ui.enabledOverride[id])
@@ -175,6 +180,7 @@ class AutomationsControllerTest {
     @Test fun toggleEnabledOverrideOutlastsAFailedReload() {
         val applied = AtomicBoolean(false)
         val failNext = AtomicBoolean(false)
+        val gate = CountDownLatch(1)
         val automation = AutomationFixtures.load("automation.json")
         routes[listPath] = {
             if (failNext.getAndSet(false)) {
@@ -184,6 +190,7 @@ class AutomationsControllerTest {
             }
         }
         routes[enabledPath] = {
+            gate.await(10, TimeUnit.SECONDS)
             applied.set(true)
             failNext.set(true)
             ok(NULL_DATA)
@@ -193,6 +200,8 @@ class AutomationsControllerTest {
         settle(listPath)
 
         controller.toggleEnabled(id, false)
+        eventually(message = { "ui: $ui" }) { control in ui.pending }
+        gate.countDown()
         eventually(message = { "ui: $ui" }) { control !in ui.pending }
         change("project-1", "auto-1")
 
@@ -210,6 +219,7 @@ class AutomationsControllerTest {
         val applied = AtomicBoolean(false)
         val holdNext = AtomicBoolean(false)
         val release = CountDownLatch(1)
+        val gate = CountDownLatch(1)
         val automation = AutomationFixtures.load("automation.json")
         routes[listPath] = {
             // The body is read when the request arrives, so a held reply carries the value from before the write.
@@ -218,6 +228,7 @@ class AutomationsControllerTest {
             ok(body)
         }
         routes[enabledPath] = {
+            gate.await(10, TimeUnit.SECONDS)
             applied.set(true)
             ok(NULL_DATA)
         }
@@ -230,6 +241,8 @@ class AutomationsControllerTest {
         eventually(message = { "the held reload never reached the server" }) { hits(listPath) == listBefore + 1 }
 
         controller.toggleEnabled(id, false)
+        eventually(message = { "ui: $ui" }) { control in ui.pending }
+        gate.countDown()
         eventually(message = { "ui: $ui" }) { control !in ui.pending }
         release.countDown()
 
