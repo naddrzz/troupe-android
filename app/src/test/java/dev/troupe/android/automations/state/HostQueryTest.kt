@@ -206,6 +206,56 @@ class HostQueryTest {
         assertEquals(QueryState<String>(), query.state.value)
     }
 
+    @Test fun throwingLoadFailsAndPollContinues() = runTest(StandardTestDispatcher()) {
+        var calls = 0
+        val load: suspend () -> QueryResult<String> = {
+            when (++calls) {
+                1 -> QueryResult.Ok("good")
+                2 -> throw IllegalStateException("unexpected")
+                else -> QueryResult.Ok("better")
+            }
+        }
+        val query = query(load, Poll(everyMs = 1_000) { true })
+
+        advanceTimeBy(1_001)
+        assertEquals(2, calls)
+        assertEquals(QueryState(data = "good", error = QueryError.Invalid, loaded = true), query.state.value)
+
+        advanceTimeBy(1_000)
+        assertEquals(3, calls)
+        assertEquals(QueryState(data = "better", loaded = true), query.state.value)
+    }
+
+    @Test fun throwingAffectsDoesNotStopEvents() = runTest(StandardTestDispatcher()) {
+        val load = CountingLoad()
+        HostQuery(backgroundScope, events, load::load, {
+            check(it.projectId != "boom") { "unexpected" }
+            it.projectId == "p1"
+        })
+        runCurrent()
+
+        events.emit(changed("boom"))
+        runCurrent()
+        assertEquals(1, load.calls)
+
+        events.emit(changed("p1"))
+        runCurrent()
+        assertEquals(2, load.calls)
+    }
+
+    @Test fun throwingActiveDoesNotStopPoll() = runTest(StandardTestDispatcher()) {
+        val load = CountingLoad()
+        var throwing = true
+        query(load::load, Poll(everyMs = 1_000) { check(!throwing) { "unexpected" }; true })
+
+        advanceTimeBy(1_500)
+        assertEquals(1, load.calls)
+
+        throwing = false
+        advanceTimeBy(1_000)
+        assertEquals(2, load.calls)
+    }
+
     @Test fun toQueryMapping() {
         assertEquals(QueryResult.Ok(7), ApiResult.Ok(7).toQuery())
         assertEquals(QueryResult.Failed(QueryError.Unauthorized), ApiResult.Unauthorized.toQuery())

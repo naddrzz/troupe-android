@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.coroutines.cancellation.CancellationException
 
 sealed interface QueryError {
     data object Unauthorized : QueryError
@@ -84,7 +85,7 @@ class HostQuery<T>(
         queryScope.launch {
             events.collect { event ->
                 val hit = when (event) {
-                    is AutomationEvent.Changed -> affects(event.change)
+                    is AutomationEvent.Changed -> falseOnThrow { affects(event.change) }
                     AutomationEvent.Resync -> true
                 }
                 if (hit) {
@@ -99,7 +100,7 @@ class HostQuery<T>(
             queryScope.launch {
                 while (true) {
                     delay(poll.everyMs)
-                    if (poll.active()) synchronized(lock) { if (pending) null else begin() }?.let(::fetch)
+                    if (falseOnThrow(poll.active)) synchronized(lock) { if (pending) null else begin() }?.let(::fetch)
                 }
             }
         }
@@ -126,6 +127,15 @@ class HostQuery<T>(
         job.cancel()
     }
 
+    /** Caller predicates run in supervisor children, where a throw would crash the app; a throw counts as false. */
+    private inline fun falseOnThrow(predicate: () -> Boolean): Boolean = try {
+        predicate()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        false
+    }
+
     /** Claims a new request id, or null once closed. */
     private fun begin(): Int? = synchronized(lock) {
         if (closed) return null
@@ -136,7 +146,15 @@ class HostQuery<T>(
 
     private fun fetch(id: Int) {
         queryScope.launch {
-            val result = load()
+            // An exception escaping this supervisor child would crash the app and leave `pending` set for good,
+            // so an unexpected one is reported as a reply the app could not make sense of.
+            val result = try {
+                load()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                QueryResult.Failed(QueryError.Invalid)
+            }
             synchronized(lock) {
                 if (closed || id != request) return@launch
                 pending = false
