@@ -5,13 +5,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -30,32 +26,22 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.troupe.android.R
-import dev.troupe.android.core.net.ApiResult
-import dev.troupe.android.core.net.ServerApi
 import dev.troupe.android.core.protocol.TroupeJson
 import dev.troupe.android.core.store.PersistenceKeys
 import dev.troupe.android.core.store.StoreReadResult
 import dev.troupe.android.core.store.WebStoreClient
 import dev.troupe.android.core.theme.TroupeTheme
-import dev.troupe.android.core.ui.StatusDot
 import dev.troupe.android.core.ui.TroupeButton
 import dev.troupe.android.core.ui.TroupeButtonVariant
 import dev.troupe.android.core.ui.TroupeIconButton
 import dev.troupe.android.core.ui.TroupeIcons
 import dev.troupe.android.core.ui.TroupeMobileSheet
 import dev.troupe.android.core.ui.TroupeSpinner
-import dev.troupe.android.pairing.ServerAddress
-import dev.troupe.android.servers.PairedServer
 import dev.troupe.android.terminal.protocol.PreservedTerminal
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import java.time.Instant
 import java.util.UUID
-import javax.inject.Inject
-import javax.inject.Singleton
 
 @Serializable
 data class PersistedTerminalEntry(
@@ -292,125 +278,6 @@ fun SnapshotsSheet(
                                 enabled = loadSucceeded && !saving,
                                 iconSize = 16.dp,
                                 contentColor = palette.mutedForeground,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Serializable
-data class AutomationSummaryDto(
-    val id: String,
-    val name: String = "Automation",
-    val enabled: Boolean = true,
-    val status: String = "idle",
-    val description: String? = null,
-)
-
-@Singleton
-class AutomationsApi @Inject constructor(
-    private val api: ServerApi,
-) {
-    suspend fun list(address: ServerAddress, token: String?, projectId: String): ApiResult<List<AutomationSummaryDto>> {
-        val q = "api/automations?project_id=${java.net.URLEncoder.encode(projectId, "UTF-8")}"
-        return api.getEnveloped(address, q, token, ListSerializer(AutomationSummaryDto.serializer()))
-    }
-
-    suspend fun trigger(address: ServerAddress, token: String?, automationId: String): ApiResult<Unit> =
-        api.postUnit(address, "api/automations/$automationId/run", token, buildJsonObject {}.toString())
-
-    suspend fun setEnabled(address: ServerAddress, token: String?, automationId: String, enabled: Boolean): ApiResult<Unit> =
-        api.postUnit(
-            address,
-            "api/automations/$automationId/enabled",
-            token,
-            buildJsonObject { put("enabled", enabled) }.toString(),
-        )
-}
-
-/** Automations tab pane (`WorkspaceTab.Automations`). */
-@Composable
-fun AutomationsPane(
-    server: PairedServer,
-    projectId: String,
-    viewOnly: Boolean,
-    automationsApi: AutomationsApi,
-    tokenProvider: suspend () -> String?,
-    modifier: Modifier = Modifier,
-) {
-    val palette = TroupeTheme.palette
-    val typo = TroupeTheme.typography
-    val scope = rememberCoroutineScope()
-
-    var items by remember(projectId) { mutableStateOf<List<AutomationSummaryDto>>(emptyList()) }
-    var loading by remember(projectId) { mutableStateOf(true) }
-    var error by remember(projectId) { mutableStateOf<String?>(null) }
-
-    fun load() {
-        loading = true
-        error = null
-        scope.launch {
-            when (val res = automationsApi.list(server.address, tokenProvider(), projectId)) {
-                is ApiResult.Ok -> {
-                    items = res.value
-                    loading = false
-                }
-                is ApiResult.ServerError -> {
-                    error = res.message
-                    loading = false
-                }
-                else -> {
-                    error = "Could not load automations."
-                    loading = false
-                }
-            }
-        }
-    }
-
-    LaunchedEffect(server.id, projectId) { load() }
-
-    Box(modifier = modifier.fillMaxSize().background(palette.background)) {
-        when {
-            loading -> TroupeSpinner(size = 22.dp, modifier = Modifier.align(Alignment.Center))
-            error != null -> Text(error!!, style = typo.bodyMedium, color = palette.mutedForeground, modifier = Modifier.align(Alignment.Center).padding(20.dp))
-            items.isEmpty() -> Text(stringResource(R.string.automations_empty), style = typo.bodyMedium, color = palette.mutedForeground, modifier = Modifier.align(Alignment.Center).padding(24.dp))
-            else -> LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(items, key = { it.id }) { auto ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(palette.card)
-                            .border(0.5.dp, palette.border, RoundedCornerShape(12.dp))
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        StatusDot(color = if (auto.enabled) palette.success else palette.mutedForeground)
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(auto.name, style = typo.titleSmall, color = palette.foreground)
-                            if (!auto.description.isNullOrBlank()) {
-                                Text(auto.description, style = typo.bodySmall, color = palette.mutedForeground)
-                            }
-                        }
-                        if (!viewOnly) {
-                            TroupeButton(
-                                text = stringResource(R.string.automations_run),
-                                variant = TroupeButtonVariant.Secondary,
-                                minHeight = 36.dp,
-                                onClick = {
-                                    scope.launch {
-                                        automationsApi.trigger(server.address, tokenProvider(), auto.id)
-                                        load()
-                                    }
-                                },
                             )
                         }
                     }

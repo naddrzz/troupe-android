@@ -361,6 +361,42 @@
     <string name="snapshots_empty">No snapshots yet</string>
     <string name="automations_empty">No automations configured for this project yet.</string>
     <string name="automations_run">Run</string>
+    <string name="automations_loading">Loading automations</string>
+    <string name="automations_retry">Retry</string>
+    <string name="automations_unsupported">This server does not support Automations</string>
+    <string name="automations_error_server">The server reported an error: %1$s</string>
+    <string name="automations_error_unauthorized">The server rejected this device\'s access</string>
+    <string name="automations_error_unreachable">Could not reach the server</string>
+    <string name="automations_error_invalid">This server sent data this app does not understand. Update the app.</string>
+    <string name="automations_approval_hint">Approve this revision first. Approving is done from Troupe on a computer until a later update.</string>
+    <string name="automations_state_armed">Armed</string>
+    <string name="automations_state_needs_approval">Needs approval</string>
+    <string name="automations_state_disabled">Disabled</string>
+    <string name="automations_enable_description">Enable %1$s</string>
+    <string name="automations_trigger_manual">Manual</string>
+    <string name="automations_trigger_every">Every %1$s</string>
+    <string name="automations_trigger_cron">Cron %1$s (%2$s)</string>
+    <string name="automations_trigger_at">At %1$s</string>
+    <string name="automations_next_run">Next run %1$s</string>
+    <string name="automations_no_next_run">No next run</string>
+    <string name="automations_last_run">Last run %1$s, %2$s</string>
+    <string name="automations_no_runs">No runs yet</string>
+    <string name="automations_run_status_running">running</string>
+    <string name="automations_run_status_succeeded">succeeded</string>
+    <string name="automations_run_status_failed">failed</string>
+    <string name="automations_run_status_cancelled">cancelled</string>
+    <string name="automations_run_status_skipped">skipped</string>
+    <plurals name="automations_unseen_failures">
+        <item quantity="one">%d new failure</item>
+        <item quantity="other">%d new failures</item>
+    </plurals>
+    <string name="automations_duration_ms">%1$d ms</string>
+    <string name="automations_duration_s">%1$d s</string>
+    <string name="automations_duration_min">%1$d min</string>
+    <string name="automations_duration_h">%1$d h</string>
+    <string name="automations_duration_d">%1$d d</string>
+    <string name="automations_duration_pair">%1$s %2$s</string>
+    <string name="automations_detail_placeholder">Automation details are not available in this version yet.</string>
 
     <!-- Settings V2 -->
     <string name="settings_cat_appearance">Appearance &amp; theme</string>

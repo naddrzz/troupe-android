@@ -8,7 +8,6 @@ import dev.troupe.android.files.FilesApi
 import dev.troupe.android.git.GitApi
 import dev.troupe.android.github.GithubApi
 import dev.troupe.android.servers.PairedServerRepository
-import dev.troupe.android.snapshots.AutomationsApi
 import dev.troupe.android.terminal.TerminalCursorStore
 import dev.troupe.android.terminal.net.TerminalConnections
 import dev.troupe.android.workspace.AppSettingsStore
@@ -31,7 +30,6 @@ class WorkspaceShellViewModel @Inject constructor(
     val filesApi: FilesApi,
     val gitApi: GitApi,
     val githubApi: GithubApi,
-    val automationsApi: AutomationsApi,
     val chatConnections: ChatConnections,
     val terminalConnections: TerminalConnections,
     val terminalCursors: TerminalCursorStore,
