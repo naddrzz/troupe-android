@@ -30,7 +30,8 @@ sealed interface ApiResult<out T> {
     data class Ok<T>(val value: T) : ApiResult<T>
     data object Unauthorized : ApiResult<Nothing>
     data class Unreachable(val cause: String) : ApiResult<Nothing>
-    data class ServerError(val message: String, val code: String?) : ApiResult<Nothing>
+    /** [status] is the HTTP status; a 2xx here means the reply did not match the contract. Null for a `success: false` envelope in a 2xx reply. */
+    data class ServerError(val message: String, val code: String?, val status: Int? = null) : ApiResult<Nothing>
 }
 
 /**
@@ -202,9 +203,9 @@ class ServerApi @Inject constructor(private val client: OkHttpClient) {
                         else -> try {
                             decode(body)
                         } catch (e: SerializationException) {
-                            ApiResult.ServerError("HTTP ${response.code}", null)
+                            ApiResult.ServerError("HTTP ${response.code}", null, response.code)
                         } catch (e: IllegalArgumentException) {
-                            ApiResult.ServerError("HTTP ${response.code}", null)
+                            ApiResult.ServerError("HTTP ${response.code}", null, response.code)
                         }
                     }
                 }
@@ -217,7 +218,7 @@ class ServerApi @Inject constructor(private val client: OkHttpClient) {
     /** A non-2xx reply: the envelope's reason when there is one, else the status. */
     private fun failure(body: String, code: Int): ApiResult.ServerError {
         val envelope = runCatching { TroupeJson.decodeFromString(HttpEnvelope.serializer(JsonElement.serializer()), body) }.getOrNull()
-        return ApiResult.ServerError(envelope?.error ?: "HTTP $code", envelope?.code)
+        return ApiResult.ServerError(envelope?.error ?: "HTTP $code", envelope?.code, code)
     }
 
     private fun <T> enveloped(body: String, serializer: KSerializer<T>): ApiResult<T> {
