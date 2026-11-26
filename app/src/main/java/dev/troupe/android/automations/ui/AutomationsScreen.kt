@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -23,6 +24,10 @@ import dev.troupe.android.core.theme.TroupeTheme
 @Composable
 fun AutomationsScreen(projectId: String, viewOnly: Boolean, modifier: Modifier = Modifier, covered: Boolean = false) {
     val viewModel = hiltViewModel<AutomationsViewModel>()
+    DisposableEffect(viewModel, projectId) {
+        viewModel.retain(projectId)
+        onDispose { viewModel.release(projectId) }
+    }
     val controller by viewModel.controllerFor(projectId).collectAsStateWithLifecycle()
     val current = controller
     if (current == null) {

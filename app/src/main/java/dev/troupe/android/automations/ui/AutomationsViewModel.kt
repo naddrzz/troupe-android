@@ -13,6 +13,8 @@ import dev.troupe.android.servers.PairedServer
 import dev.troupe.android.servers.PairedServerRepository
 import dev.troupe.android.workspace.WorkspaceSessionManager
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -23,7 +25,11 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import javax.inject.Inject
 
-/** Builds an [AutomationsController] per project for the active Paired Server, anew whenever its id, address or connection changes. */
+/**
+ * Builds an [AutomationsController] per project for the active Paired Server, anew whenever its id, address or
+ * connection changes. A project's controller is kept while a screen shows it ([retain] / [release]); of the ones no
+ * screen shows, the [MAX_IDLE] most recently released are kept and older ones closed, to be rebuilt on next use.
+ */
 @HiltViewModel
 class AutomationsViewModel @Inject constructor(
     private val session: WorkspaceSessionManager,
@@ -31,21 +37,39 @@ class AutomationsViewModel @Inject constructor(
     private val servers: PairedServerRepository,
 ) : ViewModel() {
 
-    private val controllers = HashMap<String, StateFlow<AutomationsController?>>()
+    /** A project's controller and the job its pipeline runs in. */
+    private class Pipeline(val job: Job, val controller: StateFlow<AutomationsController?>)
+
+    private val pipelines = RetainedCache(MAX_IDLE, ::pipeline) { pipeline ->
+        pipeline.controller.value?.close()
+        pipeline.job.cancel()
+    }
 
     /** Null until the server's connection is adopted and while it is replaced; a new pair replaces (and closes) the last controller. */
-    fun controllerFor(projectId: String): StateFlow<AutomationsController?> = controllers.getOrPut(projectId) {
-        perConnection(
+    fun controllerFor(projectId: String): StateFlow<AutomationsController?> = pipelines.get(projectId).controller
+
+    /** A screen shows [projectId]'s controller: it is not closed until every such screen [release]s it. */
+    fun retain(projectId: String) = pipelines.retain(projectId)
+
+    fun release(projectId: String) = pipelines.release(projectId)
+
+    private fun pipeline(projectId: String): Pipeline {
+        val job = SupervisorJob(viewModelScope.coroutineContext[Job])
+        val scope = CoroutineScope(viewModelScope.coroutineContext + job)
+        val controller = perConnection(
             servers = session.state.map { it.activeServer }.connectionKeys(),
             hubs = session.watchHub,
             close = AutomationsController::close,
         ) { server, hub ->
-            AutomationsController(automationsRepository(api, servers, server, hub, viewModelScope), projectId, viewModelScope)
-        }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+            AutomationsController(automationsRepository(api, servers, server, hub, scope), projectId, scope)
+        }.stateIn(scope, SharingStarted.Eagerly, null)
+        return Pipeline(job, controller)
     }
 
-    override fun onCleared() {
-        controllers.values.forEach { it.value?.close() }
+    override fun onCleared() = pipelines.clear()
+
+    private companion object {
+        const val MAX_IDLE = 2
     }
 }
 
