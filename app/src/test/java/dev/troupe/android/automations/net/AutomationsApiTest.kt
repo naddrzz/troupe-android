@@ -181,11 +181,18 @@ class AutomationsApiTest {
     @Test
     fun requestsAreSentOnce() {
         withApi({ req ->
-            if (req.url.encodedPath == "/api/automations/a1/run") MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build() else null
+            when (req.url.encodedPath) {
+                "/api/automations/a1/seen" -> reply(200, """{"success":true,"data":null}""")
+                "/api/automations/a1/run" -> MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build()
+                else -> null
+            }
         }) { api, server ->
+            // The first call leaves a keep-alive connection in the pool; the second reuses it and the server drops it
+            // after reading the request, which is the case OkHttp would otherwise retry on a fresh connection.
+            assertEquals(ApiResult.Ok(Unit), api.markSeen(server.address, server.token, a1))
             val result = api.runNow(server.address, server.token, a1)
             assertTrue("expected Unreachable, got $result", result is ApiResult.Unreachable)
-            assertEquals(1, server.httpRequests.count { it.url.encodedPath == "/api/automations/a1/run" })
+            assertEquals(listOf("/api/automations/a1/seen", "/api/automations/a1/run"), server.httpRequests.map { it.url.encodedPath })
             assertNotNull(server.httpRequests.first().headers["X-Command-Id"])
         }
     }

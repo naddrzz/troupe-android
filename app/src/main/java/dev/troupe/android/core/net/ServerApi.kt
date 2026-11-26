@@ -65,6 +65,9 @@ private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
  */
 class ServerApi @Inject constructor(private val client: OkHttpClient) {
 
+    /** Shares [client]'s pool, interceptors and timeouts; only the silent retry after a connection failure is off. */
+    private val noRetryClient by lazy { client.newBuilder().retryOnConnectionFailure(false).build() }
+
     suspend fun health(address: ServerAddress, token: String? = null): ApiResult<Health> =
         getRaw(address, "health", token = token, Health.serializer())
 
@@ -103,16 +106,19 @@ class ServerApi @Inject constructor(private val client: OkHttpClient) {
         token: String?,
         bodyJson: String = "{}",
         serializer: KSerializer<T>,
-    ): ApiResult<T> = execute(address, "POST", path, token, bodyJson = bodyJson) { body ->
+        retryOnConnectionFailure: Boolean = true,
+    ): ApiResult<T> = execute(address, "POST", path, token, bodyJson = bodyJson, retryOnConnectionFailure = retryOnConnectionFailure) { body ->
         enveloped(body, serializer)
     }
 
+    /** [retryOnConnectionFailure] `false`: OkHttp never resends the request after a connection failure (for a write that is not idempotent). */
     suspend fun postUnit(
         address: ServerAddress,
         path: String,
         token: String?,
         bodyJson: String = "{}",
-    ): ApiResult<Unit> = execute(address, "POST", path, token, bodyJson = bodyJson) { body ->
+        retryOnConnectionFailure: Boolean = true,
+    ): ApiResult<Unit> = execute(address, "POST", path, token, bodyJson = bodyJson, retryOnConnectionFailure = retryOnConnectionFailure) { body ->
         envelopedUnit(body)
     }
 
@@ -173,6 +179,7 @@ class ServerApi @Inject constructor(private val client: OkHttpClient) {
         path: String,
         token: String?,
         bodyJson: String?,
+        retryOnConnectionFailure: Boolean = true,
         decode: (String) -> ApiResult<T>,
     ): ApiResult<T> {
         val cleanPath = path.removePrefix("/")
@@ -195,7 +202,7 @@ class ServerApi @Inject constructor(private val client: OkHttpClient) {
         // Off the caller's (main) thread: reading the body blocks.
         return try {
             withContext(Dispatchers.IO) {
-                client.newCall(request).await().use { response ->
+                (if (retryOnConnectionFailure) client else noRetryClient).newCall(request).await().use { response ->
                     val body = response.body.string()
                     when {
                         response.code == 401 || response.code == 403 -> ApiResult.Unauthorized
