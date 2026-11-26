@@ -61,8 +61,10 @@ data class AutomationsUi(
  * The Automations of one project: the list, plus the detail and run the user opened, and the controls. Each route's
  * queries are opened on entering it and closed on leaving it. A control is disabled while its request is in flight
  * and keeps its failure until it is used again. After a write the screen waits for the server's change event, or
- * re-reads once if none arrives within [REREAD_AFTER_MS]; after a failed write it re-reads at once, since a lost reply
- * may hide a write that was applied. Everything runs in a child of [scope]; [close] stops it.
+ * re-reads once if none arrives within [REREAD_AFTER_MS]; after a failed write it re-reads at once, since a lost
+ * reply may hide a write that was applied. Only while the screen is visible
+ * ([setVisible]) are running steps polled and failures marked seen. Everything runs in a child of [scope]; [close]
+ * stops it.
  */
 class AutomationsController(
     private val repo: AutomationsRepository,
@@ -72,13 +74,12 @@ class AutomationsController(
     private val job = SupervisorJob(scope.coroutineContext[Job])
     private val controllerScope = CoroutineScope(scope.coroutineContext + job)
 
-    /** The open route and its queries; [seen] marks failures seen once per opening of a detail. */
+    /** The open route and its queries. */
     private data class Open(
         val route: Route,
         val detail: HostQuery<AutomationDetail>? = null,
         val runs: HostQuery<List<AutomationRun>>? = null,
         val steps: HostQuery<List<AutomationStep>>? = null,
-        val seen: Job? = null,
     ) {
         val automationId: AutomationId?
             get() = when (route) {
@@ -88,7 +89,6 @@ class AutomationsController(
             }
 
         fun closeAll() {
-            seen?.cancel()
             detail?.close()
             runs?.close()
             steps?.close()
@@ -112,6 +112,13 @@ class AutomationsController(
     private val list = repo.list(projectId)
     private val current = MutableStateFlow(Open(Route.Overview))
     private val controls = MutableStateFlow(Controls())
+    private val visible = MutableStateFlow(false)
+    /** True until the screen says otherwise: a view-only session must never mark failures seen. */
+    private val viewOnly = MutableStateFlow(true)
+
+    init {
+        markSeenWhileLooking()
+    }
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val ui: StateFlow<AutomationsUi> = current
@@ -138,8 +145,7 @@ class AutomationsController(
                 }
                 else -> {
                     cur.closeAll()
-                    val detail = repo.detail(id)
-                    show(Open(Route.Detail(id), detail, repo.runs(id), seen = markSeenOnce(id, detail)))
+                    show(Open(Route.Detail(id), repo.detail(id), repo.runs(id)))
                 }
             }
         }
@@ -154,9 +160,9 @@ class AutomationsController(
             val runs = cur.runs ?: return
             if (cur.route == Route.Run(id, runId)) return
             cur.steps?.close()
-            // A parked run changes only through events; a running one is polled.
+            // A parked run changes only through events; a running one is polled while the screen is visible.
             val steps = repo.steps(id, runId) {
-                runs.state.value.data?.firstOrNull { it.id == runId }?.let { it.status == RunStatus.Running && it.parked == null } ?: false
+                visible.value && runs.state.value.data?.firstOrNull { it.id == runId }?.let { it.status == RunStatus.Running && it.parked == null } ?: false
             }
             show(cur.copy(route = Route.Run(id, runId), steps = steps))
         }
@@ -184,11 +190,25 @@ class AutomationsController(
     }
 
     fun refresh() {
-        val cur = current.value
-        list.reload()
-        cur.detail?.reload()
-        cur.runs?.reload()
-        cur.steps?.reload()
+        reloadAll()
+    }
+
+    /**
+     * Whether the user can see the Automations screen (resumed and on this tab). Hidden, nothing is polled and no
+     * failure is marked seen; becoming visible reloads the open queries once, since polls were skipped meanwhile.
+     */
+    fun setVisible(visible: Boolean) {
+        synchronized(lock) {
+            if (closed) return
+            val was = this.visible.value
+            this.visible.value = visible
+            if (visible && !was) reloadAll()
+        }
+    }
+
+    /** A view-only session sees failures without marking them seen; the server would refuse the request. */
+    fun setViewOnly(viewOnly: Boolean) {
+        this.viewOnly.value = viewOnly
     }
 
     /** The switch flips at once and rolls back if the write fails. */
@@ -289,6 +309,14 @@ class AutomationsController(
         current.value = next
     }
 
+    private fun reloadAll() {
+        val cur = current.value
+        list.reload()
+        cur.detail?.reload()
+        cur.runs?.reload()
+        cur.steps?.reload()
+    }
+
     /** Claims [control] as in flight and clears its last failure; false when closed or anything in [busyIf] is in flight. */
     private fun begin(control: Control, busyIf: Set<Control> = setOf(control)): Boolean {
         synchronized(lock) {
@@ -334,16 +362,45 @@ class AutomationsController(
         affected().forEach { it.reload() }
     }
 
-    /** Marks the automation's failures seen the first time this opening of its detail shows any. */
-    private fun markSeenOnce(id: AutomationId, detail: HostQuery<AutomationDetail>): Job = controllerScope.launch {
-        detail.state.first { (it.data?.automation?.unseenFailures ?: 0) > 0 }
-        try {
-            repo.markSeen(id)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            // Not a control: nothing shows a failure, and the next opening tries again.
-        }
+    /** The open detail as mark-seen sees it: [looking] when the user sees its runs and may mark them. */
+    private data class Unseen(val id: AutomationId, val detail: HostQuery<AutomationDetail>, val count: Int, val looking: Boolean)
+
+    /**
+     * Port of the web's guard: marks an automation's failures seen while the screen is visible, on its Detail route
+     * (not its Run route), in a session that may write, and the detail shows unseen failures. A count already marked
+     * for this opening is not marked again until the detail shows none or another count; a new opening marks afresh.
+     * A failed mark is not remembered, so the next change tries again. Marks run one at a time.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun markSeenWhileLooking() = controllerScope.launch {
+        var marked: Pair<HostQuery<AutomationDetail>, Int>? = null
+        current
+            .flatMapLatest { o ->
+                val id = o.automationId
+                val detail = o.detail
+                if (id == null || detail == null) {
+                    flowOf(null)
+                } else {
+                    combine(detail.state, visible, viewOnly) { s, v, readOnly ->
+                        Unseen(id, detail, s.data?.automation?.unseenFailures ?: 0, v && !readOnly && o.route is Route.Detail)
+                    }
+                }
+            }
+            .collect { u ->
+                if (u == null) return@collect
+                if (u.count == 0 && marked?.first === u.detail) marked = null
+                val key = u.detail to u.count
+                if (u.looking && u.count > 0 && marked != key && markSeen(u.id)) marked = key
+            }
+    }
+
+    /** Not a control: nothing shows a failure, and the next change of what is on screen tries again. */
+    private suspend fun markSeen(id: AutomationId): Boolean = try {
+        repo.markSeen(id) is Mutation.Ok
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        false
     }
 
     /** Keeps the override until a list reply that began after the write shows the server's value. */

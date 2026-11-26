@@ -15,9 +15,13 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import mockwebserver3.MockResponse
 import mockwebserver3.SocketEffect
@@ -34,6 +38,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /** [AutomationsController] over the real repository, events and API, against the fake Troupe Server, in real time. */
 class AutomationsControllerTest {
@@ -343,6 +348,8 @@ class AutomationsControllerTest {
     }
 
     @Test fun openingDetailWithUnseenFailuresMarksSeenOnce() {
+        controller.setViewOnly(false)
+        controller.setVisible(true)
         controller.open(id)
         settle(detailPath)
         eventually { hits(seenPath) == 1 }
@@ -356,6 +363,135 @@ class AutomationsControllerTest {
         assertTrue(controller.back())
         controller.open(id)
         eventually(message = { "the next opening did not mark seen" }) { hits(seenPath) == 2 }
+    }
+
+    /** The detail route replies the fixture with [unseen] unseen failures. */
+    private fun detailWithUnseen(unseen: AtomicInteger) {
+        val detail = AutomationFixtures.load("automation-detail.json")
+        routes[detailPath] = {
+            val n = unseen.get()
+            ok(if (n == 2) detail else replaced(detail, "\"unseen_failures\": 2", "\"unseen_failures\": $n"))
+        }
+    }
+
+    private fun unseenOnScreen() = ui.detail?.data?.automation?.unseenFailures
+
+    @Test fun failureWhileHiddenIsMarkedSeenOnlyOnceVisible() {
+        val unseen = AtomicInteger(0)
+        detailWithUnseen(unseen)
+        controller.setViewOnly(false)
+        controller.open(id)
+        settle(detailPath)
+
+        unseen.set(2)
+        change("project-1", "auto-1")
+        eventually(message = { "ui: $ui" }) { unseenOnScreen() == 2 }
+        Thread.sleep(500)
+        assertEquals("marked seen while hidden", 0, hits(seenPath))
+
+        controller.setVisible(true)
+        eventually(message = { "not marked seen once visible" }) { hits(seenPath) == 1 }
+        settle(detailPath)
+        assertEquals(1, hits(seenPath))
+    }
+
+    @Test fun viewOnlyNeverMarksSeen() {
+        controller.setViewOnly(true)
+        controller.setVisible(true)
+        controller.open(id)
+        settle(detailPath)
+        eventually(message = { "ui: $ui" }) { unseenOnScreen() == 2 }
+        Thread.sleep(500)
+        assertEquals("a view-only session marked seen", 0, hits(seenPath))
+
+        // The same screen marks once the session may write, so the silence above was the view-only guard.
+        controller.setViewOnly(false)
+        eventually(message = { "not marked seen" }) { hits(seenPath) == 1 }
+    }
+
+    @Test fun runRouteDoesNotMarkSeen() {
+        val unseen = AtomicInteger(0)
+        detailWithUnseen(unseen)
+        controller.setViewOnly(false)
+        controller.setVisible(true)
+        openRun()
+
+        unseen.set(2)
+        change("project-1", "auto-1")
+        eventually(message = { "ui: $ui" }) { unseenOnScreen() == 2 }
+        Thread.sleep(500)
+        assertEquals("the run route marked seen", 0, hits(seenPath))
+
+        assertTrue(controller.back())
+        eventually(message = { "the detail route did not mark seen" }) { hits(seenPath) == 1 }
+    }
+
+    @Test fun newFailureWhileLookingIsMarkedAgain() {
+        val unseen = AtomicInteger(2)
+        detailWithUnseen(unseen)
+        controller.setViewOnly(false)
+        controller.setVisible(true)
+        controller.open(id)
+        eventually(message = { "not marked seen" }) { hits(seenPath) == 1 }
+        settle(detailPath)
+        assertEquals(1, hits(seenPath))
+
+        unseen.set(3)
+        change("project-1", "auto-1")
+        eventually(message = { "a new failure was not marked seen" }) { hits(seenPath) == 2 }
+
+        // Seen on the server, then failing again with the count marked before.
+        unseen.set(0)
+        change("project-1", "auto-1")
+        eventually(message = { "ui: $ui" }) { unseenOnScreen() == 0 }
+        unseen.set(3)
+        change("project-1", "auto-1")
+        eventually(message = { "a failure after none was not marked seen" }) { hits(seenPath) == 3 }
+        settle(detailPath)
+        assertEquals(3, hits(seenPath))
+    }
+
+    /** `runs.json` with run-3 running and not parked, so its steps are polled. */
+    private fun runsWithRun3Polled(): String {
+        val runs = Json.parseToJsonElement(AutomationFixtures.load("runs.json")).jsonObject.getValue("data").jsonArray.map { run ->
+            if (run.jsonObject["id"]?.jsonPrimitive?.content == runId.value) JsonObject(run.jsonObject + ("parked" to JsonNull)) else run
+        }
+        return """{"success":true,"data":${JsonArray(runs)}}"""
+    }
+
+    @Test fun hiddenControllerDoesNotPollSteps() {
+        routes[runsPath] = { ok(runsWithRun3Polled()) }
+        controller.setVisible(true)
+        openRun()
+
+        val visibleBefore = hits(stepsPath)
+        eventually(timeoutMs = 6_000, message = { "steps not polled while visible" }) { hits(stepsPath) >= visibleBefore + 2 }
+
+        controller.setVisible(false)
+        Thread.sleep(500)
+        val hiddenBefore = hits(stepsPath)
+        Thread.sleep(4_500)
+        assertEquals("steps polled while hidden", hiddenBefore, hits(stepsPath))
+    }
+
+    @Test fun becomingVisibleReloadsOnce() {
+        controller.setVisible(true)
+        controller.open(id)
+        settle(detailPath)
+        settle(runsPath)
+        controller.setVisible(false)
+        Thread.sleep(300)
+        val detailBefore = hits(detailPath)
+        val runsBefore = hits(runsPath)
+
+        controller.setVisible(true)
+        eventually(message = { "detail +${hits(detailPath) - detailBefore}, runs +${hits(runsPath) - runsBefore}" }) {
+            hits(detailPath) == detailBefore + 1 && hits(runsPath) == runsBefore + 1
+        }
+        controller.setVisible(true)
+        Thread.sleep(500)
+        assertEquals(detailBefore + 1, hits(detailPath))
+        assertEquals(runsBefore + 1, hits(runsPath))
     }
 
     @Test fun backFromDetailClosesDetailQueries() {

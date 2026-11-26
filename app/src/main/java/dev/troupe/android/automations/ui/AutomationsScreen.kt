@@ -5,9 +5,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.troupe.android.automations.state.AutomationsController
 import dev.troupe.android.automations.state.Route
@@ -32,6 +34,12 @@ fun AutomationsScreen(projectId: String, viewOnly: Boolean, modifier: Modifier =
 @Composable
 private fun AutomationsRoutes(controller: AutomationsController, viewOnly: Boolean, modifier: Modifier) {
     val ui by controller.ui.collectAsStateWithLifecycle()
+    SideEffect { controller.setViewOnly(viewOnly) }
+    // Composed only while this tab shows, so resumed here means the user can see it.
+    LifecycleResumeEffect(controller) {
+        controller.setVisible(true)
+        onPauseOrDispose { controller.setVisible(false) }
+    }
     BackHandler(enabled = ui.route != Route.Overview) { controller.back() }
     when (val route = ui.route) {
         Route.Overview -> AutomationListScreen(controller, ui, viewOnly, modifier)
