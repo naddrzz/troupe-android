@@ -93,65 +93,33 @@ class HostQueryTest {
         assertEquals(2, query.state.value.data)
     }
 
-    @Test fun watchingRetriesALoadThatCouldNotReachTheServer() = runTest(StandardTestDispatcher()) {
+    @Test fun resyncRetriesALoadThatCouldNotReachTheServer() = runTest(StandardTestDispatcher()) {
         val load = FakeLoad(QueryResult.Failed(QueryError.Unreachable), QueryResult.Ok("online"))
         val query = query(load::load)
         assertEquals(QueryError.Unreachable, query.state.value.error)
 
-        events.emit(AutomationEvent.Watching)
+        events.emit(AutomationEvent.Resync)
         runCurrent()
 
         assertEquals(2, load.calls)
         assertEquals(QueryState(data = "online", loaded = true), query.state.value)
     }
 
-    @Test fun watchingLeavesAGoodOrOtherwiseFailedLoadAlone() = runTest(StandardTestDispatcher()) {
-        val good = CountingLoad()
-        query(good::load)
-        val refused = FakeLoad<String>(QueryResult.Failed(QueryError.Server("boom", null)))
-        query(refused::load)
-
-        events.emit(AutomationEvent.Watching)
-        runCurrent()
-
-        assertEquals(1, good.calls)
-        assertEquals(1, refused.calls)
-    }
-
-    @Test fun watchingDuringALoadRetriesItOnlyIfItCannotReachTheServer() = runTest(StandardTestDispatcher()) {
-        val unreachable = FakeLoad<String>()
-        query(unreachable::load)
-        val good = FakeLoad<String>()
-        query(good::load)
-
-        events.emit(AutomationEvent.Watching)
-        runCurrent()
-        assertEquals(1, unreachable.calls)
-        assertEquals(1, good.calls)
-
-        unreachable.gates[0].complete(QueryResult.Failed(QueryError.Unreachable))
-        good.gates[0].complete(QueryResult.Ok("first"))
-        runCurrent()
-        assertEquals(2, unreachable.calls)
-        assertEquals(1, good.calls)
-    }
-
-    @Test fun watchingReloadsWhenTheLatestLoadFailedEvenIfASupersededOneIsStillOnTheWire() = runTest(StandardTestDispatcher()) {
+    @Test fun resyncDuringTheInitialLoadReloadsAndItsReplyWins() = runTest(StandardTestDispatcher()) {
         val load = FakeLoad<String>()
         val query = query(load::load)
-        query.reload()
+
+        // The watch's first snapshot arrives while the initial load, which read the data before a change, is on the wire.
+        events.emit(AutomationEvent.Resync)
         runCurrent()
         assertEquals(2, load.calls)
 
-        // The latest load cannot reach the server while the superseded one is still waiting.
-        load.gates[1].complete(QueryResult.Failed(QueryError.Unreachable))
+        load.gates[1].complete(QueryResult.Ok("fresh"))
         runCurrent()
-        assertEquals(QueryError.Unreachable, query.state.value.error)
-
-        events.emit(AutomationEvent.Watching)
+        load.gates[0].complete(QueryResult.Ok("stale"))
         runCurrent()
 
-        assertEquals(3, load.calls)
+        assertEquals(QueryState(data = "fresh", loaded = true), query.state.value)
     }
 
     @Test fun slowOlderReplyIsDropped()= runTest(StandardTestDispatcher()) {

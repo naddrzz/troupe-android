@@ -15,11 +15,12 @@ sealed interface AutomationEvent {
     /** An automation (or, with a null id, a project's automations as a whole) changed on the server. */
     data class Changed(val change: AutomationChanged) : AutomationEvent
 
-    /** Updates may have been missed: reload whatever is shown. */
+    /**
+     * Updates may have been missed: reload whatever is shown. Sent for every snapshot of the watch, the first one
+     * included: a load begun before the subscription started may have read data that a change, sent before there
+     * was anyone to send its delta to, has since replaced.
+     */
     data object Resync : AutomationEvent
-
-    /** The watch delivered its first snapshot: nothing was missed, but a load that could not reach the server may now. */
-    data object Watching : AutomationEvent
 }
 
 /**
@@ -28,15 +29,8 @@ sealed interface AutomationEvent {
  */
 class AutomationEvents(private val hub: WatchHub) {
     fun stream(): Flow<AutomationEvent> = flow {
-        var seenSnapshot = false
         hub.watch(WatchHub.AGENTS).collect { update ->
-            val event = if (update.reset) {
-                // The first snapshot is the subscription's start; a later one means the watch was re-established.
-                if (seenSnapshot) AutomationEvent.Resync else AutomationEvent.Watching
-            } else {
-                (update.delta as? JsonObject)?.let(::parse)
-            }
-            if (update.reset) seenSnapshot = true
+            val event = if (update.reset) AutomationEvent.Resync else (update.delta as? JsonObject)?.let(::parse)
             if (event != null) emit(event)
         }
     }

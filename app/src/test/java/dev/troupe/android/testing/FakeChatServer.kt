@@ -67,6 +67,8 @@ class FakeChatServer internal constructor(
     @Volatile var unanswered: Set<String> = emptySet()
     /** true: include authoritative `pendingQuestions` on subscribe/snapshot replies (newer Troupe Server). */
     @Volatile var sendPendingQuestions: Boolean = false
+    /** Runs on the connection's thread before a `watch` request is answered; blocking it holds the snapshot back. */
+    @Volatile var beforeWatch: (watch: String) -> Unit = {}
     val sessions: MutableMap<String, Session> = ConcurrentHashMap()
     /** Every request frame the app sent on `/ws`, parsed. */
     val requests: MutableList<JsonObject> = CopyOnWriteArrayList()
@@ -267,8 +269,13 @@ class FakeChatServer internal constructor(
             }
         }
 
-        private fun watch(id: String, payload: JsonObject) = synchronized(lock) {
+        private fun watch(id: String, payload: JsonObject) {
             val watch = payload["watch"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            beforeWatch(watch)
+            watchLocked(id, watch)
+        }
+
+        private fun watchLocked(id: String, watch: String) = synchronized(lock) {
             val state = when (watch) {
                 HISTORY -> JsonArray(history)
                 AGENTS -> JsonObject(emptyMap())

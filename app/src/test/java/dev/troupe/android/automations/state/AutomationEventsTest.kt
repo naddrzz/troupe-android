@@ -39,7 +39,7 @@ class AutomationEventsTest {
 
     /**
      * Collects the stream and returns once the host holds an `agents` watch for it and its first snapshot came in
-     * as [AutomationEvent.Watching] (not a resync); that event is then cleared, so tests see only what follows.
+     * as a [AutomationEvent.Resync]; that event is then cleared, so tests see only what follows.
      */
     private fun startCollecting() {
         val serverId = runBlocking { graph.repository.add("Box", server.pairingInput()).id }
@@ -47,8 +47,13 @@ class AutomationEventsTest {
         collector = CoroutineScope(Dispatchers.IO).launch { AutomationEvents(hub).stream().collect { received += it } }
         eventually { chat.watching("agents") }
         eventually(message = { "events: $received" }) { received.isNotEmpty() }
-        assertEquals(listOf<AutomationEvent>(AutomationEvent.Watching), received.toList())
+        assertEquals(listOf<AutomationEvent>(AutomationEvent.Resync), received.toList())
         received.clear()
+    }
+
+    /** Whatever was loaded before the subscription started may have missed a change that sent no delta. */
+    @Test fun firstSnapshotIsAResync() {
+        startCollecting()
     }
 
     private fun change(projectId: String, automationId: String?) = server.automationChanged(projectId, automationId)

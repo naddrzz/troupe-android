@@ -9,12 +9,13 @@ import kotlinx.serialization.json.put
 internal fun FakeTroupeServer.hits(path: String) = httpRequests.count { it.url.encodedPath == path }
 
 /**
- * Returns once the `agents` watch is up, [path] has been requested, and its request count stopped moving for half a
- * second, so a reload caused by the subscription itself cannot land later.
+ * Returns once the `agents` watch is up, [path] has been requested at least twice (a query's initial load and its
+ * reload on the watch's first snapshot), and its request count stopped moving for half a second, so a reload caused
+ * by the subscription itself cannot land later.
  */
 internal fun FakeTroupeServer.settle(path: String) {
     eventually { chat.watching("agents") }
-    eventually { hits(path) >= 1 }
+    eventually(message = { "$path requested ${hits(path)} time(s)" }) { hits(path) >= 2 }
     var last = -1
     while (hits(path) != last) {
         last = hits(path)

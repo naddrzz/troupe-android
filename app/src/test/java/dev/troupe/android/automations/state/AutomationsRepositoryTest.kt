@@ -21,6 +21,8 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** [AutomationsRepository] over the real [AutomationEvents] and `AutomationsApi`, against the fake Troupe Server. */
@@ -106,6 +108,26 @@ class AutomationsRepositoryTest {
         change("p1", null)
 
         // A spurious extra reload (a resync) only loads the same second body, so the final content is what counts.
+        eventually(message = { "state: ${query.state.value}" }) { query.state.value.data?.map { it.name } == listOf("Renamed") }
+    }
+
+    @Test fun aChangeBeforeTheWatchStartsIsLoadedOnItsFirstSnapshot() {
+        val stale = listBody(AutomationFixtures.load("automation.json"))
+        val fresh = listBody(renamed(AutomationFixtures.load("automation.json")))
+        val changed = AtomicBoolean(false)
+        val initialRead = CountDownLatch(1)
+        route("/api/automations") {
+            val body = if (changed.get()) fresh else stale
+            // The automation changes right after the initial GET read it, before the subscription starts: no delta is sent.
+            changed.set(true)
+            initialRead.countDown()
+            reply(200, body)
+        }
+        // The `agents` snapshot goes out only once the initial GET has read the old data.
+        server.chat.beforeWatch = { watch -> if (watch == "agents") initialRead.await(10, TimeUnit.SECONDS) }
+
+        val query = repository.list("p1")
+
         eventually(message = { "state: ${query.state.value}" }) { query.state.value.data?.map { it.name } == listOf("Renamed") }
     }
 
@@ -206,9 +228,11 @@ class AutomationsRepositoryTest {
         val running = AtomicBoolean(true)
 
         repository.steps("p1", a1, RunId("r1")) { running.get() }
+        settle(path)
+        val settled = hits(path)
 
-        // No event is sent: the count can only grow through the 2 s poll.
-        eventually(message = { "polled ${hits(path)} time(s)" }) { hits(path) >= 3 }
+        // No event is sent after the watch's first snapshot: the count can only grow through the 2 s poll.
+        eventually(message = { "polled ${hits(path) - settled} time(s)" }) { hits(path) >= settled + 2 }
         running.set(false)
         Thread.sleep(500) // a poll that began just before the flip finishes
         val stopped = hits(path)
