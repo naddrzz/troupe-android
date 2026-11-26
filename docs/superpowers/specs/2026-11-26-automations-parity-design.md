@@ -112,11 +112,14 @@ Mutating calls are sent once, never auto-retried (the web uses `postJsonOnce`). 
 `ApiResult`'s four cases (`Unauthorized`, `Unreachable`, `ServerError`, parse failure); the UI tells them
 apart and offers Retry.
 
-**Repository and live state.** `AutomationsRepository` (one per Paired Server session) exposes per-project
-and per-automation state as flows and applies the web's `useHostQuery` rule:
+**Repository and live state.** `AutomationsRepository` (bound to one connection of the active Paired Server,
+and rebuilt when that server or its connection changes) exposes per-project and per-automation state as
+flows and applies the web's `useHostQuery` rule:
 
-- Load on first collection; reload when an `automation_changed` event matches (same `project_id` for the
-  list, same `automation_id` for detail and runs) and on `automation_resync`.
+- Load on first collection; reload when an `automation_changed` event matches and on `automation_resync`.
+  The list matches the same `project_id`; detail, runs and steps match the same `project_id` with either the
+  same `automation_id` or a `null` one (a project-wide change refreshes every open detail and run history of
+  that project).
 - Only the latest request's reply is kept (a stale reply never overwrites a newer one).
 - A failed refresh keeps the last good data and exposes the error next to it.
 - Run steps poll every 2 s while the run is `running` and not parked; a parked run changes only through
@@ -127,7 +130,9 @@ and per-automation state as flows and applies the web's `useHostQuery` rule:
   Server and it carries events for every project; the repository filters by `project_id`/`automation_id`.
   `payload` for a change is `{project_id, automation_id | null, proposed?, proposed_by?}`; a `null`
   `automation_id` is project-wide. Subscribers re-register when `ConnectionLifecycle.generation` changes
-  (existing `WatchHub` behaviour); after a reconnect every shown query re-reads once.
+  (existing `WatchHub` behaviour); after a reconnect every shown query re-reads once. The watch's first
+  snapshot is not a resync, but a query whose last load could not reach the server (opened offline)
+  re-reads once when it arrives.
 - `WatchHub` already supports the `agents` watch but no feature in the app subscribes to it today, and
   `WatchHub` itself needs no change. The repository owns that single subscription and ignores deltas
   whose `event` is not an automation event (the same watch also carries other agent lifecycle events), so
@@ -161,7 +166,8 @@ slice 2).
 Sections: trigger and next runs, run policy (`RunPolicy`: agents, secrets, outbound hosts, MCP tools,
 untrusted-flow flag, failure policy, as `RunPolicyCard` shows), graph issues (`issues`, shown read-only),
 a read-only outline of the graph (nodes in order with kind and label), and run history. Opening the detail
-marks failures seen (`/seen`) when `unseen_failures > 0`.
+marks failures seen (`/seen`) when `unseen_failures > 0`, in a session that may write: a view-only session
+(`state.viewOnly`) never sends that call.
 
 **Run history and run detail.** Last 25 runs: trigger (scheduled, catch-up, manual), status, start/finish,
 stop reason and summary. A run opens a step list: per step the node label, status, iteration, timings,
@@ -204,8 +210,7 @@ replaces itself with a spinner once it has data.
 ## Left to the builder
 
 - Exact Compose layout, spacing and iconography (match the existing shell components and `TroupeTheme`).
-- How the repository is scoped and injected (per Paired Server session vs singleton), and where
-  `WatchHub`/`agents` is obtained, following how other features get it.
+- Where `WatchHub`/`agents` is obtained, following how other features get it.
 - The short wait before the single fallback re-read after a mutation.
 - Time and relative-time formatting (reuse the app's existing formatters if present, else add one).
 - Naming of internal classes and the split of ViewModels (one for list and one for detail is expected).

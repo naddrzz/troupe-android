@@ -268,5 +268,5 @@
       "failure_policy": "backoff 30s/1m/5m/15m/60m"
     }
   },
-  "_source": "naddrzz/troupe src/shared/types/__fixtures__/automation.json keys \"automation\" and \"run_policy\"; envelope and detail shape as asserted in src-tauri/src/web/automation_api_tests.rs (GET /api/automations/{id}); issues is [] as in src/renderer/lib/test-utils/automation-fixtures.ts"
+  "_source": "naddrzz/troupe src/shared/types/__fixtures__/automation.json keys \"automation\" and \"run_policy\" (the RunPolicy sample, which the detail carries under the wire key \"policy\": AutomationDetail in src/shared/types/automation.types.ts and parseAutomationDetail in src/renderer/lib/automation-wire.ts); envelope and detail shape as asserted in src-tauri/src/web/automation_api_tests.rs (GET /api/automations/{id}); issues is [] as in src/renderer/lib/test-utils/automation-fixtures.ts"
 }

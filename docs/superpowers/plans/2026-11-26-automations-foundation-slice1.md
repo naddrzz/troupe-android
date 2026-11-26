@@ -41,13 +41,14 @@
 **Files:**
 - Create: `app/src/test/resources/fixtures/automations/automation.json`, `automation-detail.json`, `runs.json`, `steps.json`, `agents-delta-changed.json`, `agents-delta-resync.json`, `automation-kitchen-sink.json` (an Automation whose graph holds all 10 node kinds)
 - Create: `app/src/test/java/dev/troupe/android/automations/AutomationFixturesTest.kt`
+- Create: `app/src/test/java/dev/troupe/android/automations/AutomationFixtures.kt` (the `load` helper below)
 - Commit: `docs/superpowers/specs/2026-11-26-automations-parity-design.md` (still untracked) and this plan
 
 **Interfaces:**
 - Produces: `AutomationFixtures.load(name: String): String` in `AutomationFixturesTest.kt`'s sibling `app/src/test/java/dev/troupe/android/automations/AutomationFixtures.kt`, reading `/fixtures/automations/<name>` (same mechanism as `FakeTroupeServer.fixture`).
 
 - [ ] **Step 1: Create the branch.** `git switch dev` then `git switch -c feat/automations-slice1`.
-- [ ] **Step 2: Build the fixtures from the web repo.** Sources: `src/shared/types/__fixtures__/automation.json`, `automation-ops.json`, `src/renderer/lib/test-utils/automation-fixtures.ts` (convert TS objects to JSON), and the wire output asserted in `src-tauri/src/web/automation_api_tests.rs` and `src-tauri/src/automation/model_tests.rs`. `agents-delta-changed.json` is `{"event":"automation_changed","payload":{"project_id":"p1","automation_id":"a1"}}`; `agents-delta-resync.json` is `{"event":"automation_resync","payload":{"missed":3}}`. Wrap each response fixture exactly as the server does (`{"success":true,"data":...}`) where it is a route reply.
+- [ ] **Step 2: Build the fixtures from the web repo.** Sources: `src/shared/types/__fixtures__/automation.json`, `automation-ops.json`, `src/renderer/lib/test-utils/automation-fixtures.ts` (convert TS objects to JSON), and the wire output asserted in `src-tauri/src/web/automation_api_tests.rs` and `src-tauri/src/automation/model_tests.rs`. `agents-delta-changed.json` is `{"_source":"<see below>","event":"automation_changed","payload":{"project_id":"p1","automation_id":"a1"}}`, its `_source` naming the event name in `src-tauri/src/automation/model.rs`, the payload type `AutomationChanged` in `src/shared/types/automation.types.ts` and `publish_agent_event` in `src-tauri/src/web/watch/sources.rs`; `agents-delta-resync.json` is `{"_source":"<see below>","event":"automation_resync","payload":{"missed":3}}`, its `_source` naming `src-tauri/src/automation/model.rs` and the lagged-forwarder test in `src-tauri/src/web/automation_api_tests.rs`. Wrap each response fixture exactly as the server does (`{"success":true,"data":...}`) where it is a route reply.
 - [ ] **Step 3: Write the failing test** `AutomationFixturesTest.everyFixtureIsValidJsonWithASourceNote`: for each file, `Json.parseToJsonElement(load(name))` succeeds and the root object carries a non-blank `_source` key (route replies keep it beside `success` and `data`, so array payloads still have an object root). Run: `./gradlew testDebugUnitTest --tests "dev.troupe.android.automations.AutomationFixturesTest"`. Expected: FAIL (missing resources).
 - [ ] **Step 4: Run the test to pass** after the files exist. Expected: PASS.
 - [ ] **Step 5: Probe the test server.** `.\scripts\test-server.ps1 up`, then `Invoke-RestMethod "http://127.0.0.1:18080/api/automations?project_id=x" -Headers @{Authorization="Bearer $(.\scripts\test-server.ps1 token)"}`, then `.\scripts\test-server.ps1 down`. Record the outcome (200 with a list, 404, or "Docker unavailable") in the spec's "Open items" section, replacing the first bullet. If 404 or unavailable, `RealServerTest`-style integration coverage for Automations is skipped.
@@ -191,7 +192,7 @@
 - Produces: `class AutomationsRepository(api: AutomationsApi, address: ServerAddress, token: suspend () -> String?, events: AutomationEvents, scope: CoroutineScope)` with
   - `fun list(projectId: String): HostQuery<List<Automation>>` (affects: same `projectId`; maps 404 to `Unsupported`)
   - `fun detail(id: AutomationId): HostQuery<AutomationDetail>`, `fun runs(id: AutomationId): HostQuery<List<AutomationRun>>` (both affect: same `automationId`, or a project-wide change when `automationId == null`)
-  - `fun steps(automationId: AutomationId, runId: RunId, running: () -> Boolean): HostQuery<List<AutomationStep>>` (poll 2 000 ms while `running()`)
+  - `fun steps(automationId: AutomationId, runId: RunId, running: () -> Boolean): HostQuery<List<AutomationStep>>` (poll 2 000 ms while `running()`; the caller's `running` returns false for a parked run, `status == Running && parked == null`, so a parked run is never polled)
   - `sealed interface Mutation<out T> { data class Ok<T>(val value: T); data class Failed(val error: QueryError) }` and suspend `setEnabled(id, enabled)`, `runNow(id): Mutation<AutomationRun>`, `cancelRun(runId)`, `decideApproval(runId, nodeId, approved): Mutation<Boolean>`, `markSeen(id)`.
   - A change with `automationId == null` counts as affecting every automation query of that project (`affects` for detail/runs/steps returns true for it).
 
@@ -236,14 +237,14 @@
 **Interfaces:**
 - Consumes: `AutomationsRepository`, `canRunNow`.
 - Produces:
-  - `enum class ControlAction { Enable, Run, Cancel, Approve, Reject }`; `data class Control(val target: String, val action: ControlAction)`.
+  - `enum class ControlAction { Enable, Run, Cancel, Approve, Reject }`; `data class Control(val target: String, val action: ControlAction)`, where `target` is the id's string: `Control(id.value, ControlAction.Enable)` for an automation, `Control(runId.value, ControlAction.Cancel)` for a run.
   - `sealed interface Route { data object Overview; data class Detail(val id: AutomationId); data class Run(val id: AutomationId, val runId: RunId) }`.
   - `data class AutomationsUi(val route: Route, val list: QueryState<List<Automation>>, val detail: QueryState<AutomationDetail>?, val runs: QueryState<List<AutomationRun>>?, val steps: QueryState<List<AutomationStep>>?, val pending: Set<Control>, val failures: Map<Control, QueryError>, val enabledOverride: Map<AutomationId, Boolean>, val notices: List<Notice>)` and `enum class Notice { ApprovalAlreadyHandled }`.
   - `class AutomationsController(repo: AutomationsRepository, projectId: String, scope: CoroutineScope)` with `val ui: StateFlow<AutomationsUi>`; `fun open(id)`, `fun openRun(runId)`, `fun back(): Boolean` (false at the list), `fun refresh()`, `fun toggleEnabled(id, enabled)`, `fun runNow(id)`, `fun cancelRun(runId)`, `fun decide(runId, nodeId, approved)`, `fun dismissNotice(n: Notice)`, `fun close()`. Opening a detail whose `unseenFailures > 0` calls `markSeen` once per open. Closing/leaving a route closes that route's queries.
   - `@HiltViewModel class AutomationsViewModel @Inject constructor(session: WorkspaceSessionManager, api: AutomationsApi) : ViewModel()` exposing `fun controllerFor(projectId: String): StateFlow<AutomationsController?>`; it builds `AutomationsRepository(api, server.address, session::currentToken, AutomationEvents(hub), viewModelScope)` once `session.currentWatchHub()` and `session.state.value.activeServer` are non-null, rebuilds when the active server changes, and closes the controller in `onCleared`.
 
 - [ ] **Step 1: Write the failing tests** (`TestGraph` + routes + `chat.agentEvent`, `runTest` where virtual time matters):
-  - `toggleEnabledFlipsImmediatelyAndRollsBack`: route answers 500; `enabledOverride[id]` becomes the new value at once, is removed after failure, and `failures[Control(id, Enable)]` is set.
+  - `toggleEnabledFlipsImmediatelyAndRollsBack`: route answers 500; `enabledOverride[id]` becomes the new value at once, is removed after failure, and `failures[Control(id.value, ControlAction.Enable)]` is set.
   - `toggleEnabledSuccessWaitsForEventThenSettles`: success; override stays until the list reload shows the server's value.
   - `runNowDisablesItsControlWhileInFlight`: `pending` contains `Control(id, Run)` during the call; a second `runNow` while pending sends no second request.
   - `runNowBlockedWhenApprovalNeeded`: no request is sent; failure is `NotApproved`.

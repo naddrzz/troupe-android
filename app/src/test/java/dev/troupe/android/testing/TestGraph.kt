@@ -103,7 +103,12 @@ class TestGraph(
 
     fun serversViewModel() = ServersViewModel(api, sockets, repository).tracked()
 
-    /** Ends the ViewModels' scopes, then joins the storage scope, so a new graph on the same dir can open the file (an app restart). */
+    /**
+     * Ends the ViewModels' scopes, then joins the storage scope, so a new graph on the same dir can open the file (an app restart).
+     * Cancelling a `viewModelScope` does not call `onCleared()`: what a ViewModel does there (`TerminalViewModel` saving
+     * its cursor and detaching, `ChatViewModel` releasing what is pending) does not happen here, so a test that needs
+     * those effects before reopening the graph must cause them itself.
+     */
     override fun close() {
         runBlocking { viewModels.forEach { it.viewModelScope.coroutineContext.job.cancelAndJoin() } }
         attention.stop()
