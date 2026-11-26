@@ -2,15 +2,25 @@ package dev.troupe.android.automations.ui
 
 import dev.troupe.android.automations.AutomationFixtures
 import dev.troupe.android.automations.protocol.Automation
+import dev.troupe.android.automations.protocol.AutomationDetail
 import dev.troupe.android.automations.protocol.AutomationId
+import dev.troupe.android.automations.protocol.AutomationRun
 import dev.troupe.android.automations.protocol.AutomationStep
+import dev.troupe.android.automations.protocol.Graph
+import dev.troupe.android.automations.protocol.Issue
 import dev.troupe.android.automations.protocol.LastRun
+import dev.troupe.android.automations.protocol.NodeId
 import dev.troupe.android.automations.protocol.RunId
 import dev.troupe.android.automations.protocol.RunStatus
 import dev.troupe.android.automations.protocol.Schedule
 import dev.troupe.android.automations.protocol.StepStatus
 import dev.troupe.android.automations.protocol.Trigger
+import dev.troupe.android.automations.state.AutomationsUi
+import dev.troupe.android.automations.state.Control
+import dev.troupe.android.automations.state.ControlAction
 import dev.troupe.android.automations.state.QueryError
+import dev.troupe.android.automations.state.QueryState
+import dev.troupe.android.automations.state.Route
 import dev.troupe.android.core.protocol.TroupeJson
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -190,5 +200,124 @@ class AutomationFormatTest {
     fun cardFailuresKeepTheEnableFailureWhenOnlyRunIsNotApproved() {
         val failures = cardFailures(unreachable, QueryError.NotApproved, viewOnly = false, approvalHintShown = true)
         assertEquals(CardFailures(unreachable, null), failures)
+    }
+
+    private val detail = TroupeJson.decodeFromJsonElement<AutomationDetail>(
+        TroupeJson.parseToJsonElement(AutomationFixtures.load("automation-detail.json")).jsonObject.getValue("data"),
+    )
+    private val runs = TroupeJson.decodeFromJsonElement<List<AutomationRun>>(
+        TroupeJson.parseToJsonElement(AutomationFixtures.load("runs.json")).jsonObject.getValue("data"),
+    )
+
+    private fun uiOf(
+        pending: Set<Control> = emptySet(),
+        failures: Map<Control, QueryError> = emptyMap(),
+        enabledOverride: Map<AutomationId, Boolean> = emptyMap(),
+    ) = AutomationsUi(Route.Overview, QueryState(), null, null, null, pending, failures, enabledOverride, emptyList())
+
+    private val approvedAuto = base.copy(revision = 3, approvedRevision = 3, enabled = true)
+    private val unapprovedAuto = base.copy(revision = 3, approvedRevision = 2, enabled = true)
+
+    @Test
+    fun controlsOfAnApprovedAutomationAreOpen() {
+        val controls = automationControls(approvedAuto, uiOf(), viewOnly = false)
+        assertTrue(controls.enabled)
+        assertTrue(controls.canRun)
+        assertFalse(controls.approvalNeeded)
+        assertFalse(controls.showHint)
+        assertFalse(controls.enableBusy)
+        assertFalse(controls.runBusy)
+    }
+
+    @Test
+    fun controlsOfAnUnapprovedAutomationGateRunAndShowTheHint() {
+        val controls = automationControls(unapprovedAuto, uiOf(), viewOnly = false)
+        assertTrue(controls.approvalNeeded)
+        assertFalse(controls.canRun)
+        assertTrue(controls.showHint)
+    }
+
+    @Test
+    fun controlsOfAViewOnlySessionShowNoHintAndNoFailures() {
+        val ui = uiOf(failures = mapOf(Control(unapprovedAuto.id.value, ControlAction.Run) to unreachable))
+        val controls = automationControls(unapprovedAuto, ui, viewOnly = true)
+        assertTrue(controls.viewOnly)
+        assertFalse(controls.canRun)
+        assertFalse(controls.showHint)
+        assertEquals(CardFailures(null, null), controls.failures)
+    }
+
+    @Test
+    fun controlsTakeTheEnabledOverrideOverTheLoadedValue() {
+        val ui = uiOf(enabledOverride = mapOf(approvedAuto.id to false))
+        assertFalse(automationControls(approvedAuto, ui, viewOnly = false).enabled)
+    }
+
+    @Test
+    fun controlsReadInFlightAndFailureStateOfTheirOwnAutomationOnly() {
+        val mine = Control(approvedAuto.id.value, ControlAction.Enable)
+        val other = Control("another", ControlAction.Run)
+        val ui = uiOf(pending = setOf(mine, other), failures = mapOf(other to unreachable, mine to QueryError.Unauthorized))
+        val controls = automationControls(approvedAuto, ui, viewOnly = false)
+        assertTrue(controls.enableBusy)
+        assertFalse(controls.runBusy)
+        assertEquals(CardFailures(QueryError.Unauthorized, null), controls.failures)
+    }
+
+    @Test
+    fun everyNodeSpecMapsToItsOwnKind() {
+        val kinds = kitchenSink.graph.nodes.map { nodeKind(it.spec) }
+        assertEquals(NodeKind.entries.toSet(), kinds.toSet())
+        assertEquals(NodeKind.entries.size, kinds.toSet().size)
+    }
+
+    @Test
+    fun outlineKeepsGraphOrderWithKindAndLabel() {
+        val outline = graphOutline(detail.automation.graph)
+        assertEquals(detail.automation.graph.nodes.map { it.label }, outline.map { it.label })
+        assertEquals(detail.automation.graph.nodes.map { nodeKind(it.spec) }, outline.map { it.kind })
+    }
+
+    @Test
+    fun outlineFallsBackToTheNodeIdForABlankLabel() {
+        val node = detail.automation.graph.nodes.first()
+        val outline = graphOutline(Graph(listOf(node.copy(label = " ")), emptyList()))
+        assertEquals(listOf(OutlineRow(nodeKind(node.spec), node.id.value)), outline)
+    }
+
+    @Test
+    fun outlineOfAnEmptyGraphIsEmpty() {
+        assertEquals(emptyList<OutlineRow>(), graphOutline(Graph(emptyList(), emptyList())))
+    }
+
+    @Test
+    fun issueNodeLabelNamesOnlyNodesThatAreInTheGraph() {
+        val node = detail.automation.graph.nodes.first()
+        val labels = nodeLabels(detail.automation.graph)
+        assertEquals(node.label, issueNodeLabel(Issue(node.id, "some_code", "m"), labels))
+        assertNull(issueNodeLabel(Issue(NodeId("not_in_graph"), "some_code", "m"), labels))
+        assertNull(issueNodeLabel(Issue(null, "some_code", "m"), labels))
+        assertEquals("not_in_graph", labelOrId(labels, NodeId("not_in_graph")))
+    }
+
+    @Test
+    fun nextRunTimesShowTheFirstThreeOfThePolicy() {
+        val policy = detail.policy.copy(nextRuns = listOf(1L, 2L, 3L, 4L, 5L))
+        assertEquals(listOf(1L, 2L, 3L), nextRunTimes(base.copy(nextRunAt = 9L), policy))
+    }
+
+    @Test
+    fun nextRunTimesFallBackToTheAutomationsOwnNextRun() {
+        val policy = detail.policy.copy(nextRuns = emptyList())
+        assertEquals(listOf(9L), nextRunTimes(base.copy(nextRunAt = 9L), policy))
+        assertEquals(emptyList<Long>(), nextRunTimes(base.copy(nextRunAt = null), policy))
+    }
+
+    @Test
+    fun runDurationIsNullWhileRunningAndNeverNegative() {
+        val finished = runs.first { it.finishedAt != null }
+        assertEquals(finished.finishedAt!! - finished.startedAt, runDurationMs(finished))
+        assertNull(runDurationMs(runs.first { it.finishedAt == null }))
+        assertEquals(0L, runDurationMs(finished.copy(finishedAt = finished.startedAt - 5)))
     }
 }

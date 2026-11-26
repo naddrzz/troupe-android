@@ -17,7 +17,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
@@ -28,11 +27,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.troupe.android.R
@@ -40,14 +35,9 @@ import dev.troupe.android.automations.protocol.Automation
 import dev.troupe.android.automations.protocol.RunStatus
 import dev.troupe.android.automations.state.AutomationsController
 import dev.troupe.android.automations.state.AutomationsUi
-import dev.troupe.android.automations.state.Control
-import dev.troupe.android.automations.state.ControlAction
-import dev.troupe.android.automations.state.QueryError
 import dev.troupe.android.core.theme.TroupeTheme
 import dev.troupe.android.core.theme.tabularNums
 import dev.troupe.android.core.ui.StatusDot
-import dev.troupe.android.core.ui.TroupeButton
-import dev.troupe.android.core.ui.TroupeButtonVariant
 
 /**
  * The overview route: the project's Automations as the server sent them, inside pull-to-refresh. Once the list has
@@ -86,12 +76,7 @@ fun AutomationListScreen(
                         items(orderForList(automations), key = { it.id.value }) { automation ->
                             AutomationCard(
                                 automation = automation,
-                                enabled = ui.enabledOverride[automation.id] ?: automation.enabled,
-                                enableBusy = Control(automation.id.value, ControlAction.Enable) in ui.pending,
-                                runBusy = Control(automation.id.value, ControlAction.Run) in ui.pending,
-                                enableFailure = ui.failures[Control(automation.id.value, ControlAction.Enable)],
-                                runFailure = ui.failures[Control(automation.id.value, ControlAction.Run)],
-                                viewOnly = viewOnly,
+                                controls = automationControls(automation, ui, viewOnly),
                                 onOpen = { controller.open(automation.id) },
                                 onToggle = { controller.toggleEnabled(automation.id, it) },
                                 onRun = { controller.runNow(automation.id) },
@@ -107,26 +92,14 @@ fun AutomationListScreen(
 @Composable
 private fun AutomationCard(
     automation: Automation,
-    enabled: Boolean,
-    enableBusy: Boolean,
-    runBusy: Boolean,
-    enableFailure: QueryError?,
-    runFailure: QueryError?,
-    viewOnly: Boolean,
+    controls: AutomationControls,
     onOpen: () -> Unit,
     onToggle: (Boolean) -> Unit,
     onRun: () -> Unit,
 ) {
     val palette = TroupeTheme.palette
     val typo = TroupeTheme.typography
-    val approvalNeeded = needsApproval(automation)
-    val showHint = approvalNeeded && !viewOnly
-    val failures = cardFailures(enableFailure, runFailure, viewOnly, approvalHintShown = showHint)
-    val (stateLabel, stateColor) = when {
-        approvalNeeded -> stringResource(R.string.automations_state_needs_approval) to palette.warning
-        enabled -> stringResource(R.string.automations_state_armed) to palette.success
-        else -> stringResource(R.string.automations_state_disabled) to palette.mutedForeground
-    }
+    val (stateLabel, stateColor) = automationStateStyle(controls)
     val shape = RoundedCornerShape(12.dp)
     Column(
         modifier = Modifier
@@ -150,42 +123,10 @@ private fun AutomationCard(
                 Text(lastRunLine(automation), style = typo.bodySmall.tabularNums(), color = palette.mutedForeground)
                 if (automation.unseenFailures > 0) UnseenFailuresBadge(automation.unseenFailures)
             }
-            if (!viewOnly) {
-                val description = stringResource(R.string.automations_enable_description, automation.name)
-                Switch(
-                    checked = enabled,
-                    onCheckedChange = onToggle,
-                    enabled = !enableBusy,
-                    modifier = Modifier.semantics { contentDescription = description },
-                )
-            }
+            AutomationEnableSwitch(automation.name, controls, onToggle)
         }
-        failures.enable?.let { FailureLine(R.string.automations_failure_enable, it) }
-        if (!viewOnly) {
-            TroupeButton(
-                text = stringResource(R.string.automations_run),
-                variant = TroupeButtonVariant.Secondary,
-                enabled = canRunNow(automation, viewOnly),
-                loading = runBusy,
-                minHeight = 48.dp,
-                onClick = onRun,
-            )
-        }
-        failures.run?.let { FailureLine(R.string.automations_failure_run, it) }
-        if (showHint) {
-            Text(stringResource(R.string.automations_approval_hint), style = typo.bodySmall, color = palette.warning)
-        }
+        AutomationRunControls(controls, onRun)
     }
-}
-
-@Composable
-private fun FailureLine(@StringRes action: Int, error: QueryError) {
-    Text(
-        text = stringResource(action, automationErrorText(error)),
-        style = TroupeTheme.typography.bodySmall,
-        color = TroupeTheme.palette.destructive,
-        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-    )
 }
 
 @Composable
@@ -203,7 +144,7 @@ private fun UnseenFailuresBadge(count: Int) {
 }
 
 @Composable
-private fun triggerLine(automation: Automation): String {
+internal fun triggerLine(automation: Automation): String {
     val resources = LocalResources.current
     return when (val summary = triggerSummary(automation.trigger)) {
         TriggerSummary.Manual -> stringResource(R.string.automations_trigger_manual)
@@ -221,16 +162,16 @@ private fun nextRunLine(automation: Automation): String =
 @Composable
 private fun lastRunLine(automation: Automation): String {
     val last = automation.lastRun ?: return stringResource(R.string.automations_no_runs)
-    val status = stringResource(
-        when (last.status) {
-            RunStatus.Running -> R.string.automations_run_status_running
-            RunStatus.Succeeded -> R.string.automations_run_status_succeeded
-            RunStatus.Failed -> R.string.automations_run_status_failed
-            RunStatus.Cancelled -> R.string.automations_run_status_cancelled
-            RunStatus.Skipped -> R.string.automations_run_status_skipped
-        },
-    )
-    return stringResource(R.string.automations_last_run, status, formatDateTime(last.finishedAt))
+    return stringResource(R.string.automations_last_run, stringResource(runStatusRes(last.status)), formatDateTime(last.finishedAt))
+}
+
+@StringRes
+internal fun runStatusRes(status: RunStatus): Int = when (status) {
+    RunStatus.Running -> R.string.automations_run_status_running
+    RunStatus.Succeeded -> R.string.automations_run_status_succeeded
+    RunStatus.Failed -> R.string.automations_run_status_failed
+    RunStatus.Cancelled -> R.string.automations_run_status_cancelled
+    RunStatus.Skipped -> R.string.automations_run_status_skipped
 }
 
 /** Local wall-clock time such as "Mon, Oct 30, 9:00 AM"; the year shows only when it is not the current one. */

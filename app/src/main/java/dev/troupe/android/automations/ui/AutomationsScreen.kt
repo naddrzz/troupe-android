@@ -42,10 +42,11 @@ private fun AutomationsRoutes(controller: AutomationsController, viewOnly: Boole
     BackHandler(enabled = ui.route != Route.Overview) { controller.back() }
     when (ui.route) {
         Route.Overview -> AutomationListScreen(controller, ui, viewOnly, modifier)
-        // Replaced by the detail and run screens.
-        is Route.Detail, is Route.Run -> Box(modifier.fillMaxSize().background(TroupeTheme.palette.background)) {
+        is Route.Detail -> AutomationDetailRoute(controller, ui, viewOnly, modifier)
+        // Replaced by the run screen.
+        is Route.Run -> Box(modifier.fillMaxSize().background(TroupeTheme.palette.background)) {
             Text(
-                text = stringResource(R.string.automations_detail_placeholder),
+                text = stringResource(R.string.automations_run_placeholder),
                 style = TroupeTheme.typography.bodyMedium,
                 color = TroupeTheme.palette.mutedForeground,
                 textAlign = TextAlign.Center,
