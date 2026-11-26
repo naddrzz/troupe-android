@@ -359,7 +359,7 @@
     <string name="snapshots_save">Create</string>
     <string name="snapshots_restore">Restore</string>
     <string name="snapshots_empty">No snapshots yet</string>
-    <string name="automations_empty">No automations configured for this project yet.</string>
+    <string name="automations_empty">No automations in this project yet. Create one from Troupe on your computer.</string>
     <string name="automations_run">Run</string>
     <string name="automations_loading">Loading automations</string>
     <string name="automations_retry">Retry</string>
