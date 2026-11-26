@@ -1,0 +1,280 @@
+{
+  "_source": "composed from naddrzz/troupe src/shared/types/__fixtures__/automation.json (automation graph: http, agent, condition, transform, fail; runs[0].graph: for_each, transform, merge, wait, approval) and the mcp_tool node \"lookup\" from the \"ops\" key of the same file; field names per src/shared/types/automation.types.ts; extra edges are only the glue that chains them",
+  "id": "auto-kitchen-sink",
+  "project_id": "project-1",
+  "name": "Kitchen sink",
+  "revision": 3,
+  "approved_revision": 3,
+  "enabled": false,
+  "trigger": {
+    "kind": "schedule",
+    "schedule": {
+      "kind": "every",
+      "every_ms": 900000,
+      "anchor_ms": 0
+    }
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "fetch",
+        "label": "Fetch items",
+        "spec": {
+          "kind": "http",
+          "method": "GET",
+          "url": "https://api.example.com/items?since={{trigger.scheduled_for}}",
+          "headers": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{secrets.API_KEY}}"
+            }
+          ],
+          "body": null,
+          "allowed_hosts": [
+            "api.example.com"
+          ]
+        }
+      },
+      {
+        "id": "extract",
+        "label": "Extract",
+        "spec": {
+          "kind": "agent",
+          "agent_id": "claude",
+          "model": "sonnet",
+          "prompt": "Summarize {{nodes.fetch.output.items}}",
+          "output_schema": {
+            "type": "object",
+            "properties": {
+              "summary": {
+                "type": "string"
+              },
+              "urgent": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "summary",
+              "urgent"
+            ]
+          },
+          "timeout_ms": 120000,
+          "max_attempts": 2,
+          "tools": [
+            "search",
+            "read",
+            "search"
+          ],
+          "mcp_servers": null
+        }
+      },
+      {
+        "id": "check",
+        "label": "Urgent?",
+        "spec": {
+          "kind": "condition",
+          "left": "{{nodes.extract.output.urgent}}",
+          "op": "eq",
+          "right": "true"
+        }
+      },
+      {
+        "id": "shape",
+        "label": "Shape",
+        "spec": {
+          "kind": "transform",
+          "fields": [
+            {
+              "name": "text",
+              "value": "{{nodes.extract.output.summary}}"
+            }
+          ]
+        }
+      },
+      {
+        "id": "post",
+        "label": "Notify",
+        "spec": {
+          "kind": "http",
+          "method": "POST",
+          "url": "https://hooks.example.com/notify",
+          "headers": [
+            {
+              "name": "X-Key",
+              "value": "{{secrets.HOOK_KEY}}"
+            }
+          ],
+          "body": "{{nodes.shape.output}}",
+          "allowed_hosts": [
+            "hooks.example.com"
+          ]
+        }
+      },
+      {
+        "id": "alert",
+        "label": "Fetch failed",
+        "spec": {
+          "kind": "fail",
+          "message": "fetch failed"
+        }
+      },
+      {
+        "id": "lookup",
+        "label": "Lookup",
+        "spec": {
+          "kind": "mcp_tool",
+          "server_id": "srv-github",
+          "tool": "search",
+          "arguments": [],
+          "timeout_ms": 60000
+        }
+      },
+      {
+        "id": "each",
+        "label": "Each item",
+        "spec": {
+          "kind": "for_each",
+          "items": "{{trigger.kind}}",
+          "max_iterations": 5
+        }
+      },
+      {
+        "id": "body",
+        "label": "Body",
+        "spec": {
+          "kind": "transform",
+          "fields": [
+            {
+              "name": "item",
+              "value": "{{nodes.each.item.name}}"
+            },
+            {
+              "name": "index",
+              "value": "{{nodes.each.index}}"
+            }
+          ]
+        }
+      },
+      {
+        "id": "join",
+        "label": "Join",
+        "spec": {
+          "kind": "merge",
+          "mode": "any"
+        }
+      },
+      {
+        "id": "pause",
+        "label": "Pause",
+        "spec": {
+          "kind": "wait",
+          "duration_ms": 3600000
+        }
+      },
+      {
+        "id": "gate",
+        "label": "Ship it?",
+        "spec": {
+          "kind": "approval",
+          "message": "Ship {{nodes.body.output.item}}?",
+          "timeout_ms": 86400000
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "trigger",
+        "port": "out",
+        "to": "fetch"
+      },
+      {
+        "from": "fetch",
+        "port": "out",
+        "to": "extract"
+      },
+      {
+        "from": "fetch",
+        "port": "error",
+        "to": "alert"
+      },
+      {
+        "from": "extract",
+        "port": "out",
+        "to": "check"
+      },
+      {
+        "from": "check",
+        "port": "true",
+        "to": "shape"
+      },
+      {
+        "from": "shape",
+        "port": "out",
+        "to": "post"
+      },
+      {
+        "from": "post",
+        "port": "out",
+        "to": "lookup"
+      },
+      {
+        "from": "lookup",
+        "port": "out",
+        "to": "each"
+      },
+      {
+        "from": "each",
+        "port": "item",
+        "to": "body"
+      },
+      {
+        "from": "each",
+        "port": "out",
+        "to": "join"
+      },
+      {
+        "from": "each",
+        "port": "error",
+        "to": "join"
+      },
+      {
+        "from": "join",
+        "port": "out",
+        "to": "pause"
+      },
+      {
+        "from": "pause",
+        "port": "out",
+        "to": "gate"
+      },
+      {
+        "from": "gate",
+        "port": "error",
+        "to": "alert"
+      }
+    ]
+  },
+  "layout": {
+    "extract": {
+      "x": 480,
+      "y": -16
+    },
+    "fetch": {
+      "x": 240,
+      "y": 40.5
+    },
+    "trigger": {
+      "x": 0,
+      "y": 40
+    }
+  },
+  "isolation": "worktree_per_run",
+  "next_run_at": null,
+  "consecutive_errors": 0,
+  "schedule_error_count": 0,
+  "unseen_failures": 0,
+  "last_run": null,
+  "created_at": 1000,
+  "updated_at": 1000,
+  "deleted_at": null
+}

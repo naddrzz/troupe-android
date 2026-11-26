@@ -1,0 +1,7 @@
+{
+  "_source": "brief for Task 1 (event name automation_resync in src-tauri/src/automation/model.rs; lagged-forwarder resync asserted in src-tauri/src/web/automation_api_tests.rs a_lagged_forwarder_tells_the_agents_watch_to_resync)",
+  "event": "automation_resync",
+  "payload": {
+    "missed": 3
+  }
+}

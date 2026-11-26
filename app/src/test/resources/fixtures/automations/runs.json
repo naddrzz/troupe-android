@@ -1,0 +1,437 @@
+{
+  "success": true,
+  "data": [
+    {
+      "id": "run-1",
+      "automation_id": "auto-1",
+      "revision": 1,
+      "graph": {
+        "nodes": [
+          {
+            "id": "each",
+            "label": "Each item",
+            "spec": {
+              "kind": "for_each",
+              "items": "{{trigger.kind}}",
+              "max_iterations": 5
+            }
+          },
+          {
+            "id": "body",
+            "label": "Body",
+            "spec": {
+              "kind": "transform",
+              "fields": [
+                {
+                  "name": "item",
+                  "value": "{{nodes.each.item.name}}"
+                },
+                {
+                  "name": "index",
+                  "value": "{{nodes.each.index}}"
+                }
+              ]
+            }
+          },
+          {
+            "id": "join",
+            "label": "Join",
+            "spec": {
+              "kind": "merge",
+              "mode": "any"
+            }
+          },
+          {
+            "id": "pause",
+            "label": "Pause",
+            "spec": {
+              "kind": "wait",
+              "duration_ms": 3600000
+            }
+          },
+          {
+            "id": "gate",
+            "label": "Ship it?",
+            "spec": {
+              "kind": "approval",
+              "message": "Ship {{nodes.body.output.item}}?",
+              "timeout_ms": 86400000
+            }
+          },
+          {
+            "id": "stop",
+            "label": "Stop",
+            "spec": {
+              "kind": "fail",
+              "message": "{{trigger.kind}}"
+            }
+          },
+          {
+            "id": "triage",
+            "label": "Triage",
+            "spec": {
+              "kind": "agent",
+              "agent_id": "claude",
+              "model": null,
+              "prompt": "Triage",
+              "output_schema": {
+                "type": "object"
+              },
+              "timeout_ms": 60000,
+              "max_attempts": 1,
+              "tools": [
+                "other"
+              ],
+              "mcp_servers": [
+                "srv-github"
+              ]
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "trigger",
+            "port": "out",
+            "to": "each"
+          },
+          {
+            "from": "each",
+            "port": "item",
+            "to": "body"
+          },
+          {
+            "from": "each",
+            "port": "out",
+            "to": "join"
+          },
+          {
+            "from": "each",
+            "port": "error",
+            "to": "join"
+          },
+          {
+            "from": "join",
+            "port": "out",
+            "to": "pause"
+          },
+          {
+            "from": "pause",
+            "port": "out",
+            "to": "gate"
+          },
+          {
+            "from": "gate",
+            "port": "out",
+            "to": "stop"
+          },
+          {
+            "from": "gate",
+            "port": "error",
+            "to": "stop"
+          }
+        ]
+      },
+      "trigger": "scheduled",
+      "scheduled_for": 1773046800000,
+      "status": "failed",
+      "started_at": 1773046800100,
+      "finished_at": 1773046860000,
+      "stop_reason": "node post failed",
+      "summary": null,
+      "conversation_id": null,
+      "worktree_id": "wt-1",
+      "parked": null
+    },
+    {
+      "id": "run-2",
+      "automation_id": "auto-1",
+      "revision": 1,
+      "graph": {
+        "nodes": [
+          {
+            "id": "each",
+            "label": "Each item",
+            "spec": {
+              "kind": "for_each",
+              "items": "{{trigger.kind}}",
+              "max_iterations": 5
+            }
+          },
+          {
+            "id": "body",
+            "label": "Body",
+            "spec": {
+              "kind": "transform",
+              "fields": [
+                {
+                  "name": "item",
+                  "value": "{{nodes.each.item.name}}"
+                },
+                {
+                  "name": "index",
+                  "value": "{{nodes.each.index}}"
+                }
+              ]
+            }
+          },
+          {
+            "id": "join",
+            "label": "Join",
+            "spec": {
+              "kind": "merge",
+              "mode": "any"
+            }
+          },
+          {
+            "id": "pause",
+            "label": "Pause",
+            "spec": {
+              "kind": "wait",
+              "duration_ms": 3600000
+            }
+          },
+          {
+            "id": "gate",
+            "label": "Ship it?",
+            "spec": {
+              "kind": "approval",
+              "message": "Ship {{nodes.body.output.item}}?",
+              "timeout_ms": 86400000
+            }
+          },
+          {
+            "id": "stop",
+            "label": "Stop",
+            "spec": {
+              "kind": "fail",
+              "message": "{{trigger.kind}}"
+            }
+          },
+          {
+            "id": "triage",
+            "label": "Triage",
+            "spec": {
+              "kind": "agent",
+              "agent_id": "claude",
+              "model": null,
+              "prompt": "Triage",
+              "output_schema": {
+                "type": "object"
+              },
+              "timeout_ms": 60000,
+              "max_attempts": 1,
+              "tools": [
+                "other"
+              ],
+              "mcp_servers": [
+                "srv-github"
+              ]
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "trigger",
+            "port": "out",
+            "to": "each"
+          },
+          {
+            "from": "each",
+            "port": "item",
+            "to": "body"
+          },
+          {
+            "from": "each",
+            "port": "out",
+            "to": "join"
+          },
+          {
+            "from": "each",
+            "port": "error",
+            "to": "join"
+          },
+          {
+            "from": "join",
+            "port": "out",
+            "to": "pause"
+          },
+          {
+            "from": "pause",
+            "port": "out",
+            "to": "gate"
+          },
+          {
+            "from": "gate",
+            "port": "out",
+            "to": "stop"
+          },
+          {
+            "from": "gate",
+            "port": "error",
+            "to": "stop"
+          }
+        ]
+      },
+      "trigger": "catch_up",
+      "scheduled_for": 1773046800000,
+      "status": "running",
+      "started_at": 1773046800100,
+      "finished_at": null,
+      "stop_reason": null,
+      "summary": null,
+      "conversation_id": null,
+      "worktree_id": null,
+      "parked": {
+        "node_id": "pause",
+        "iteration": null,
+        "until": 1773050461000
+      }
+    },
+    {
+      "id": "run-3",
+      "automation_id": "auto-1",
+      "revision": 1,
+      "graph": {
+        "nodes": [
+          {
+            "id": "each",
+            "label": "Each item",
+            "spec": {
+              "kind": "for_each",
+              "items": "{{trigger.kind}}",
+              "max_iterations": 5
+            }
+          },
+          {
+            "id": "body",
+            "label": "Body",
+            "spec": {
+              "kind": "transform",
+              "fields": [
+                {
+                  "name": "item",
+                  "value": "{{nodes.each.item.name}}"
+                },
+                {
+                  "name": "index",
+                  "value": "{{nodes.each.index}}"
+                }
+              ]
+            }
+          },
+          {
+            "id": "join",
+            "label": "Join",
+            "spec": {
+              "kind": "merge",
+              "mode": "any"
+            }
+          },
+          {
+            "id": "pause",
+            "label": "Pause",
+            "spec": {
+              "kind": "wait",
+              "duration_ms": 3600000
+            }
+          },
+          {
+            "id": "gate",
+            "label": "Ship it?",
+            "spec": {
+              "kind": "approval",
+              "message": "Ship {{nodes.body.output.item}}?",
+              "timeout_ms": 86400000
+            }
+          },
+          {
+            "id": "stop",
+            "label": "Stop",
+            "spec": {
+              "kind": "fail",
+              "message": "{{trigger.kind}}"
+            }
+          },
+          {
+            "id": "triage",
+            "label": "Triage",
+            "spec": {
+              "kind": "agent",
+              "agent_id": "claude",
+              "model": null,
+              "prompt": "Triage",
+              "output_schema": {
+                "type": "object"
+              },
+              "timeout_ms": 60000,
+              "max_attempts": 1,
+              "tools": [
+                "other"
+              ],
+              "mcp_servers": [
+                "srv-github"
+              ]
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "trigger",
+            "port": "out",
+            "to": "each"
+          },
+          {
+            "from": "each",
+            "port": "item",
+            "to": "body"
+          },
+          {
+            "from": "each",
+            "port": "out",
+            "to": "join"
+          },
+          {
+            "from": "each",
+            "port": "error",
+            "to": "join"
+          },
+          {
+            "from": "join",
+            "port": "out",
+            "to": "pause"
+          },
+          {
+            "from": "pause",
+            "port": "out",
+            "to": "gate"
+          },
+          {
+            "from": "gate",
+            "port": "out",
+            "to": "stop"
+          },
+          {
+            "from": "gate",
+            "port": "error",
+            "to": "stop"
+          }
+        ]
+      },
+      "trigger": "catch_up",
+      "scheduled_for": 1773046800000,
+      "status": "running",
+      "started_at": 1773046800100,
+      "finished_at": null,
+      "stop_reason": null,
+      "summary": null,
+      "conversation_id": null,
+      "worktree_id": null,
+      "parked": {
+        "node_id": "gate",
+        "iteration": 1,
+        "until": 1773133261000
+      }
+    }
+  ],
+  "_source": "naddrzz/troupe src/shared/types/__fixtures__/automation.json key \"runs\" (run-1 failed, run-2 running parked on a wait node, run-3 running parked on an approval node); envelope as asserted in src-tauri/src/web/automation_api_tests.rs"
+}
