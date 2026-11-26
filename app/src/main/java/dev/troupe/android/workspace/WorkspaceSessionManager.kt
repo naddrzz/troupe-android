@@ -149,7 +149,9 @@ class WorkspaceSessionManager @Inject constructor(
     private val hydratedServerId = MutableStateFlow<String?>(null)
 
     @Volatile private var activeConnection: ChatConnection? = null
-    @Volatile private var activeWatchHub: WatchHub? = null
+    private val activeWatchHub = MutableStateFlow<WatchHub?>(null)
+    /** The active server's adopted `WatchHub`; null until the connection is adopted and while it is replaced. */
+    val watchHub: StateFlow<WatchHub?> = activeWatchHub.asStateFlow()
     @Volatile private var activeStoreClient: WebStoreClient? = null
     @Volatile private var activeAgentSetup: AgentSetup? = null
     @Volatile private var explicitProjectSelection: Boolean = false
@@ -257,7 +259,7 @@ class WorkspaceSessionManager @Inject constructor(
     }
 
     fun currentStoreClient(): WebStoreClient? = activeStoreClient
-    fun currentWatchHub(): WatchHub? = activeWatchHub
+    fun currentWatchHub(): WatchHub? = activeWatchHub.value
     fun currentConnection(): ChatConnection? = activeConnection
     fun currentAgentSetup(): AgentSetup? = activeAgentSetup
 
@@ -590,7 +592,7 @@ class WorkspaceSessionManager @Inject constructor(
         terminalsWatchJob = null
         appSettingsStore.detach()
         activeConnection = null
-        activeWatchHub = null
+        activeWatchHub.value = null
         activeStoreClient = null
         activeAgentSetup = null
         explicitProjectSelection = false
@@ -651,7 +653,7 @@ class WorkspaceSessionManager @Inject constructor(
             carriedWrites = pendingTransferWrites?.takeIf { it.first == server.id }?.second
         }
         activeConnection = null
-        activeWatchHub = null
+        activeWatchHub.value = null
         activeStoreClient = null
         activeAgentSetup = null
         if (!rebindingSameServer) {
@@ -690,7 +692,7 @@ class WorkspaceSessionManager @Inject constructor(
                 if (writesToAdopt != null) {
                     store.adoptUnsentWrites(writesToAdopt, retryImmediately = false)
                 }
-                activeWatchHub = hub
+                activeWatchHub.value = hub
                 activeStoreClient = store
             } finally {
                 adopted.complete(Unit)
