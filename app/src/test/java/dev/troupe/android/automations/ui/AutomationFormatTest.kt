@@ -23,8 +23,12 @@ import dev.troupe.android.automations.state.QueryState
 import dev.troupe.android.automations.state.Route
 import dev.troupe.android.core.protocol.TroupeJson
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -319,5 +323,116 @@ class AutomationFormatTest {
         assertEquals(finished.finishedAt!! - finished.startedAt, runDurationMs(finished))
         assertNull(runDurationMs(runs.first { it.finishedAt == null }))
         assertEquals(0L, runDurationMs(finished.copy(finishedAt = finished.startedAt - 5)))
+    }
+
+    private val run1 = runs.first { it.id.value == "run-1" }
+    private val parkedOnWait = runs.first { it.id.value == "run-2" }
+    private val parkedOnApproval = runs.first { it.id.value == "run-3" }
+
+    @Test
+    fun runParkedOnAnApprovalNodeIsWaitingForApproval() {
+        assertTrue(isWaitingForApproval(parkedOnApproval))
+        assertEquals("gate", parkedApproval(parkedOnApproval)?.id?.value)
+    }
+
+    @Test
+    fun runParkedOnAWaitNodeKeepsReadingAsRunning() {
+        assertFalse(isWaitingForApproval(parkedOnWait))
+        assertNull(parkedApproval(parkedOnWait))
+    }
+
+    @Test
+    fun runThatIsNotParkedIsNotWaitingForApproval() {
+        assertFalse(isWaitingForApproval(parkedOnApproval.copy(parked = null)))
+        assertFalse(isWaitingForApproval(run1))
+    }
+
+    @Test
+    fun finishedRunIsNeverWaitingForApproval() {
+        assertFalse(isWaitingForApproval(parkedOnApproval.copy(status = RunStatus.Cancelled)))
+        assertFalse(isWaitingForApproval(parkedOnApproval.copy(status = RunStatus.Failed)))
+    }
+
+    @Test
+    fun parkOnANodeThatIsNotInTheGraphIsNoApproval() {
+        val parked = parkedOnApproval.parked!!
+        assertNull(parkedApproval(parkedOnApproval.copy(parked = parked.copy(nodeId = NodeId("gone")))))
+    }
+
+    @Test
+    fun approvalCardSitsOnTheParkedStepInTheParkedIteration() {
+        val prompt = approvalPrompt(parkedOnApproval, steps)!!
+        assertEquals("gate", prompt.step.nodeId.value)
+        assertEquals(1, prompt.step.iteration)
+        assertEquals("Ship b?", prompt.message)
+    }
+
+    @Test
+    fun approvalCardIgnoresOtherIterationsAndOtherRuns() {
+        val otherIteration = parkedOnApproval.copy(parked = parkedOnApproval.parked!!.copy(iteration = 0))
+        assertNull(approvalPrompt(otherIteration, steps))
+        assertNull(approvalPrompt(parkedOnApproval, steps.filter { it.runId.value != "run-3" }))
+    }
+
+    @Test
+    fun approvalCardNeedsAParkedApprovalRunAndLoadedSteps() {
+        assertNull(approvalPrompt(parkedOnWait, steps))
+        assertNull(approvalPrompt(run1, steps))
+        assertNull(approvalPrompt(parkedOnApproval, emptyList()))
+    }
+
+    @Test
+    fun approvalCardIsGoneOnceTheStepHasADecision() {
+        val decided = buildJsonObject {
+            put("message", "Ship b?")
+            put("decision", "approved")
+            put("decided_at", 1_773_046_900_000L)
+        }
+        val withDecision = steps.map { if (it.runId.value == "run-3") it.copy(output = decided) else it }
+        assertNull(approvalPrompt(parkedOnApproval, withDecision))
+    }
+
+    @Test
+    fun approvalCardNeedsAnApprovalShapedOutput() {
+        assertNull(approvalPrompt(parkedOnApproval, steps.map { if (it.runId.value == "run-3") it.copy(output = null) else it }))
+        assertNull(approvalPrompt(parkedOnApproval, steps.map { if (it.runId.value == "run-3") it.copy(output = buildJsonObject { put("items", 1) }) else it }))
+    }
+
+    @Test
+    fun aStepStoppedByACancelIsCancelledNotFailed() {
+        val failed = steps.first { it.status == StepStatus.Failed }
+        assertFalse(isCancelledStep(failed))
+        assertTrue(isCancelledStep(failed.copy(error = "cancelled")))
+        assertFalse(isCancelledStep(failed.copy(status = StepStatus.Skipped, error = "cancelled")))
+    }
+
+    @Test
+    fun labelOrIdFallsBackForABlankLabel() {
+        assertEquals("gate", labelOrId(mapOf(NodeId("gate") to "  "), NodeId("gate")))
+        assertEquals("Ship it?", labelOrId(mapOf(NodeId("gate") to "Ship it?"), NodeId("gate")))
+    }
+
+    @Test
+    fun noOutputOrJsonNullHasNothingToShow() {
+        val step = steps.first()
+        assertNull(displayedOutput(step.copy(output = null)))
+        assertNull(displayedOutput(step.copy(output = JsonNull)))
+        assertEquals(step.output, displayedOutput(step))
+    }
+
+    @Test
+    fun outputShowsAStringAsIsAndOtherJsonPrettyPrinted() {
+        assertEquals(OutputPreview("plain", truncated = false), outputPreview(JsonPrimitive("plain")))
+        val preview = outputPreview(buildJsonObject { put("a", 1) })
+        assertEquals("{\n    \"a\": 1\n}", preview.text)
+        assertFalse(preview.truncated)
+    }
+
+    @Test
+    fun hugeOutputIsCutAndSaysSo() {
+        val preview = outputPreview(JsonPrimitive("x".repeat(50)), maxChars = 20)
+        assertEquals(OutputPreview("x".repeat(20), truncated = true), preview)
+        assertEquals(OutputPreview("x".repeat(20), truncated = false), outputPreview(JsonPrimitive("x".repeat(20)), maxChars = 20))
+        assertEquals(OUTPUT_PREVIEW_CHARS, outputPreview(JsonPrimitive("y".repeat(OUTPUT_PREVIEW_CHARS * 3))).text.length)
     }
 }

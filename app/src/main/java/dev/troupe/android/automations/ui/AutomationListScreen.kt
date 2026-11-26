@@ -32,6 +32,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.troupe.android.R
 import dev.troupe.android.automations.protocol.Automation
+import dev.troupe.android.automations.protocol.AutomationRun
 import dev.troupe.android.automations.protocol.RunStatus
 import dev.troupe.android.automations.state.AutomationsController
 import dev.troupe.android.automations.state.AutomationsUi
@@ -173,6 +174,11 @@ internal fun runStatusRes(status: RunStatus): Int = when (status) {
     RunStatus.Cancelled -> R.string.automations_run_status_cancelled
     RunStatus.Skipped -> R.string.automations_run_status_skipped
 }
+
+/** A run's status word: one parked on an approval reads as waiting for it, as the web does. */
+@StringRes
+internal fun runStatusRes(run: AutomationRun): Int =
+    if (isWaitingForApproval(run)) R.string.automations_run_status_waiting_for_approval else runStatusRes(run.status)
 
 /** Local wall-clock time such as "Mon, Oct 30, 9:00 AM"; the year shows only when it is not the current one. */
 @Composable

@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
@@ -24,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -122,6 +124,10 @@ fun AutomationDetailScreen(
                 onRun = { controller.runNow(automation.id) },
             )
         }
+        val awaiting = ui.runs?.data?.firstOrNull(::isWaitingForApproval)
+        if (awaiting != null) {
+            item(key = "awaiting") { AwaitingApprovalStrip(onReview = { controller.openRun(awaiting.id) }) }
+        }
         item(key = "trigger") { TriggerSection(automation, detail.policy, Modifier.padding(top = 8.dp)) }
         item(key = "policy") { RunPolicyCard(automation, detail.policy, Modifier.padding(top = 8.dp)) }
         item(key = "issues") { IssuesSection(detail.issues, nodeLabels(automation.graph), Modifier.padding(top = 8.dp)) }
@@ -163,6 +169,34 @@ private fun DetailHeader(automation: Automation, controls: AutomationControls, o
             }
         }
         AutomationRunControls(controls, onRun)
+    }
+}
+
+/** Points at a run that waits for a decision, as the web's detail header does. */
+@Composable
+private fun AwaitingApprovalStrip(onReview: () -> Unit) {
+    val warning = TroupeTheme.palette.warning
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(warning.copy(alpha = 0.12f))
+            .padding(start = 12.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.automations_awaiting_approval),
+            style = TroupeTheme.typography.bodyMedium,
+            color = warning,
+            modifier = Modifier.weight(1f),
+        )
+        TroupeButton(
+            text = stringResource(R.string.automations_review),
+            variant = TroupeButtonVariant.Ghost,
+            minHeight = 48.dp,
+            onClick = onReview,
+        )
     }
 }
 
@@ -209,11 +243,7 @@ private fun IssuesSection(issues: List<Issue>, labels: Map<NodeId, String>, modi
                 text = if (nodeLabel != null) stringResource(R.string.automations_issue_on_node, nodeLabel, issue.message) else issue.message,
                 style = typo.bodySmall,
                 color = palette.destructive,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(palette.destructive.copy(alpha = 0.12f))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                modifier = Modifier.automationErrorBox(),
             )
         }
     }
@@ -271,22 +301,56 @@ private fun RunsNote(@StringRes text: Int) {
     Text(stringResource(text), style = TroupeTheme.typography.bodyMedium, color = TroupeTheme.palette.mutedForeground)
 }
 
+/** The run's colour: a run waiting for an approval asks for the user, so it takes the warning tone. */
 @Composable
-private fun RunRow(run: AutomationRun, onOpen: () -> Unit) {
+internal fun runStatusColor(run: AutomationRun): Color {
+    val palette = TroupeTheme.palette
+    return when {
+        isWaitingForApproval(run) -> palette.warning
+        else -> when (run.status) {
+            RunStatus.Running -> palette.brandText
+            RunStatus.Succeeded -> palette.success
+            RunStatus.Failed -> palette.destructive
+            RunStatus.Cancelled, RunStatus.Skipped -> palette.mutedForeground
+        }
+    }
+}
+
+/** What the run is, in words: its trigger and its status, such as "Manual run, waiting for approval". */
+@Composable
+internal fun runTitle(run: AutomationRun): String =
+    stringResource(R.string.automations_run_row_title, stringResource(runTriggerRes(run.trigger)), stringResource(runStatusRes(run)))
+
+/** When the run started and finished, why it stopped and its summary; shared by the history row and the run header. */
+@Composable
+internal fun ColumnScope.RunSummaryLines(run: AutomationRun, summaryMaxLines: Int) {
     val palette = TroupeTheme.palette
     val typo = TroupeTheme.typography
     val resources = LocalResources.current
-    val statusColor = when (run.status) {
-        RunStatus.Running -> palette.brandText
-        RunStatus.Succeeded -> palette.success
-        RunStatus.Failed -> palette.destructive
-        RunStatus.Cancelled, RunStatus.Skipped -> palette.mutedForeground
-    }
-    val title = stringResource(R.string.automations_run_row_title, stringResource(runTriggerRes(run.trigger)), stringResource(runStatusRes(run.status)))
     val duration = runDurationMs(run)
     val finishedAt = run.finishedAt
     val stopReason = run.stopReason?.takeUnless { it.isBlank() }
     val summary = run.summary?.takeUnless { it.isBlank() }
+    Text(stringResource(R.string.automations_run_started, formatDateTime(run.startedAt)), style = typo.bodySmall.tabularNums(), color = palette.mutedForeground)
+    if (finishedAt != null && duration != null) {
+        Text(
+            text = stringResource(R.string.automations_run_finished, formatDateTime(finishedAt), formatDuration(resources, duration)),
+            style = typo.bodySmall.tabularNums(),
+            color = palette.mutedForeground,
+        )
+    }
+    if (stopReason != null) {
+        Text(stringResource(R.string.automations_run_stop_reason, stopReason), style = typo.bodySmall, color = palette.mutedForeground)
+    }
+    if (summary != null) {
+        Text(summary, style = typo.bodySmall, color = palette.foreground, maxLines = summaryMaxLines, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun RunRow(run: AutomationRun, onOpen: () -> Unit) {
+    val palette = TroupeTheme.palette
+    val typo = TroupeTheme.typography
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -298,21 +362,8 @@ private fun RunRow(run: AutomationRun, onOpen: () -> Unit) {
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        Text(title, style = typo.titleSmall, color = statusColor)
-        Text(stringResource(R.string.automations_run_started, formatDateTime(run.startedAt)), style = typo.bodySmall.tabularNums(), color = palette.mutedForeground)
-        if (finishedAt != null && duration != null) {
-            Text(
-                text = stringResource(R.string.automations_run_finished, formatDateTime(finishedAt), formatDuration(resources, duration)),
-                style = typo.bodySmall.tabularNums(),
-                color = palette.mutedForeground,
-            )
-        }
-        if (stopReason != null) {
-            Text(stringResource(R.string.automations_run_stop_reason, stopReason), style = typo.bodySmall, color = palette.mutedForeground)
-        }
-        if (summary != null) {
-            Text(summary, style = typo.bodySmall, color = palette.foreground, maxLines = 3, overflow = TextOverflow.Ellipsis)
-        }
+        Text(runTitle(run), style = typo.titleSmall, color = runStatusColor(run))
+        RunSummaryLines(run, summaryMaxLines = 3)
     }
 }
 
@@ -337,6 +388,13 @@ internal fun Modifier.automationCard(): Modifier {
         .border(0.5.dp, TroupeTheme.palette.border, shape)
 }
 
+/** The tinted box of a graph issue and of a step's error. */
+@Composable
+internal fun Modifier.automationErrorBox(): Modifier = fillMaxWidth()
+    .clip(RoundedCornerShape(8.dp))
+    .background(TroupeTheme.palette.destructive.copy(alpha = 0.12f))
+    .padding(horizontal = 12.dp, vertical = 8.dp)
+
 @StringRes
 private fun nodeKindRes(kind: NodeKind): Int = when (kind) {
     NodeKind.Http -> R.string.automations_node_http
@@ -352,7 +410,7 @@ private fun nodeKindRes(kind: NodeKind): Int = when (kind) {
 }
 
 @StringRes
-private fun runTriggerRes(trigger: RunTrigger): Int = when (trigger) {
+internal fun runTriggerRes(trigger: RunTrigger): Int = when (trigger) {
     RunTrigger.Scheduled -> R.string.automations_run_trigger_scheduled
     RunTrigger.CatchUp -> R.string.automations_run_trigger_catch_up
     RunTrigger.Manual -> R.string.automations_run_trigger_manual

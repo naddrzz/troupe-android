@@ -1,6 +1,7 @@
 package dev.troupe.android.automations.ui
 
 import dev.troupe.android.automations.protocol.Automation
+import dev.troupe.android.automations.protocol.AutomationNode
 import dev.troupe.android.automations.protocol.AutomationRun
 import dev.troupe.android.automations.protocol.AutomationStep
 import dev.troupe.android.automations.protocol.Graph
@@ -8,13 +9,19 @@ import dev.troupe.android.automations.protocol.Issue
 import dev.troupe.android.automations.protocol.NodeId
 import dev.troupe.android.automations.protocol.NodeSpec
 import dev.troupe.android.automations.protocol.RunPolicy
+import dev.troupe.android.automations.protocol.RunStatus
 import dev.troupe.android.automations.protocol.Schedule
 import dev.troupe.android.automations.protocol.StepStatus
 import dev.troupe.android.automations.protocol.Trigger
+import dev.troupe.android.automations.protocol.parseApprovalOutput
 import dev.troupe.android.automations.state.AutomationsUi
 import dev.troupe.android.automations.state.Control
 import dev.troupe.android.automations.state.ControlAction
 import dev.troupe.android.automations.state.QueryError
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
 
 /** What a trigger reads as; the screens map each variant to a string resource. */
 sealed interface TriggerSummary {
@@ -112,10 +119,10 @@ data class OutlineRow(val kind: NodeKind, val label: String)
 fun graphOutline(graph: Graph): List<OutlineRow> =
     graph.nodes.map { OutlineRow(nodeKind(it.spec), it.label.ifBlank { it.id.value }) }
 
-/** Node labels by id; a policy entry or issue whose node is not in the graph falls back to the id. */
+/** Node labels by id; a policy entry, issue or step whose node is not in the graph, or has a blank label, falls back to the id. */
 fun nodeLabels(graph: Graph): Map<NodeId, String> = graph.nodes.associate { it.id to it.label }
 
-fun labelOrId(labels: Map<NodeId, String>, id: NodeId): String = labels[id] ?: id.value
+fun labelOrId(labels: Map<NodeId, String>, id: NodeId): String = labels[id]?.takeUnless { it.isBlank() } ?: id.value
 
 /** The node an issue names, as the graph labels it; null when it names none or one that is not in the graph. */
 fun issueNodeLabel(issue: Issue, labels: Map<NodeId, String>): String? = issue.nodeId?.let { labels[it] }
@@ -142,3 +149,48 @@ fun cardFailures(enable: QueryError?, run: QueryError?, viewOnly: Boolean, appro
     } else {
         CardFailures(enable, run?.takeUnless { it == QueryError.NotApproved && approvalHintShown })
     }
+
+/** The approval node a run is parked on, from the run's own graph; null when it is not parked or is parked on a wait. */
+fun parkedApproval(run: AutomationRun): AutomationNode? {
+    val parked = run.parked ?: return null
+    return run.graph.nodes.firstOrNull { it.id == parked.nodeId }?.takeIf { it.spec is NodeSpec.Approval }
+}
+
+/** A run parked on an approval reads as waiting for it while its status stays `Running`, as in the web's `runStatusPresentation`. */
+fun isWaitingForApproval(run: AutomationRun): Boolean = run.status == RunStatus.Running && parkedApproval(run) != null
+
+/** The approval card's step and the message it shows. */
+data class ApprovalPrompt(val step: AutomationStep, val message: String)
+
+/**
+ * The step that carries the approval card: the row of the node the run is parked on, in the parked iteration, while
+ * its output has a message and no decision yet. Null when the run is not waiting for an approval or the row is not
+ * loaded yet.
+ */
+fun approvalPrompt(run: AutomationRun, steps: List<AutomationStep>): ApprovalPrompt? {
+    val parked = run.parked?.takeIf { isWaitingForApproval(run) } ?: return null
+    val step = steps.firstOrNull { it.runId == run.id && it.nodeId == parked.nodeId && it.iteration == parked.iteration } ?: return null
+    val output = parseApprovalOutput(step.output) ?: return null
+    return if (output.decision == null) ApprovalPrompt(step, output.message) else null
+}
+
+/** The error a step records when a cancel stops it; the web shows such a step as cancelled, not failed. */
+private const val CANCELLED_ERROR = "cancelled"
+
+fun isCancelledStep(step: AutomationStep): Boolean = step.status == StepStatus.Failed && step.error == CANCELLED_ERROR
+
+/** The output a step shows; null when it has none or it is JSON null. */
+fun displayedOutput(step: AutomationStep): JsonElement? = step.output?.takeUnless { it is JsonNull }
+
+/** Output text shows at most this many characters, so a huge output cannot freeze the screen. */
+const val OUTPUT_PREVIEW_CHARS = 10_000
+
+data class OutputPreview(val text: String, val truncated: Boolean)
+
+private val prettyJson = Json { prettyPrint = true }
+
+/** A step output as text, as the web shows it: a string as is, anything else pretty-printed; cut at [maxChars]. */
+fun outputPreview(output: JsonElement, maxChars: Int = OUTPUT_PREVIEW_CHARS): OutputPreview {
+    val text = if (output is JsonPrimitive && output.isString) output.content else prettyJson.encodeToString(JsonElement.serializer(), output)
+    return if (text.length > maxChars) OutputPreview(text.take(maxChars), truncated = true) else OutputPreview(text, truncated = false)
+}

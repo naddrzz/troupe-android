@@ -70,8 +70,9 @@ internal fun AutomationRunControls(controls: AutomationControls, onRun: () -> Un
     }
 }
 
+/** One line under a control: what could not be done, and why. Announced when it appears. */
 @Composable
-private fun FailureLine(@StringRes action: Int, error: QueryError) {
+internal fun FailureLine(@StringRes action: Int, error: QueryError) {
     Text(
         text = stringResource(action, automationErrorText(error)),
         style = TroupeTheme.typography.bodySmall,
