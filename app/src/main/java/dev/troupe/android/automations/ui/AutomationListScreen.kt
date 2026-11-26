@@ -16,9 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,7 +42,6 @@ import dev.troupe.android.core.ui.StatusDot
  * The overview route: the project's Automations as the server sent them, inside pull-to-refresh. Once the list has
  * data it stays on screen through reloads and errors; a failed reload shows a banner above it.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AutomationListScreen(
     controller: AutomationsController,
@@ -55,8 +52,8 @@ fun AutomationListScreen(
     val list = ui.list
     val automations = list.data
     val error = list.error
-    PullToRefreshBox(
-        isRefreshing = list.refreshing,
+    AutomationPullToRefresh(
+        busy = list.refreshing,
         onRefresh = controller::refresh,
         modifier = modifier.fillMaxSize().background(TroupeTheme.palette.background),
     ) {

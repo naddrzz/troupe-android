@@ -20,10 +20,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
@@ -32,10 +30,8 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -74,14 +70,10 @@ import dev.troupe.android.core.ui.TroupeButtonVariant
 import dev.troupe.android.core.ui.TroupeIcons
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonElement
 
 private const val TICK_MS = 1_000L
-private const val PULL_MIN_MS = 600L
-private const val PULL_MAX_MS = 10_000L
 
 /**
  * The run route: a way back to the automation, the notice about an approval someone else handled, then the run. The
@@ -113,7 +105,8 @@ fun RunDetailRoute(
         when {
             run != null -> RunDetailScreen(ui, run, controller, viewOnly, Modifier.weight(1f))
             runsError != null -> AutomationErrorView(runsError, retrying = runs.refreshing, onRetry = controller::refresh, modifier = Modifier.weight(1f))
-            runs?.loaded == true -> RunMessage(R.string.automations_run_missing, Modifier.weight(1f))
+            // A reload may be about to bring a run just started, so only a settled history can lack it.
+            runs?.loaded == true && !runs.refreshing -> RunMessage(R.string.automations_run_missing, Modifier.weight(1f))
             else -> AutomationLoadingView(Modifier.weight(1f))
         }
     }
@@ -163,7 +156,6 @@ private fun ApprovalHandledNotice(onDismiss: () -> Unit) {
  * One run: its header with Cancel, then its steps. The steps follow the run live (the controller polls while it runs
  * and reloads on changes); a failed reload is a banner above the last good steps.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RunDetailScreen(
     ui: AutomationsUi,
@@ -180,22 +172,9 @@ fun RunDetailScreen(
     val now = rememberNowWhileWaiting(steps)
 
     // The steps reload on their own every few seconds while the run goes; only a pull shows the indicator.
-    var pulling by remember { mutableStateOf(false) }
-    val busy by rememberUpdatedState(query?.refreshing == true || ui.runs?.refreshing == true)
-    LaunchedEffect(pulling) {
-        if (pulling) {
-            delay(PULL_MIN_MS)
-            withTimeoutOrNull(PULL_MAX_MS) { snapshotFlow { busy }.first { !it } }
-            pulling = false
-        }
-    }
-
-    PullToRefreshBox(
-        isRefreshing = pulling,
-        onRefresh = {
-            pulling = true
-            controller.refresh()
-        },
+    AutomationPullToRefresh(
+        busy = query?.refreshing == true || ui.runs?.refreshing == true,
+        onRefresh = controller::refresh,
         modifier = modifier.fillMaxSize(),
     ) {
         LazyColumn(

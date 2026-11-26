@@ -60,9 +60,9 @@ data class AutomationsUi(
 /**
  * The Automations of one project: the list, plus the detail and run the user opened, and the controls. Each route's
  * queries are opened on entering it and closed on leaving it. A control is disabled while its request is in flight
- * and keeps its failure until it is used again. After a write the screen waits for the server's change event, or
- * re-reads once if none arrives within [REREAD_AFTER_MS]; after a failed write it re-reads at once, since a lost
- * reply may hide a write that was applied. Only while the screen is visible
+ * and keeps its failure until it is used again, the route changes or the user refreshes. After a write the screen
+ * waits for the server's change event, or re-reads once if none arrives within [REREAD_AFTER_MS]; after a failed
+ * write it re-reads at once, since a lost reply may hide a write that was applied. Only while the screen is visible
  * ([setVisible]) are running steps polled and failures marked seen. Everything runs in a child of [scope]; [close]
  * stops it.
  */
@@ -189,7 +189,9 @@ class AutomationsController(
         }
     }
 
+    /** Reloads every open query and drops the controls' failure lines; a failure of a request still in flight shows when it ends. */
     fun refresh() {
+        controls.update { it.copy(failures = emptyMap()) }
         reloadAll()
     }
 
@@ -251,7 +253,14 @@ class AutomationsController(
             affected = { listOfNotNull(list, detailOf(id), runsOf(id)) },
             call = { repo.runNow(id) },
             onOk = { run ->
-                synchronized(lock) { if (current.value.route == Route.Detail(id)) openRun(run.id) }
+                synchronized(lock) {
+                    val cur = current.value
+                    if (cur.route == Route.Detail(id)) {
+                        // Reloading first marks the runs refreshing, so the run route waits for the new run instead of calling it missing.
+                        cur.runs?.reload()
+                        openRun(run.id)
+                    }
+                }
                 false
             },
         )
@@ -303,9 +312,12 @@ class AutomationsController(
         job.cancel()
     }
 
-    /** Every route change goes through here and drops the notices: one is about the run that raised it, not the next screen. Callers hold [lock]. */
+    /**
+     * Every route change goes through here and drops the notices and failure lines: they are about the screen that
+     * raised them, not the next one. A request still in flight records its failure when it ends. Callers hold [lock].
+     */
     private fun show(next: Open) {
-        controls.update { it.copy(notices = emptyList()) }
+        controls.update { it.copy(notices = emptyList(), failures = emptyMap()) }
         current.value = next
     }
 

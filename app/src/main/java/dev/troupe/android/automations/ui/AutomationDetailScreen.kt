@@ -17,10 +17,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,7 +55,6 @@ import dev.troupe.android.core.ui.TroupeIcons
  * The detail route: a way back to the list, then the detail inside pull-to-refresh. Loading and a failed first load
  * show the list's state views; once the detail has data it stays on screen through reloads and errors.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AutomationDetailRoute(
     controller: AutomationsController,
@@ -77,8 +74,8 @@ fun AutomationDetailRoute(
             onClick = { controller.back() },
             modifier = Modifier.padding(horizontal = 4.dp),
         )
-        PullToRefreshBox(
-            isRefreshing = query?.refreshing == true || ui.runs?.refreshing == true,
+        AutomationPullToRefresh(
+            busy = query?.refreshing == true || ui.runs?.refreshing == true,
             onRefresh = controller::refresh,
             modifier = Modifier.weight(1f).fillMaxWidth(),
         ) {

@@ -13,6 +13,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -492,6 +493,79 @@ class AutomationsControllerTest {
         Thread.sleep(500)
         assertEquals(detailBefore + 1, hits(detailPath))
         assertEquals(runsBefore + 1, hits(runsPath))
+    }
+
+    @Test fun runNowFromDetailWaitsForTheNewRun() {
+        val newRun = RunId("run-1")
+        val started = AtomicBoolean(false)
+        val all = AutomationFixtures.load("runs.json")
+        val without = Json.parseToJsonElement(all).jsonObject.getValue("data").jsonArray
+            .filter { it.jsonObject["id"]?.jsonPrimitive?.content != newRun.value }
+        routes[runsPath] = { ok(if (started.get()) all else """{"success":true,"data":${JsonArray(without)}}""") }
+        routes[runPath] = {
+            started.set(true)
+            ok(runBody())
+        }
+        controller.open(id)
+        settle(runsPath)
+        eventually(message = { "ui: $ui" }) { ui.runs?.data?.none { it.id == newRun } == true }
+        // What the run route would call "not in the history any more": a settled history without the run.
+        val calledMissing = AtomicBoolean(false)
+        val watcher = scope.launch {
+            controller.ui.collect { u ->
+                val runs = u.runs
+                if (u.route == Route.Run(id, newRun) && runs != null && runs.loaded && !runs.refreshing && runs.data?.none { it.id == newRun } == true) {
+                    calledMissing.set(true)
+                }
+            }
+        }
+        val runsBefore = hits(runsPath)
+
+        controller.runNow(id)
+
+        eventually(message = { "ui: $ui" }) { ui.route == Route.Run(id, newRun) }
+        // Sooner than the fallback window: the runs re-read at once.
+        eventually(timeoutMs = 1_000, message = { "runs not re-read" }) { hits(runsPath) > runsBefore }
+        eventually(message = { "ui: $ui" }) { ui.runs?.data?.any { it.id == newRun } == true && ui.runs?.refreshing == false }
+        watcher.cancel()
+        assertFalse("the run route showed a settled history without the new run", calledMissing.get())
+    }
+
+    @Test fun failureLinesClearOnRefreshAndRouteChange() {
+        routes[listPath] = { ok(listBody(unapproved(AutomationFixtures.load("automation.json")))) }
+        val control = Control(id.value, ControlAction.Run)
+        controller
+        eventually(message = { "ui: $ui" }) { ui.list.data != null }
+
+        controller.runNow(id)
+        eventually(message = { "ui: $ui" }) { ui.failures[control] == QueryError.NotApproved }
+        controller.refresh()
+        eventually(message = { "refresh kept: ${ui.failures}" }) { ui.failures.isEmpty() }
+
+        controller.runNow(id)
+        eventually(message = { "ui: $ui" }) { ui.failures[control] == QueryError.NotApproved }
+        controller.open(id)
+        eventually(message = { "route change kept: ${ui.failures}" }) { ui.route == Route.Detail(id) && ui.failures.isEmpty() }
+    }
+
+    @Test fun failureOfRequestInFlightOutlivesRouteChangeAndRefresh() {
+        val release = CountDownLatch(1)
+        routes[enabledPath] = {
+            release.await(10, TimeUnit.SECONDS)
+            reply(500, """{"success":false,"error":"boom"}""")
+        }
+        val control = Control(id.value, ControlAction.Enable)
+        controller
+        settle(listPath)
+        controller.toggleEnabled(id, false)
+        eventually(message = { "ui: $ui" }) { control in ui.pending }
+
+        controller.open(id)
+        controller.refresh()
+        release.countDown()
+
+        eventually(message = { "ui: $ui" }) { control !in ui.pending }
+        assertTrue("failure: ${ui.failures[control]}", ui.failures[control] is QueryError.Server)
     }
 
     @Test fun backFromDetailClosesDetailQueries() {
