@@ -26,8 +26,8 @@ import java.util.concurrent.CopyOnWriteArrayList
  * `runTest`, which fails on exceptions other test classes' ViewModels leak after their Main dispatcher is reset.
  */
 class PerConnectionTest {
-    /** A hub stand-in with identity equality, as `WatchHub` has. */
-    private class Hub
+    /** A hub stand-in with identity equality, as `WatchHub` has, published with the server it belongs to. */
+    private class Hub(val serverId: String = "s1")
 
     private class Built(val server: String, val hub: Hub) {
         @Volatile var closed = false
@@ -40,7 +40,12 @@ class PerConnectionTest {
 
     @After fun tearDown() = scope.cancel()
 
-    private fun results() = perConnection(servers, hubs, close = { b: Built -> b.closed = true }) { server, hub ->
+    private fun results() = perConnection(
+        servers,
+        hubs,
+        sameServer = { server, hub -> server == hub.serverId },
+        close = { b: Built -> b.closed = true },
+    ) { server, hub ->
         Built(server, hub).also { built += it }
     }
 
@@ -94,26 +99,55 @@ class PerConnectionTest {
         assertEquals(2, built.size)
     }
 
-    @Test fun serverSwitchRebuildsAndDetachEmitsNull() {
+    @Test fun serverSwitchRebuildsOnItsOwnHubAndDetachEmitsNull() {
         val current = start()
         servers.value = "s1"
-        hubs.value = Hub()
+        hubs.value = Hub("s1")
         eventually { current.value != null }
         val first = current.value!!
 
         servers.value = "s2"
+        hubs.value = Hub("s2")
         eventually { current.value?.server == "s2" }
         assertTrue(first.closed)
+        assertEquals("s2", current.value?.hub?.serverId)
 
         servers.value = null
         eventually { current.value == null }
         assertTrue(built.all { it.closed })
     }
 
+    @Test fun aServerIsNeverPairedWithAnotherServersHub() {
+        val current = start()
+        servers.value = "s1"
+        val old = Hub("s1")
+        hubs.value = old
+        eventually { current.value != null }
+        val first = current.value!!
+
+        // The switch publishes the new server while the old server's hub is still out.
+        servers.value = "s2"
+        eventually { first.closed }
+        Thread.sleep(200)
+        assertNull("built on the old server's hub", current.value)
+        assertEquals("built for a mismatched pair", 1, built.size)
+
+        val fresh = Hub("s2")
+        hubs.value = fresh
+        eventually { current.value?.hub === fresh }
+        assertEquals("s2", current.value?.server)
+        assertEquals(2, built.size)
+    }
+
     @Test fun renamingTheServerKeepsTheResultButANewAddressRebuilds() {
         val box = PairedServer("s1", "Box", ServerAddress("http://127.0.0.1:1/".toHttpUrl()))
         val paired = MutableStateFlow<PairedServer?>(box)
-        val current = perConnection(paired.connectionKeys(), hubs, close = { b: Built -> b.closed = true }) { key, hub ->
+        val current = perConnection(
+            paired.connectionKeys(),
+            hubs,
+            sameServer = { key, hub -> key.id == hub.serverId },
+            close = { b: Built -> b.closed = true },
+        ) { key, hub ->
             Built(key.id, hub).also { built += it }
         }.stateIn(scope, SharingStarted.Eagerly, null)
         hubs.value = Hub()

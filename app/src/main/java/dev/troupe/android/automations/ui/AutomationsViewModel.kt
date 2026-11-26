@@ -59,9 +59,10 @@ class AutomationsViewModel @Inject constructor(
         val controller = perConnection(
             servers = session.state.map { it.activeServer }.connectionKeys(),
             hubs = session.watchHub,
+            sameServer = { key, active -> key.id == active.serverId },
             close = AutomationsController::close,
-        ) { server, hub ->
-            AutomationsController(automationsRepository(api, servers, server, hub, scope), projectId, scope)
+        ) { server, active ->
+            AutomationsController(automationsRepository(api, servers, server, active.hub, scope), projectId, scope)
         }.stateIn(scope, SharingStarted.Eagerly, null)
         return Pipeline(job, controller)
     }
@@ -93,19 +94,21 @@ internal fun Flow<PairedServer?>.connectionKeys(): Flow<ConnectionKey?> =
     map { server -> server?.let { ConnectionKey(it.id, it.address) } }.distinctUntilChanged()
 
 /**
- * [build]'s result for the latest server and hub while both are known, else null. A result is closed when another
- * pair (or a missing one) replaces it and when collection ends. Hubs compare by `equals`, which for a hub is identity,
- * so a reconnect to the same server rebuilds.
+ * [build]'s result for the latest server and hub while both are known and [sameServer] pairs them, else null: a
+ * server switch publishes the new server before it withdraws the old server's hub, and a result must never use another
+ * server's hub. A result is closed when another pair (or a missing one) replaces it and when collection ends. Hubs
+ * compare by `equals`, which for a hub is identity, so a reconnect to the same server rebuilds.
  */
 internal fun <S : Any, H : Any, T : Any> perConnection(
     servers: Flow<S?>,
     hubs: Flow<H?>,
+    sameServer: (S, H) -> Boolean,
     close: (T) -> Unit,
     build: (S, H) -> T,
 ): Flow<T?> = flow {
     var last: T? = null
     try {
-        combine(servers, hubs) { server, hub -> if (server != null && hub != null) server to hub else null }
+        combine(servers, hubs) { server, hub -> if (server != null && hub != null && sameServer(server, hub)) server to hub else null }
             .distinctUntilChanged()
             .collect { pair ->
                 last?.let(close)

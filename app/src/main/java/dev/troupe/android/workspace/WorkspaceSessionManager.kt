@@ -60,6 +60,9 @@ import javax.inject.Singleton
 /** Live status of a single chat session from `chat_activity` watch + `AttentionCenter`. */
 enum class SessionLiveState { Idle, Running, NeedsYou, Error }
 
+/** The adopted [hub] of the Paired Server [serverId]. */
+data class ActiveWatchHub(val serverId: String, val hub: WatchHub)
+
 /** An agent a chat can start with: a launch config's id and name. */
 data class AgentDescriptor(
     val id: String,
@@ -149,9 +152,13 @@ class WorkspaceSessionManager @Inject constructor(
     private val hydratedServerId = MutableStateFlow<String?>(null)
 
     @Volatile private var activeConnection: ChatConnection? = null
-    private val activeWatchHub = MutableStateFlow<WatchHub?>(null)
-    /** The active server's adopted `WatchHub`; null until the connection is adopted and while it is replaced. */
-    val watchHub: StateFlow<WatchHub?> = activeWatchHub.asStateFlow()
+    private val activeWatchHub = MutableStateFlow<ActiveWatchHub?>(null)
+    /**
+     * The active server's adopted `WatchHub` and that server's id; null until the connection is adopted and while it
+     * is replaced. A switch publishes the new [WorkspaceShellState.activeServer] before it withdraws the old hub, so
+     * pair a server only with a hub of the same [ActiveWatchHub.serverId].
+     */
+    val watchHub: StateFlow<ActiveWatchHub?> = activeWatchHub.asStateFlow()
     @Volatile private var activeStoreClient: WebStoreClient? = null
     @Volatile private var activeAgentSetup: AgentSetup? = null
     @Volatile private var explicitProjectSelection: Boolean = false
@@ -259,7 +266,7 @@ class WorkspaceSessionManager @Inject constructor(
     }
 
     fun currentStoreClient(): WebStoreClient? = activeStoreClient
-    fun currentWatchHub(): WatchHub? = activeWatchHub.value
+    fun currentWatchHub(): WatchHub? = activeWatchHub.value?.hub
     fun currentConnection(): ChatConnection? = activeConnection
     fun currentAgentSetup(): AgentSetup? = activeAgentSetup
 
@@ -692,7 +699,7 @@ class WorkspaceSessionManager @Inject constructor(
                 if (writesToAdopt != null) {
                     store.adoptUnsentWrites(writesToAdopt, retryImmediately = false)
                 }
-                activeWatchHub.value = hub
+                activeWatchHub.value = ActiveWatchHub(server.id, hub)
                 activeStoreClient = store
             } finally {
                 adopted.complete(Unit)
