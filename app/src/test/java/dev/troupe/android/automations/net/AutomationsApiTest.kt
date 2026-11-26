@@ -179,6 +179,30 @@ class AutomationsApiTest {
     }
 
     @Test
+    fun successWithoutDataIsAContractMismatch() {
+        withApi({ req -> if (req.url.encodedPath == "/api/automations/a1") reply(200, """{"success":true,"data":null}""") else null }) { api, server ->
+            val result = api.get(server.address, server.token, a1)
+            assertTrue("expected a ServerError, got $result", result is ApiResult.ServerError)
+            assertEquals(200, (result as ApiResult.ServerError).status)
+        }
+    }
+
+    @Test
+    fun aRetryNowReplyDoesNotResendAWrite() {
+        val retryNow = MockResponse.Builder()
+            .code(503)
+            .addHeader("Retry-After", "0")
+            .addHeader("Content-Type", "application/json")
+            .body("""{"success":false,"error":"busy"}""")
+            .build()
+        withApi({ req -> if (req.url.encodedPath == "/api/automations/a1/run") retryNow else null }) { api, server ->
+            val result = api.runNow(server.address, server.token, a1)
+            assertEquals(ApiResult.ServerError("busy", null, status = 503), result)
+            assertEquals("the write was resent", 1, server.httpRequests.count { it.url.encodedPath == "/api/automations/a1/run" })
+        }
+    }
+
+    @Test
     fun requestsAreSentOnce() {
         withApi({ req ->
             when (req.url.encodedPath) {

@@ -14,11 +14,14 @@ import kotlinx.serialization.json.JsonElement
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Interceptor
+import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okio.BufferedSink
 import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -111,7 +114,10 @@ class ServerApi @Inject constructor(private val client: OkHttpClient) {
         enveloped(body, serializer)
     }
 
-    /** [retryOnConnectionFailure] `false`: OkHttp never resends the request after a connection failure (for a write that is not idempotent). */
+    /**
+     * [retryOnConnectionFailure] `false`: OkHttp sends the request at most once, neither after a connection failure nor
+     * as a follow-up such as a `503` with `Retry-After: 0` (for a write that must not be repeated).
+     */
     suspend fun postUnit(
         address: ServerAddress,
         path: String,
@@ -183,10 +189,14 @@ class ServerApi @Inject constructor(private val client: OkHttpClient) {
         decode: (String) -> ApiResult<T>,
     ): ApiResult<T> {
         val cleanPath = path.removePrefix("/")
-        val reqBody = bodyJson?.toRequestBody(JSON_MEDIA_TYPE)
+        // A one-shot body also stops OkHttp's resend on a `503` with `Retry-After: 0`, which ignores retryOnConnectionFailure.
+        val reqBody = bodyJson?.let { json ->
+            json.toRequestBody(JSON_MEDIA_TYPE).let { if (retryOnConnectionFailure) it else OneShotBody(it) }
+        }
         val builder = Request.Builder().url(address.httpUrl(cleanPath))
         when (method) {
             "GET" -> builder.get()
+            // postEnveloped and postUnit always pass a body, so a write sent once is always one-shot.
             "POST" -> builder.post(reqBody ?: "{}".toRequestBody(JSON_MEDIA_TYPE))
             "PUT" -> builder.put(reqBody ?: "{}".toRequestBody(JSON_MEDIA_TYPE))
             "DELETE" -> if (reqBody != null) builder.delete(reqBody) else builder.delete()
@@ -233,6 +243,8 @@ class ServerApi @Inject constructor(private val client: OkHttpClient) {
         val data = envelope.data
         return when {
             envelope.success && data != null -> ApiResult.Ok(data)
+            // Caught in execute(), which records the 2xx status: the reply did not match the contract.
+            envelope.success -> throw SerializationException("a successful reply without data")
             envelope.code == "UNAUTHORIZED" -> ApiResult.Unauthorized
             else -> ApiResult.ServerError(envelope.error ?: "Unknown error", envelope.code)
         }
@@ -247,6 +259,17 @@ class ServerApi @Inject constructor(private val client: OkHttpClient) {
             else -> ApiResult.ServerError(envelope.error ?: "Unknown error", envelope.code)
         }
     }
+}
+
+/** [delegate], marked one-shot: OkHttp never transmits it a second time, neither after a connection failure nor as a follow-up. */
+private class OneShotBody(private val delegate: RequestBody) : RequestBody() {
+    override fun contentType(): MediaType? = delegate.contentType()
+
+    override fun contentLength(): Long = delegate.contentLength()
+
+    override fun writeTo(sink: BufferedSink) = delegate.writeTo(sink)
+
+    override fun isOneShot(): Boolean = true
 }
 
 private suspend fun Call.await(): Response = suspendCancellableCoroutine { cont ->
