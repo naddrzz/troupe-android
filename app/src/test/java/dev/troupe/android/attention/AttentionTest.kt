@@ -1,5 +1,7 @@
 package dev.troupe.android.attention
 
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import dev.troupe.android.chat.PendingRequest
 import dev.troupe.android.chat.net.ChatConnectFailed
 import dev.troupe.android.testing.FakeChatServer.Companion.permissionRequest
@@ -18,6 +20,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.jsonObject
@@ -38,8 +41,13 @@ class AttentionTest {
     private val graph by lazy { TestGraph(tmp.root) }
     private val chat get() = server.chat
     private lateinit var serverId: String
+    /** ViewModels a test opened; their Main-bound scopes must end while the test's Main dispatcher is still set. */
+    private val viewModels = mutableListOf<ViewModel>()
+
+    private fun <T : ViewModel> T.tracked(): T = also { viewModels += it }
 
     @After fun tearDown() {
+        runBlocking { viewModels.forEach { it.viewModelScope.coroutineContext.job.cancelAndJoin() } }
         graph.close()
         server.close()
     }
@@ -180,7 +188,7 @@ class AttentionTest {
         start()
         chat.append("s1", "permission_request", permissionRequest("s1", "req-1", "Edit Login.kt"))
         eventually { keys() == listOf("req-1") }
-        val vm = graph.chatViewModel(serverId, "s1")
+        val vm = graph.chatViewModel(serverId, "s1").tracked()
         eventually { vm.ui.value.requests.isNotEmpty() }
 
         vm.respond(vm.ui.value.requests.single() as PendingRequest.Permission, "allow")
@@ -287,7 +295,7 @@ class AttentionTest {
     @Test fun theProjectsScreenListsTheServersAttention() {
         chat.history = listOf(summary("s9", "p-zeta", "Crashed run", lastActivityAt = 7_000, status = "error"))
         start()
-        val vm = graph.projectsViewModel(serverId)
+        val vm = graph.projectsViewModel(serverId).tracked()
 
         eventually { vm.attention.value.map { it.key } == listOf("stopped:s9") }
     }
