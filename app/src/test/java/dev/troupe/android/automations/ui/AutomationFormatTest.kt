@@ -1,6 +1,7 @@
 package dev.troupe.android.automations.ui
 
 import dev.troupe.android.automations.AutomationFixtures
+import dev.troupe.android.automations.protocol.ApprovalDecision
 import dev.troupe.android.automations.protocol.Automation
 import dev.troupe.android.automations.protocol.AutomationDetail
 import dev.troupe.android.automations.protocol.AutomationId
@@ -10,6 +11,7 @@ import dev.troupe.android.automations.protocol.Graph
 import dev.troupe.android.automations.protocol.Issue
 import dev.troupe.android.automations.protocol.LastRun
 import dev.troupe.android.automations.protocol.NodeId
+import dev.troupe.android.automations.protocol.NodeSpec
 import dev.troupe.android.automations.protocol.RunId
 import dev.troupe.android.automations.protocol.RunStatus
 import dev.troupe.android.automations.protocol.Schedule
@@ -23,6 +25,9 @@ import dev.troupe.android.automations.state.QueryState
 import dev.troupe.android.automations.state.Route
 import dev.troupe.android.core.protocol.TroupeJson
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -434,5 +439,55 @@ class AutomationFormatTest {
         assertEquals(OutputPreview("x".repeat(20), truncated = true), preview)
         assertEquals(OutputPreview("x".repeat(20), truncated = false), outputPreview(JsonPrimitive("x".repeat(20)), maxChars = 20))
         assertEquals(OUTPUT_PREVIEW_CHARS, outputPreview(JsonPrimitive("y".repeat(OUTPUT_PREVIEW_CHARS * 3))).text.length)
+    }
+
+    @Test
+    fun prettyPrintedOutputMatchesTheJsonPrinter() {
+        val nested = buildJsonObject {
+            put("s", "a \"quoted\"\nline")
+            put("n", 1.5)
+            put("b", true)
+            put("z", JsonNull)
+            put("list", JsonArray(listOf(JsonPrimitive(1), buildJsonObject { put("k", "v") }, JsonArray(emptyList()))))
+            put("empty", buildJsonObject {})
+        }
+        val printed = Json { prettyPrint = true }.encodeToString(JsonElement.serializer(), nested)
+        assertEquals(OutputPreview(printed, truncated = false), outputPreview(nested))
+        assertEquals(OutputPreview(printed.take(25), truncated = true), outputPreview(nested, maxChars = 25))
+    }
+
+    @Test(timeout = 10_000)
+    fun hugeStructuredOutputIsCutWithoutPrintingItWhole() {
+        // Two billion elements: printing them all before cutting would never finish (or run out of memory).
+        val endless = JsonArray(object : AbstractList<JsonElement>() {
+            override val size = Int.MAX_VALUE
+            override fun get(index: Int): JsonElement = JsonPrimitive(index)
+        })
+        val preview = outputPreview(endless, maxChars = 100)
+        assertTrue(preview.truncated)
+        assertEquals(100, preview.text.length)
+        assertTrue(preview.text, preview.text.startsWith("[\n    0,\n    1,\n"))
+    }
+
+    @Test
+    fun aDecisionShowsOnlyOnAStepOfAnApprovalNode() {
+        val decided = buildJsonObject {
+            put("message", "Ship b?")
+            put("decision", "rejected")
+            put("decided_at", 5L)
+        }
+        val graph = parkedOnApproval.graph
+        val gateStep = steps.first { it.runId.value == "run-3" && it.nodeId.value == "gate" }.copy(output = decided)
+        assertEquals(ApprovalDecision.Rejected, stepDecision(gateStep, graph)?.decision)
+
+        val other = graph.nodes.first { it.spec !is NodeSpec.Approval }
+        assertNull(stepDecision(gateStep.copy(nodeId = other.id, status = StepStatus.Failed, error = "boom"), graph))
+        assertNull(stepDecision(gateStep.copy(nodeId = NodeId("not_in_graph")), graph))
+    }
+
+    @Test
+    fun issueOnANodeWithABlankLabelNamesTheNodeId() {
+        val labels = mapOf(NodeId("gate") to "  ")
+        assertEquals("gate", issueNodeLabel(Issue(NodeId("gate"), "some_code", "m"), labels))
     }
 }

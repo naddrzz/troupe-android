@@ -1,5 +1,6 @@
 package dev.troupe.android.automations.ui
 
+import dev.troupe.android.automations.protocol.ApprovalStepOutput
 import dev.troupe.android.automations.protocol.Automation
 import dev.troupe.android.automations.protocol.AutomationNode
 import dev.troupe.android.automations.protocol.AutomationRun
@@ -18,9 +19,10 @@ import dev.troupe.android.automations.state.AutomationsUi
 import dev.troupe.android.automations.state.Control
 import dev.troupe.android.automations.state.ControlAction
 import dev.troupe.android.automations.state.QueryError
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
 /** What a trigger reads as; the screens map each variant to a string resource. */
@@ -124,8 +126,9 @@ fun nodeLabels(graph: Graph): Map<NodeId, String> = graph.nodes.associate { it.i
 
 fun labelOrId(labels: Map<NodeId, String>, id: NodeId): String = labels[id]?.takeUnless { it.isBlank() } ?: id.value
 
-/** The node an issue names, as the graph labels it; null when it names none or one that is not in the graph. */
-fun issueNodeLabel(issue: Issue, labels: Map<NodeId, String>): String? = issue.nodeId?.let { labels[it] }
+/** The node an issue names, as the graph labels it (its id for a blank label); null when it names none or one that is not in the graph. */
+fun issueNodeLabel(issue: Issue, labels: Map<NodeId, String>): String? =
+    issue.nodeId?.takeIf { it in labels }?.let { labelOrId(labels, it) }
 
 private const val MAX_NEXT_RUNS = 3
 
@@ -174,6 +177,15 @@ fun approvalPrompt(run: AutomationRun, steps: List<AutomationStep>): ApprovalPro
     return if (output.decision == null) ApprovalPrompt(step, output.message) else null
 }
 
+/**
+ * The decision a step of [graph] records, only for a step of an approval node: another node's output can have the
+ * same shape, and its row must keep showing its error.
+ */
+fun stepDecision(step: AutomationStep, graph: Graph): ApprovalStepOutput? {
+    if (graph.nodes.firstOrNull { it.id == step.nodeId }?.spec !is NodeSpec.Approval) return null
+    return parseApprovalOutput(step.output)?.takeIf { it.decision != null }
+}
+
 /** The error a step records when a cancel stops it; the web shows such a step as cancelled, not failed. */
 private const val CANCELLED_ERROR = "cancelled"
 
@@ -187,10 +199,60 @@ const val OUTPUT_PREVIEW_CHARS = 10_000
 
 data class OutputPreview(val text: String, val truncated: Boolean)
 
-private val prettyJson = Json { prettyPrint = true }
-
-/** A step output as text, as the web shows it: a string as is, anything else pretty-printed; cut at [maxChars]. */
+/**
+ * A step output as text, as the web shows it: a string as is, anything else pretty-printed; cut at [maxChars].
+ * Printing stops one character past the cut, so a huge output is never printed whole.
+ */
 fun outputPreview(output: JsonElement, maxChars: Int = OUTPUT_PREVIEW_CHARS): OutputPreview {
-    val text = if (output is JsonPrimitive && output.isString) output.content else prettyJson.encodeToString(JsonElement.serializer(), output)
+    val text = if (output is JsonPrimitive && output.isString) output.content else BoundedJsonPrinter(maxChars + 1).print(output)
     return if (text.length > maxChars) OutputPreview(text.take(maxChars), truncated = true) else OutputPreview(text, truncated = false)
+}
+
+/** Prints JSON as `Json { prettyPrint = true }` does (four-space indent), but stops once it holds [limit] characters. */
+private class BoundedJsonPrinter(private val limit: Int) {
+    private val out = StringBuilder()
+    private val full get() = out.length >= limit
+
+    fun print(element: JsonElement): String {
+        element(element, depth = 0)
+        return out.toString()
+    }
+
+    private fun append(s: String) {
+        if (!full) out.append(s, 0, minOf(s.length, limit - out.length))
+    }
+
+    private fun element(e: JsonElement, depth: Int) {
+        when (e) {
+            is JsonObject -> container("{", "}", e.entries, depth) { (key, value) ->
+                append(JsonPrimitive(key).toString())
+                append(": ")
+                element(value, depth + 1)
+            }
+            is JsonArray -> container("[", "]", e, depth) { element(it, depth + 1) }
+            // A primitive (a string quoted and escaped) or null, as the printer writes it.
+            else -> append(e.toString())
+        }
+    }
+
+    private inline fun <T> container(open: String, close: String, items: Iterable<T>, depth: Int, item: (T) -> Unit) {
+        val iterator = items.iterator()
+        if (!iterator.hasNext()) {
+            append(open + close)
+            return
+        }
+        append(open)
+        var first = true
+        while (iterator.hasNext() && !full) {
+            append(if (first) "\n" else ",\n")
+            first = false
+            append(INDENT.repeat(depth + 1))
+            item(iterator.next())
+        }
+        append("\n" + INDENT.repeat(depth) + close)
+    }
+
+    private companion object {
+        const val INDENT = "    "
+    }
 }

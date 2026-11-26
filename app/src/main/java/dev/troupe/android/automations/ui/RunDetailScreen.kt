@@ -56,7 +56,7 @@ import dev.troupe.android.automations.protocol.AutomationRun
 import dev.troupe.android.automations.protocol.AutomationStep
 import dev.troupe.android.automations.protocol.RunStatus
 import dev.troupe.android.automations.protocol.StepStatus
-import dev.troupe.android.automations.protocol.parseApprovalOutput
+import dev.troupe.android.automations.protocol.ApprovalStepOutput
 import dev.troupe.android.automations.state.AutomationsController
 import dev.troupe.android.automations.state.AutomationsUi
 import dev.troupe.android.automations.state.Control
@@ -154,7 +154,7 @@ private fun ApprovalHandledNotice(onDismiss: () -> Unit) {
 
 /**
  * One run: its header with Cancel, then its steps. The steps follow the run live (the controller polls while it runs
- * and reloads on changes); a failed reload is a banner above the last good steps.
+ * and reloads on changes); a failed reload of the steps or of the run history is a banner above the last good data.
  */
 @Composable
 fun RunDetailScreen(
@@ -182,6 +182,13 @@ fun RunDetailScreen(
             contentPadding = PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            // The run shown is the last good copy from the run history; a failed reload of that history says so.
+            val runsError = ui.runs?.error
+            if (runsError != null) {
+                item(key = "runs-error") {
+                    AutomationErrorBanner(runsError, retrying = ui.runs?.refreshing == true, onRetry = controller::refresh)
+                }
+            }
             if (error != null) {
                 item(key = "steps-error") {
                     AutomationErrorBanner(error, retrying = query.refreshing, onRetry = controller::refresh)
@@ -197,6 +204,7 @@ fun RunDetailScreen(
                 else -> itemsIndexed(steps, key = { index, step -> "$index:${step.nodeId.value}:${step.iteration}" }) { _, step ->
                     StepRow(
                         step = step,
+                        decision = stepDecision(step, run.graph),
                         label = labelOrId(labels, step.nodeId),
                         now = now,
                         approvalCard = if (!viewOnly && prompt != null && prompt.step === step) {
@@ -309,6 +317,7 @@ private fun stepStatusStyle(step: AutomationStep): Pair<String, Color> {
 @Composable
 private fun StepRow(
     step: AutomationStep,
+    decision: ApprovalStepOutput?,
     label: String,
     now: State<Long>,
     approvalCard: (@Composable () -> Unit)?,
@@ -319,7 +328,6 @@ private fun StepRow(
     val (statusLabel, statusColor) = stepStatusStyle(step)
     val started = step.startedAt
     val finished = step.finishedAt
-    val decision = parseApprovalOutput(step.output)?.takeIf { it.decision != null }
     val error = step.error?.takeUnless { it.isBlank() || isCancelledStep(step) || decision != null }
     Column(Modifier.automationCard().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(
